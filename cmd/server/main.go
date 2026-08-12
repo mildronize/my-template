@@ -101,7 +101,7 @@ func wireIdentity(ctx context.Context, router *gin.Engine, conn *sql.DB, cfg *pl
 		}
 		jwtVerifier = v
 	} else {
-		logger.Warn("SSO_ISSUER/AUTH_AUDIENCE not set — JWT bearer path disabled, API-key auth only")
+		logger.Warn("SSO_ISSUER/AUTH_AUDIENCE not both set — JWT bearer path disabled, API-key auth only")
 	}
 
 	svc := identity.NewService(repo, repo, jwtVerifier, logger)

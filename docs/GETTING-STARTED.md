@@ -42,16 +42,17 @@ update every import that references it:
 grep -rl 'github.com/mildronize/my-template' --include='*.go' .
 ```
 
-As of this milestone, that's `go.mod` plus ten `.go` files across
-`cmd/issue-key`, `cmd/server`, `internal/architecture_test.go`,
-`internal/identity/`, `internal/platform/migrate.go`, and
-`internal/todo/`. Nine of those ten need a **functional** import-path
-change — an actual `import "github.com/.../my-template/..."` line the
-build depends on — and `go build ./...` afterward confirms nothing was
-missed (a stale import path fails the build loudly, it doesn't
-compile-and-silently-misbehave). The tenth, `internal/architecture_test.go`,
-is only in the grep's output because the module path also appears once in
-a **doc comment** (`modulePath`'s example), not in its logic — editing it
+The grep above is the actual source of truth for which files are
+affected — its output has already drifted from a specific count written
+here twice, which is exactly why this section no longer states one. Run
+it yourself rather than trusting a number in this paragraph. Most of what
+it finds need a **functional** import-path change — an actual `import
+"github.com/.../my-template/..."` line the build depends on — and `go
+build ./...` afterward confirms nothing was missed (a stale import path
+fails the build loudly, it doesn't compile-and-silently-misbehave).
+`internal/architecture_test.go` is the one file in that list where it's
+harmless either way: the module path also appears once in a **doc
+comment** (`modulePath`'s example), not in its logic — editing it
 is harmless but has no functional effect either way, since the test
 itself resolves the module path dynamically at run time (`go list -m`),
 never hardcoded. The same test also doesn't need editing for adding,
@@ -253,12 +254,16 @@ Do it in this order:
    a copy" instruction: it described a checkpoint one step earlier than
    the one that's actually reachable.
 7. **Only now, change the copy's fields to your real domain shape** — your
-   own `service.go`/`repo.go` logic, and your `openapi.yaml`
-   paths/schemas' actual field names (following the same conventions —
-   owner-scoped, `me`-only actor reference, no actor field in the
-   body/query/header; `_contract/API.md` has the milestone-1 rationale,
-   though your fork's own contract is what governs going forward). If
-   this step breaks the build or a test, you now know the break is in
+   own `service.go`/`repo.go` logic, your migration
+   (`db/migrations/*_create_<yours>.sql`) and sqlc queries
+   (`db/queries/<yours>.sql`, both still todo-shaped since step 3 — this
+   is where they actually become your domain's real columns), and your
+   `openapi.yaml` paths/schemas' actual field names (following the same
+   conventions — owner-scoped, `me`-only actor reference, no actor field
+   in the body/query/header; `_contract/API.md` has the milestone-1
+   rationale, though your fork's own contract is what governs going
+   forward). Re-run `make generate` after changing the migration/queries.
+   If this step breaks the build or a test, you now know the break is in
    your domain logic, not in the wiring — step 6's checkpoint already
    ruled the wiring out.
 8. **Only now, `rm -rf internal/todo`.** Also remove its migration
@@ -280,10 +285,20 @@ Do it in this order:
    `internal/db` — `openapi.yaml` itself is never auto-cleaned by
    `make generate` or anything else; the paragraph above is the manual
    edit that has to happen instead, and it has to happen *before* you run
-   `make generate` again, not after. Finally, remove `internal/todo`'s
+   `make generate` again, not after. Remove `internal/todo`'s
    registration from `cmd/server/main.go` too (the `apiServer` embed and
    `todo.NewService(todo.NewRepo(conn))` line — see "Patterns worth
    preserving" above for what that struct is doing before you touch it).
+   **Also remove the `*todo.Server` (or your alias) embed from your own
+   new module's test harness** — see "Two modules, briefly, at once"
+   above: this does not happen on its own, and `go build ./...` passing
+   does not mean you got it, since the stale reference only shows up in
+   `go test ./...`. Before moving on, run both:
+   ```sh
+   go build ./...   # passing here is NOT sufficient evidence step 8 is done
+   go test ./...    # this is the check that actually catches a leftover
+                     # cross-module test embed
+   ```
 9. **Deal with the invariants this deletes.** `internal/todo` carried the
    `TestI3_...`/`TestI4_...` tests for `_contract/INVARIANTS.md`'s I3 and
    I4 (per-domain-module scope — see "Invariants: two things, not one"
@@ -344,9 +359,17 @@ two things, every time, not as an edge case:
   the test harness's `apiServer` satisfies the full interface. This is a
   temporary cross-module test dependency, in a repo whose architecture
   rule is otherwise that domain modules stay independent
-  (`ARCHITECTURE.md`) — it resolves itself the moment step 8 deletes
-  `internal/todo`, at which point your new module's tests only need to
-  embed their own type again.
+  (`ARCHITECTURE.md`) — **it does not resolve itself.** Deleting
+  `internal/todo` in step 8 removes the *package*, not the reference to
+  it your own test harness added in step 4 — `go build ./...` will still
+  report success (the harness struct's other fields still compile fine
+  in isolation), but `go test ./...` fails with `no required module
+  provides package .../internal/todo`, because your own test file still
+  imports and embeds it. **`go build` passing is not evidence this step
+  worked** — see the checklist at the end of step 8 for the check that
+  actually catches it. You have to edit your own module's test harness
+  to drop the `*todo.Server` (or alias) embed as part of step 8, the same
+  way you'd remove any other now-dead import.
 
 Both of these are expected and temporary — they're what step 6's
 checkpoint (`go build ./...`/`go test ./...` green with both modules
@@ -602,20 +625,24 @@ comments (`internal/identity/doc.go`, `internal/platform/config.go`,
 `internal/api/validator.go`, `internal/architecture_test.go`, and several
 more across `internal/identity/*_test.go` all mention todos in prose, not
 code) and test/example fixtures (`{"title": "a todo"}`-shaped literals).
-**Roughly 40 of these survive a fully correct fork** (verified by grep,
-below, excluding everything a correct Step 4 already deletes or edits —
-`internal/todo/` itself, its migration and query file, the two generated
-outputs `internal/db`/`internal/api/openapi.gen.go`, `openapi.yaml`'s own
-`/todos` content per Step 4's now-corrected delete list, and
-`cmd/server/main.go`'s registration — and excluding this repo's unrelated
+**A real number survives a fully correct fork, and it's deliberately not
+written here** — an earlier version of this paragraph put a specific
+count in prose twice, and both times the actual number had drifted by the
+next fix round without anyone noticing until the next blind test. Run the
+grep at the end of this section yourself; that output is the only
+trustworthy count, excluding everything a correct Step 4 already deletes
+or edits (`internal/todo/` itself, its migration and query file, the two
+generated outputs `internal/db`/`internal/api/openapi.gen.go`,
+`openapi.yaml`'s own `/todos` content per Step 4's now-corrected delete
+list, and `cmd/server/main.go`'s registration) and this repo's unrelated
 `.chief`-planning-framework use of the word "todo" in `_todo.md`,
-`AGENTS.md`, `.agents/`, which has nothing to do with the domain).
-**This document's own text accounts for a further ~44** self-references
-(it's the doc that explains the todo domain, so it necessarily says
-"todo" a lot) — not part of the 40 above, and not something a fork edits
-away by rewriting this file, but worth knowing about if you're grepping
-your own fork and wondering why the count looks higher than expected
-before you've excluded this file.
+`AGENTS.md`, `.agents/`, which has nothing to do with the domain. **This
+document's own text accounts for a further, separately-countable set** of
+self-references (it's the doc that explains the todo domain, so it
+necessarily says "todo" a lot) — not something a fork edits away by
+rewriting this file, but worth knowing about if you're grepping your own
+fork and wondering why the count looks higher than expected before you've
+excluded this file.
 
 **These are not all harmless**, contrary to an earlier version of this
 paragraph's claim that "none of these break anything." Most are inert

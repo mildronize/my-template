@@ -50,8 +50,8 @@ No separate database container or process — SQLite is a file
   separate migrate step, and re-running against an already-migrated
   volume is a safe no-op (goose tracks applied versions itself).
 - Back up the file at `DATABASE_PATH` like any other stateful file (it's
-  the entire database — users, api_keys, todos). No replication or
-  clustering story exists or is in scope.
+  the entire database — every table this service owns, in one file). No
+  replication or clustering story exists or is in scope.
 
 ## Seeding the first agent API key
 

@@ -379,6 +379,38 @@ milestone without anyone ever having deliberately done it).
       **Owns: none new.** Re-run a fourth, confirmatory blind fork test
       after this lands.
 
+- [x] task-9: Fix findings from Clara's fourth (confirmatory) blind fork
+      test (2026-08-12). Passed the "no new security-severe P0" gate but
+      not the "no detour" gate — two more doc gaps, both fixed directly
+      (small, surgical, no code-behavior change, so no separate
+      builder-agent delegation this round):
+      - Step 8 never said to remove the cross-module `*todo.Server` embed
+        from the fork's own test harness, and claimed it "resolves itself"
+        — false: `go build ./...` passes on the broken state, only
+        `go test ./...` catches the missing removal. Fixed the claim, added
+        the explicit removal step, and added `go test ./...` to Step 8's
+        own checklist since `go build` alone is misleading here.
+      - Step 7 (change fields to real domain shape) never mentioned the
+        migration/query files written in step 3, only `service.go`/
+        `repo.go`/`openapi.yaml` — fixed.
+      - P1: `internal/todo/doc.go`'s own comment said `rm -rf` first,
+        directly contradicting Step 4's now-established order, in a file
+        Step 4.1 sends readers to read — fixed. `DEPLOY-REQUIREMENTS.md`
+        still named specific tables while claiming to be generic — fixed.
+      - P2: Step 1's file count and the dangling-reference counts had both
+        drifted from reality *again* (second time for the latter) — removed
+        the hardcoded numbers from prose entirely rather than re-deriving
+        yet another count that will drift the same way; the grep commands
+        are now the stated source of truth, not a number beside them.
+        Fixed a startup log's "not set" wording to "not both set" (either
+        var missing disables the JWT branch, not just both).
+      **Clara's stopping decision:** no fifth blind test — the gate's
+      literal criterion (fork with no detour) wasn't fully met before this
+      round's fixes, and she closed it by judgment rather than pretending
+      otherwise, since everything remaining was documentation precision,
+      not a code defect or a security-relevant gap.
+      **Owns: none new.**
+
 ## Resolved during grill
 
 The JWT/SSO auth path's framing was open (live agent auth vs. a
