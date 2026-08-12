@@ -26,28 +26,54 @@ var testFuncNameRe = regexp.MustCompile(`(?m)^func (Test\w+)\(`)
 // someone adds I11 without touching this test.
 var invariantHeadingRe = regexp.MustCompile(`(?m)^\*\*I(\d+) —`)
 
-// requiredInvariantNumbers parses _contract/INVARIANTS.md (at
-// <root>/.chief/milestone-1/_contract/INVARIANTS.md) for every `**I<N> —`
-// heading and returns the set of invariant numbers it declares. Fails the
-// test outright if the file can't be read or no headings are found at
-// all — an empty result would silently turn Done-when 12's check into a
-// no-op instead of a real one.
+// findInvariantsFiles globs for every INVARIANTS.md anywhere under
+// <root>/.chief/, rather than hardcoding a single milestone's path
+// (`.chief/milestone-1/_contract/INVARIANTS.md`) — a fork that
+// reorganizes `.chief/` (a new milestone directory, a renamed
+// `_contract/`) doesn't silently break this test's ability to find the
+// file it needs, and docs/GETTING-STARTED.md doesn't need to document
+// the coupling for the same reason: there's nothing fork-specific left
+// to get out of sync with.
+func findInvariantsFiles(t *testing.T, root string) []string {
+	t.Helper()
+
+	var paths []string
+	err := filepath.WalkDir(filepath.Join(root, ".chief"), func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !d.IsDir() && d.Name() == "INVARIANTS.md" {
+			paths = append(paths, path)
+		}
+		return nil
+	})
+	require.NoErrorf(t, err, "walking %s for INVARIANTS.md", filepath.Join(root, ".chief"))
+	require.NotEmptyf(t, paths, "no INVARIANTS.md found anywhere under %s — can't derive the required invariant set", filepath.Join(root, ".chief"))
+	return paths
+}
+
+// requiredInvariantNumbers parses every INVARIANTS.md found under
+// <root>/.chief/ (findInvariantsFiles) for every `**I<N> —` heading and
+// returns the set of invariant numbers it declares. Fails the test
+// outright if no headings are found at all across every file — an empty
+// result would silently turn Done-when 12's check into a no-op instead
+// of a real one.
 func requiredInvariantNumbers(t *testing.T, root string) []int {
 	t.Helper()
 
-	path := filepath.Join(root, ".chief", "milestone-1", "_contract", "INVARIANTS.md")
-	data, err := os.ReadFile(path)
-	require.NoErrorf(t, err, "reading %s to derive the required invariant set", path)
-
-	matches := invariantHeadingRe.FindAllStringSubmatch(string(data), -1)
-	require.NotEmptyf(t, matches, "no \"**I<N> —\" headings found in %s — can't derive the required invariant set", path)
-
 	var numbers []int
-	for _, m := range matches {
-		n, convErr := strconv.Atoi(m[1])
-		require.NoErrorf(t, convErr, "parsing invariant number from heading %q", m[0])
-		numbers = append(numbers, n)
+	for _, path := range findInvariantsFiles(t, root) {
+		data, err := os.ReadFile(path)
+		require.NoErrorf(t, err, "reading %s to derive the required invariant set", path)
+
+		matches := invariantHeadingRe.FindAllStringSubmatch(string(data), -1)
+		for _, m := range matches {
+			n, convErr := strconv.Atoi(m[1])
+			require.NoErrorf(t, convErr, "parsing invariant number from heading %q in %s", m[0], path)
+			numbers = append(numbers, n)
+		}
 	}
+	require.NotEmptyf(t, numbers, "no \"**I<N> —\" headings found in any INVARIANTS.md under %s — can't derive the required invariant set", filepath.Join(root, ".chief"))
 	return numbers
 }
 
