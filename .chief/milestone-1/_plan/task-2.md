@@ -39,16 +39,55 @@ resolve-actor.ts`), minus the session-cookie branch (this service has none):
    logs don't cry wolf on every ordinary API-key request). A validation
    *success* looks up `users` by `sso_subject = claims.sub` (I10 — no match
    → unauthorized, never auto-created).
-4. Either branch resolving to a `users` row with `role='owner'` →
-   unauthorized (I2) — checked identically for both branches, not shared
-   logic that happens to cover both, because a future edit to one branch
-   must not silently stop covering the other.
-5. Either branch resolving to `active=false` → unauthorized.
-6. No branch resolved anything → unauthorized.
+4. **Each branch's only job is resolving to a `users` row (or not).** Once
+   either branch produces a row (or neither does), control passes to **one
+   shared gate**, after both branches, that does the `role='owner'` check
+   (I2), the `active` check, and is the function's **only** 401 return site
+   (I5). There is one `unauthorized()` call in this function, not one per
+   branch — that's what I5 needs. What I2 needs — that the owner-rejection
+   demonstrably holds on *both* paths, not just whichever one someone
+   thought to check — comes from **two separate tests**
+   (`TestI2_..._APIKeyPath`, `TestI2_..._JWTPath`) that each drive execution
+   through the one shared gate via a different entry branch, not from
+   duplicating the gate's code. Shared implementation, independently
+   verified paths — both properties held at once, not traded off.
 
-Every unauthorized exit in this function returns the *same* response (I5) —
-structure the code so there's one exit point producing the 401, not one
-`return unauthorized()` call per branch that could drift out of sync.
+*(An earlier draft of this section asked for both "checked identically, not
+shared logic" and "one exit point, not per-branch" in the same paragraph —
+those directly contradict each other if read as both applying to the same
+piece of code. Clara caught it. The resolution above is what both were
+actually reaching for: shared code, independent tests.)*
+
+## I1 — where actor-field rejection actually lives
+
+**Not part of the 401 middleware above.** `API.md` is explicit that a
+request carrying `actor`/`actorId`/`ownerId`/`X-Actor` is a **400**
+(`actor_field_present`), not a 401 — it's a request-shape problem, not a
+credential problem, and doesn't belong in a function whose only outputs are
+"resolved actor" or "unauthorized."
+
+Implement as a separate gin middleware, `internal/identity/middleware.go`
+(same file, different function — call it `RejectActorFields` or similar),
+registered on the `/api/v1` route group **before** the actor-resolution
+middleware runs (reject the shape problem before spending a DB lookup on
+credential resolution). It must check, explicitly, not by relying on
+`openapi.yaml`'s `additionalProperties: false` alone:
+
+- **Body**: parse into a generic `map[string]any` (or check the raw JSON
+  keys) for `actor`, `actorId`, `ownerId` — do this independently of
+  whatever oapi-codegen's generated binding does, because
+  `additionalProperties: false` is a property you'd have to remember to set
+  on every request schema, and a forked service that adds a new endpoint
+  without it would silently lose this protection.
+- **Query params**: `c.Request.URL.Query()` for the same three keys.
+- **Headers**: `c.GetHeader("X-Actor")` — OpenAPI request validation
+  doesn't reject arbitrary extra headers by default (unlike body
+  properties), so this specific check cannot be delegated to
+  `gin-middleware`'s spec validation at all.
+
+This mirrors my-task's `actor-guard.ts` (`assertNoActorField`) — a small,
+standalone, request-level guard, not folded into the auth middleware.
+`TestI1_...` tests belong in this middleware's own test file.
 
 ## `jwx/v3` usage notes
 
@@ -65,7 +104,8 @@ structure the code so there's one exit point producing the 401, not one
 
 `cmd/issue-key` (or similar), not exposed over HTTP (`API.md` — no
 `POST /api/v1/keys`, deliberately). Generates a random token, prefixes it
-(`tpl_`), stores `key_hash` (SHA-256) + `key_prefix` (first 8 chars) +
+(`tpl_`), stores `key_hash` (SHA-256) + `key_prefix` (`tpl_` + first 8 chars
+of the random portion, 12 total — matches `DATA_MODEL.md`/`API.md`) +
 `expires_at` (90 days, matching my-task's `mtk_` convention), prints the raw
 key to stdout **once**. Mirrors my-task's `agent:add`.
 

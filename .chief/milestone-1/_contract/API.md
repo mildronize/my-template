@@ -94,7 +94,7 @@ see it needs rotating.
 
 ```jsonc
 { "keys": [
-    { "id": "…", "prefix": "tpl_a1b2c3", "createdAt": "…", "expiresAt": "…" }
+    { "id": "…", "prefix": "tpl_a1b2c3d4", "createdAt": "…", "expiresAt": "…" }
 ] }
 ```
 

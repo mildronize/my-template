@@ -27,7 +27,7 @@ manually (CLI script or seed), same as my-task's agents today.
 | `id` | text (uuid), pk | |
 | `user_id` | text, fk → `users.id`, not null | |
 | `key_hash` | text, not null | SHA-256 of the raw key. The raw key exists only once, at issuance (CLI stdout) — never stored, never re-derivable |
-| `key_prefix` | text, not null | first 8 chars of the raw key, stored in the clear, so a listed key is identifiable without exposing it (`tpl_a1b2c3…`) |
+| `key_prefix` | text, not null | the `tpl_` literal plus the first 8 characters of the random portion (12 chars total, e.g. `tpl_a1b2c3d4`), stored in the clear, so a listed key is identifiable without exposing it |
 | `created_at` | timestamp, not null | |
 | `expires_at` | timestamp, not null | 90-day TTL at issuance, matching my-task's `mtk_` convention |
 | `revoked_at` | timestamp, nullable | set by `DELETE /api/v1/keys/:id`; a revoked key fails auth identically to an expired one (I9) |
