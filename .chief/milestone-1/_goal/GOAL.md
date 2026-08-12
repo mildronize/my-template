@@ -146,10 +146,26 @@ documentation against its own code is the exact shape of
 writer and checker share every bit of context a real forker wouldn't have.
 
 **Someone outside this loop — human or agent, but not Luna and not anyone who
-watched this milestone get built — reads only `docs/GETTING-STARTED.md`
-(no source code, no asking Luna) and forks the template into a differently-
-named service with its own resource in place of `todos`, until
-`GET /api/v1/me` answers.** Wherever they get stuck is exactly what the doc
-is missing. Can't be a stopping condition — the loop cannot recruit a
-context-free reader for itself — so this happens once, after, same shape as
-the criterion it replaces.
+watched this milestone get built — reads `docs/GETTING-STARTED.md` (no
+asking Luna) and forks the template into a differently-named service with
+its own resource in place of `todos`, until `GET /api/v1/me` answers.**
+Reading Go source is in scope and expected here — a real forker reading
+`GETTING-STARTED.md` would read source too, that's not a doc failure by
+itself (task-6.md: Clara's first run of this test correctly let the agent
+read source, which is why it measured "did it succeed" rather than "how
+much friction," and only caught the friction because she separately told
+it to report friction as a side channel rather than the criterion asking
+for that on its own).
+
+**The criterion is scoped explicitly instead of leaving that to the
+tester to notice:** reading Go source *inside* the domain module being
+replaced (whatever new `internal/<name>` takes `internal/todo`'s place)
+is expected and doesn't count against the doc. Needing to read Go source
+**outside** that module — `internal/identity/`, `internal/platform/`,
+`cmd/`, or anything else — in order to succeed is not a neutral fact to
+route around silently; it is itself the signal that `docs/GETTING-
+STARTED.md` has a gap, and belongs in the report as such. Wherever they
+get stuck, or wherever they had to read further afield than the module
+they're writing, is exactly what the doc is missing. Can't be a stopping
+condition — the loop cannot recruit a context-free reader for itself — so
+this happens once, after, same shape as the criterion it replaces.
