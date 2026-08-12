@@ -146,7 +146,7 @@ milestone without anyone ever having deliberately done it).
       fork test with a fresh context-free agent after this lands (the first
       one is contaminated).
 
-- [ ] task-7: Fix findings from Clara's second blind fork test (2026-08-12,
+- [x] task-7: Fix findings from Clara's second blind fork test (2026-08-12,
       real `git clone`, domain `bookmarks`, stricter criterion). Forked
       successfully, `go test ./...` green — but the agent's own words:
       *"the green suite is partly a lie."* Full detail is in Clara's ship
