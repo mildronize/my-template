@@ -239,29 +239,68 @@ shape:
 A new invariant needs both an `INVARIANTS.md` entry and a `TestI<N>_`
 test — the check in `internal/invariants_test.go` enforces the second
 half, not the first. Adding a numbered entry to `_contract/INVARIANTS.md`
-with no matching `TestI<N>_...` test anywhere in the module fails that
-check loudly (it parses every `INVARIANTS.md` under `.chief/` for its own
-headings to know what's required, rather than a hardcoded list); the
-reverse — a test named `TestI<N>_...` for an `I<N>` that was never
-documented — is not something that check can catch, and reviewing for it
-is a human/reviewer responsibility, not a machine-checkable one.
+with no matching `TestI<N>_...` test fails that check loudly (it parses
+every `INVARIANTS.md` under `.chief/` for its own headings to know what's
+required, rather than a hardcoded list); the reverse — a test named
+`TestI<N>_...` for an `I<N>` that was never documented — is not something
+that check can catch, and reviewing for it is a human/reviewer
+responsibility, not a machine-checkable one.
+
+**Each heading also carries a `scope:` tag** (` `scope: global` ` or
+` `scope: per-domain-module` `, appended after the bold heading line) —
+this decides *where* the check looks for the required test, not just
+whether one exists:
+
+- `scope: global` (I1, I2, I5–I10): a `TestI<N>_...` test **anywhere in
+  the repo** satisfies it, same as before this tag existed.
+- `scope: per-domain-module` (I3, I4 — both about ownership/table
+  scoping): every domain module (`internal/*`, excluding `api`/`db`/
+  `platform` — the same enumeration `internal/architecture_test.go` uses)
+  must have **its own dedicated** `TestI<N>_...` test. A test that
+  happens to live in a different module no longer counts, even if it
+  incidentally covers your module's tables too — this closes a real hole
+  a second blind fork test found (task-7): one domain module's test used
+  to silently satisfy the requirement for every other module forever, so
+  a forked module could ship with zero ownership-scoping tests of its own
+  and the suite would stay green.
+
+**Known limitation, both scopes: this check only reads test *names*, not
+bodies.** An empty `func TestI3_Foo(t *testing.T) {}` satisfies it just as
+well as a real one. That was already true before the `scope:` tag
+existed; it matters more now that per-domain-module invariants require a
+dedicated test per module — writing an empty one to make the check pass
+is a deliberate lie about your fork's coverage, not an accidental miss,
+and nothing catches that for you. Write the real test.
 
 **Removal works the same way, in reverse, and it's the direction Step 4
-above actually hits.** `internal/todo` carries the tests for I3 and I4
-(ownership scoping); deleting it with `rm -rf internal/todo` deletes
-`TestI3_...`/`TestI4_...` along with everything else, but their
-`INVARIANTS.md` entries are untouched — you're left with two entries
-documenting invariants nothing tests anymore, and the Done-when-12 check
-fails loudly the next time it runs, naming exactly I3 and I4. That's the
-check working as intended, not a bug to work around: resolve it one of
-two ways, whichever actually reflects your fork —
+above actually hits.** Your new domain module needs its own
+`TestI3_...`/`TestI4_...` if it copied `internal/todo`'s pattern
+(Step 4 below has you copy `internal/todo` before deleting it, precisely
+so this is a rename, not a from-scratch rewrite). `internal/identity`
+keeps its own dedicated `TestI3_...` and `TestI4_...` regardless of what
+you do to `internal/todo` or your new module — per-domain-module scope
+means each module's test now stands on its own, so deleting
+`internal/todo` can no longer silently take `internal/identity`'s only
+table-isolation coverage down with it (that risk existed before task-7's
+fix; it doesn't anymore). If the Done-when-12 check fails after you
+delete `internal/todo`, it's naming your new module specifically, and you
+have three equally valid ways to resolve it, whichever reflects your
+fork —
 
 - Your new domain has an equivalent invariant (e.g. it's also
   owner-scoped) — write a `TestI3_...`/`TestI4_...` (or renumbered)
-  test for it, so the entry stays honest.
+  test for it in your new module's own package, so the entry stays
+  honest.
+- You already copied `internal/todo`'s `TestI3_...`/`TestI4_...` tests
+  into your new module as part of Step 4 (above) and just need to rename
+  them to match your new module's naming — re-homing an existing test,
+  not writing one from nothing.
 - Your new domain doesn't need that invariant at all — remove the I3/I4
-  entries from your fork's own copy of `_contract/INVARIANTS.md`, so the
-  check stops expecting a test that shouldn't exist.
+  entries from your fork's own copy of `_contract/INVARIANTS.md`. This is
+  safe to do purely on your new module's account: it does not touch
+  `internal/identity`'s own coverage, which is a separate dedicated test
+  under per-domain-module scope, not something borrowed from
+  `internal/todo`.
 
 Leaving both the entries and the failing check as-is is the one option
 that isn't fine — that's exactly the drift Done-when 12 exists to catch.
