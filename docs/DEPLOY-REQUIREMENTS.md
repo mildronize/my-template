@@ -95,7 +95,9 @@ restate that contract, it points at it:
 ### Audience convention (`GOAL.md` Decisions table, "Audience convention" row)
 
 `AUTH_AUDIENCE` must be **the service's own public URL**
-(e.g. `https://my-template.thadaw.com`), one per service per environment
+(e.g. `https://your-service.example.com` — a generic placeholder, not
+this template's own deployed URL, which a fork must never copy), one per
+service per environment
 — never an opaque name (contract §6, "Audience convention: the service's
 public URL"). A forked service registering its own Hydra client must set
 `AUTH_AUDIENCE` to *its* real deployed URL, not copy this template's
