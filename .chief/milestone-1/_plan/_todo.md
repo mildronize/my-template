@@ -261,6 +261,124 @@ milestone without anyone ever having deliberately done it).
       before anything else; P1 next; re-run a third blind fork test with a
       fresh context-free agent once landed.
 
+- [ ] task-8: Fix findings from Clara's third blind fork test (2026-08-12,
+      domain `snippets`). **Clara's stated stopping criterion: this is the
+      last required round** — fix all P0 + P1 here, run a fourth
+      *confirmatory* (not new-gap-hunting) blind test, and stop if it forks
+      by following the doc in order with no new security-severe P0. P2 is
+      optional polish, not a gate. Full detail in Clara's ship message;
+      essentials below.
+
+      **P0-1 — Step 4's "copy compiles and passes as a copy" checkpoint
+      doesn't exist.** A renamed copy immediately references undefined
+      generated types (`api.Snippet`, `db.CreateSnippetParams`, etc. don't
+      exist yet). Rewrite the flow: copy + rename package/type/dir names
+      but **keep todo-shaped field names for now** → add the new
+      migration + sqlc queries + `openapi.yaml` paths/schemas (new
+      `operationId`s) in the same pass, still todo-shaped → `make
+      generate` → **real checkpoint**: green here proves wiring is correct
+      while behavior is still todo's → only then change fields to the real
+      domain shape.
+
+      **P0-2 — the wire-in-before-delete window (task-6's own fix) forces
+      two domain modules to coexist, which breaks two ways every time:**
+      (a) `apiServer` embeds both `*todo.Server` and `*snippet.Server` —
+      Go names an embedded field after its type, and this repo's own
+      convention names every module's adapter type `Server`, so this is a
+      guaranteed `Server redeclared`, not an edge case (contrast with the
+      doc's existing warning about `operationId` collisions, which are
+      possible but avoidable — this one isn't). Needs a documented
+      workaround (e.g. `type snippetServer = snippet.Server`) since the
+      doc currently claims embedding "doesn't need its own composition
+      mechanism," which stops being true the moment two modules coexist.
+      (b) each module's integration tests must satisfy the *entire*
+      `api.ServerInterface`, so adding a second module breaks the first
+      module's existing tests too, and the new module's tests won't
+      compile without embedding the other module's `Server` — a
+      cross-module test dependency in a repo whose architecture rule is
+      that domain modules stay independent. State plainly in Step 4 that
+      both of these are expected, temporary, and resolve at the delete
+      step — with the workaround for (a).
+
+      **P0-3 — Step 4's delete list never mentions `openapi.yaml`.** It
+      lists the migration, sqlc queries, `make generate`, and the
+      `main.go` registration — not the `/todos` paths or the
+      `Todo`/`TodoList`/`CreateTodoRequest`/`UpdateTodoRequest` schemas in
+      `openapi.yaml` itself. Following the checklist exactly leaves them
+      in place, `oapi-codegen` regenerates the old methods, and
+      `apiServer does not implement api.ServerInterface (missing method
+      CreateTodo)` breaks the build. Add it to the list — and because the
+      doc already (correctly) says `make generate` cleans up stale
+      `internal/db` output automatically, a reader reasonably assumes
+      codegen "handles cleanup" generally; say explicitly that
+      `openapi.yaml` itself is not auto-cleaned, it's a manual edit.
+
+      **P0-4 — a hardcoding regression in the fix task-7 JUST added, same
+      bug shape as P0-1 of task-7, one level deeper.**
+      `internal/identity/repo_test.go`'s `TestI4_IdentityRepoOnly...`
+      calls `assertQueryFileReferencesOnlyTables(t, ".../users.sql",
+      "users", []string{"todos"})` — the forbidden-table list is a
+      **hardcoded `"todos"`**. Once a fork deletes that table, this check
+      forbids a table that no longer exists and passes vacuously forever,
+      checking nothing. Proven: the test agent added `SELECT * FROM
+      snippets;` to `db/queries/users.sql` and the "table isolation" test
+      still passed. `internal/todo`'s own equivalent
+      (`assertQueriesReferenceOnlyTable`, a near-duplicate implementation)
+      has the identical shape, hardcoding `["users","api_keys"]` back the
+      other way. **Fix: unify the two duplicated helpers into one, and
+      derive the forbidden-table set dynamically** — scan every `.sql`
+      file under `db/queries/`, extract the table name(s) each one
+      references, and forbid whatever the *other* files reference; no
+      specific table name hardcoded anywhere. Where the shared logic lives
+      is an implementation choice (a small non-domain helper, similar
+      standing to `internal/api`/`internal/db`/`internal/platform`, is one
+      option) — but there must be exactly one implementation, and the
+      actual `TestI4_...` **function** must still live inside each domain
+      module's own package (Done-when 12's per-module check looks for the
+      function there, not for where its helper logic lives). Verify by
+      replaying the exact exploit (inject a foreign-table reference,
+      confirm it's now caught) — same method used for every guardrail fix
+      this milestone.
+
+      **P1:**
+      - The "check only looks at test names, not bodies" limitation reads
+        like a mild caveat. State its actual consequence plainly: gutting
+        `TestI3_`/`TestI4_` test bodies to `{}` and making `get`/`update`/
+        `delete` owner-blind produces a fully green suite (including
+        Done-when 12) while one user can read another's rows over HTTP —
+        this is what the test agent proved, deliberately, to make the
+        point. Not fixable by a name-check (a body-emptying author is
+        choosing to defeat their own safety net) — but the doc shouldn't
+        undersell what "just a name check" actually means.
+      - Dangling-reference count is wrong (doc says "roughly two dozen";
+        actual is 45 outside `.chief/`, plus 42 more inside
+        `GETTING-STARTED.md` itself that the doc doesn't count), and
+        "none of these break anything" is false — some are live assertion
+        arguments (see P0-4). Fix the numbers, add `GETTING-STARTED.md`
+        itself to the things Step 2 says to check (it already lists
+        `DEPLOY-REQUIREMENTS.md`), and correct the "harmless" claim.
+      - The dangling-reference grep doesn't exclude `.chief/`, even though
+        a separate section says keep `.chief/` as historical record — 94
+        of 181 hits are there, so the instruction as written contradicts
+        itself. Add `--exclude-dir=.chief`.
+      - I3/I4 are referenced ~20 times in `GETTING-STARTED.md` but never
+        explained there — their actual text lives only in `.chief/`, and
+        the doc offers "remove the entry" as a valid choice without saying
+        what's being removed. Add a short paragraph summarizing what I3
+        and I4 actually mean, so that choice can be made informed.
+
+      **P2 (optional, not part of the stop/continue gate):** Step 2
+      mis-describes `DEPLOY-REQUIREMENTS.md` (it's generic now, the
+      description is stale) · "Patterns worth preserving" is positioned
+      after the numbered list but tells the reader to read it before step
+      1 — move it before the list · Prerequisites section says `rm -rf
+      internal/todo` invokes `bin/sqlc` — it's `make generate` that does,
+      and tools are needed as early as migration-authoring, not just at
+      deletion.
+
+      **Owns: none new.** Re-run a fourth, confirmatory blind fork test
+      after this lands.
+
 ## Resolved during grill
 
 The JWT/SSO auth path's framing was open (live agent auth vs. a
