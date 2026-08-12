@@ -85,6 +85,67 @@ milestone without anyone ever having deliberately done it).
       check enforces the second half, not the first."
       **Owns: Done-when 8, 9, 10.**
 
+- [ ] task-6: Fix findings from Clara's first blind fork test (2026-08-12) —
+      a context-free agent forked the template into `my-notes` using only
+      `docs/GETTING-STARTED.md` and succeeded, but only by repairing things
+      the doc never warned about. Its own summary: *"the doc says what to
+      rename, not what to repair — and all the friction is in repair."**
+      **P0 (a guardrail bug, not a doc gap):** `internal/architecture_test.go`
+      hardcodes `domainDirs`/`forbidden` to exactly `{internal/todo,
+      internal/identity}` in both architecture tests. A fork that keeps
+      `internal/todo` and adds `internal/note` beside it gets **zero**
+      import-rule coverage on the new module — the guardrail we proved
+      fails closed three separate times does not survive the one thing
+      this template exists for. Fix: derive the domain module list from the
+      filesystem (every `internal/*` except `api`, `db`, `platform`), same
+      pattern already used for Done-when 12's invariant list. Also fix
+      GETTING-STARTED Step 1's claim that this file "does not need editing"
+      on fork — true only for the module-path case; state precisely what's
+      now dynamic (module path AND domain module discovery) instead.
+      **P1:** (a) Step 4 (delete `internal/todo`) doesn't warn this deletes
+      the I3/I4 tests, breaking the Done-when-12 check silently unless the
+      fork adds replacement tests for those invariant numbers or removes
+      the `INVARIANTS.md` entries — extend the "Invariants: two things, not
+      one" section to cover the removal direction, not just addition.
+      (b) `TestGooseUp_FullMigrationSetAppliesCleanly` (Done-when 2's only
+      check) lives inside `internal/todo/migration_test.go` — deleted
+      silently with the domain, no invariant name ties it to anything that
+      would complain. Move it somewhere fork-safe (`internal/platform/`,
+      alongside `platform.Migrate` which it exercises — doesn't need any
+      domain-module import). (c) No Prerequisites section — `bin/` is
+      gitignored and nothing tells a fresh `git clone` to run `make tools`
+      before anything else; add one. (d) No section on how to actually run
+      what you forked — add one (`make tools`, `go run ./cmd/server` or
+      `docker compose up`, `cmd/issue-key` as an actual command not a
+      parenthetical, `/healthz`).
+      **P2:** `make generate` doesn't clean orphaned generated files after a
+      domain's queries are removed (fix the Makefile target if safe, else
+      document the manual step) · Step 3 reads as "edit a file" when
+      `AUTH_AUDIENCE` is deploy-time env with no file to edit and no
+      `.env.example` in the repo — clarify · add a `.chief/` section to
+      GETTING-STARTED (what a fork does with it) and make
+      `internal/invariants_test.go` glob for `INVARIANTS.md` under `.chief/`
+      instead of hardcoding `milestone-1`, so the two reinforce each other
+      instead of one silently depending on the other · fix
+      `DEPLOY-REQUIREMENTS.md:98`'s example still using
+      `my-template.thadaw.com` · list `DEPLOY-REQUIREMENTS.md` itself among
+      Step 2's rename targets · Step 3 points at
+      `~/gits/prod-thw-home/docs/sso-consumer-contract.md`, a path outside
+      this repo that won't exist on a fork made elsewhere — inline the
+      essential §6 summary and mark the reference as fleet-internal.
+      **Also tighten `_goal/GOAL.md`'s Human Acceptance criterion**: Clara's
+      own test let the agent read source (correctly — a real forker would
+      too), which is why it measured "did it succeed" rather than "how much
+      friction," and only produced a useful signal because she separately
+      instructed it to report friction. Scope the criterion explicitly: no
+      need to read Go source **outside the domain module you're replacing
+      `internal/todo` with** — reading further than that to succeed is
+      itself the signal a doc gap exists.
+      **Owns: none (all 12 Done-when items already closed by task-5) — this
+      hardens what they check, it doesn't add new ones.** Re-run the blind
+      fork test with a fresh context-free agent after this lands (the first
+      one is contaminated).
+
 ## Resolved during grill
 
 The JWT/SSO auth path's framing was open (live agent auth vs. a
