@@ -1,0 +1,40 @@
+# Local dev / smoke-test compose file. One service, no separate DB
+# container — SQLite is a file, not a server (GOAL.md Decisions: "Deployment").
+# docs/DEPLOY-REQUIREMENTS.md covers real deployment (Hydra registration,
+# a reverse proxy, systemd/host wiring); this file is the "docker compose
+# up" story GOAL.md Done-when 8 checks.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      # PORT and DATABASE_PATH are deliberately left at Config's own
+      # envDefault (internal/platform/config.go) — 8080 and
+      # ./data/app.db (== /app/data/app.db, inside the volume below).
+      # SSO_ISSUER/AUTH_AUDIENCE are left unset here on purpose: the JWT
+      # bearer path is a wired-but-dormant seam in this template (GOAL.md,
+      # docs/GETTING-STARTED.md) and cmd/server logs a warning and runs
+      # API-key-only auth when they're absent, rather than failing to
+      # start. A real deployment sets both — see
+      # docs/DEPLOY-REQUIREMENTS.md.
+      SSO_ISSUER: ""
+      AUTH_AUDIENCE: ""
+    volumes:
+      - sqlite-data:/app/data
+    # No Docker healthcheck: the distroless runtime image ships neither a
+    # shell nor an HTTP client binary (only /app/server and
+    # /app/issue-key) to run a CMD probe with, and cmd/server has no
+    # -healthcheck flag of its own. Verify liveness from the host instead
+    # — GET /healthz (curl http://localhost:8080/healthz) — which is also
+    # how this task's own end-to-end smoke pass checks it.
+
+volumes:
+  # Named volume holding the SQLite file (users/api_keys/todos) —
+  # survives `docker compose down` (not `down -v`), so restarting the
+  # service doesn't lose data. Migrations apply automatically on every
+  # server start (platform.Migrate, idempotent via goose's own
+  # bookkeeping table), so a fresh volume needs no separate migrate step.
+  sqlite-data:

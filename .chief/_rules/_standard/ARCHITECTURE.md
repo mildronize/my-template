@@ -77,18 +77,38 @@ package-level check would false-positive on `handler.go`'s legitimate `gin`
 import. Enforce with `go/parser` + `go/ast` (stdlib — no dependency beyond
 the given stack) reading each file's own `import` block, not `go list`.
 
-**The filename pattern is the contract, not an implementation detail.** A
-file matches the handler role if its name is exactly `handler.go` or ends in
-`_handler.go` (so a module can split into `todo_handler.go` +
-`batch_handler.go` and both stay recognized); matches the repo role the same
-way against `repo.go` / `*_repo.go`. **If you rename a module's transport or
-data-access file to something that doesn't match — `http.go`, `storage.go`,
-whatever fork convention you'd rather use — the test will start failing on
-that file's own gin/sqlc import, on purpose, the moment it's built.** That
-failure is the prompt to update `internal/architecture_test.go`'s two
-patterns alongside the rename, not a bug in the check. Keeping the pattern
-and the rename in sync is the fork's responsibility; the check's job is only
-to make forgetting loud instead of silent.
+**The filename pattern is the contract, not an implementation detail — and
+this section must stay in sync with the actual regex in
+`internal/architecture_test.go`, not describe an earlier version of it.**
+The real pattern, as of task-2 (2026-08-12): a file matches the handler role
+if its name is exactly `handler.go`, ends in `_handler.go`, or is that
+file's own Go test (`handler_test.go`, `todo_handler_test.go`, ...) — same
+shape for the repo role against `repo.go` / `*_repo.go`. Regex:
+`^(handler|.+_handler)(_test)?\.go$` (and the `repo` equivalent).
+
+**Two separate reasons can make you touch this pattern — don't conflate
+them:**
+- **Renaming a module's transport/data-access file on fork** (`http.go`,
+  `storage.go`, whatever convention you'd rather use) — the test starts
+  failing on that file's own gin/sqlc import, on purpose, the moment it's
+  built. Update the pattern to match your new name; that failure is the
+  prompt, not a bug.
+- **A handler/repo file needing a test that itself imports `gin`** (to
+  drive a `gin.HandlerFunc` through a real `gin.Engine` via `httptest`, for
+  instance) — this isn't a fork-rename, it's Go's own mandatory `_test.go`
+  suffix colliding with the original tighter pattern. Task-2 hit this: its
+  identity middleware tests needed `gin`, and the pattern as first written
+  here didn't have a `_test` allowance, so a *correct* test file failed a
+  check meant to catch something else entirely. The `(_test)?` suffix in
+  the regex above is the fix — permission inherited from an already-allowed
+  file's test, not a new exemption invented on the spot.
+
+If you change the regex for either reason, **update this paragraph in the
+same commit** — a check that drifted from its own documentation is worse
+than no documentation, because it looks authoritative right up until
+someone trusts it (caught by Clara reviewing task-2, not by any Done-when
+item; see milestone-1's `_plan/_todo.md` "Resolved during grill" for the
+full incident and why Done-when 11 alone doesn't catch this class of drift).
 
 Rule 3 **is** a clean package-level check — `internal/platform` is a
 distinct package with its own import list, so `go list -json ./...`

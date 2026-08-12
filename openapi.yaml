@@ -1,0 +1,285 @@
+openapi: 3.0.3
+info:
+  title: my-template API
+  version: "1.0.0"
+  description: >
+    The template's one REST surface (`_contract/API.md`). Every request
+    authenticates over `Authorization: Bearer <credential>` — an `api_keys`
+    row's raw key or an SSO-issued JWT — resolved by
+    `internal/identity`'s actor-resolution middleware, not by anything in
+    this spec: no `security` scheme is declared here on purpose, since
+    OpenAPI-level "is a token present" checks would either duplicate or
+    fight the identity module's own I1/I2/I5 rules
+    (`.chief/milestone-1/_contract/INVARIANTS.md`). This spec's job is
+    request/response *shape* validation (`gin-middleware`), not auth.
+servers:
+  - url: /api/v1
+paths:
+  /me:
+    get:
+      operationId: getMe
+      summary: Return the authenticated actor's own identity.
+      description: >
+        `me` is the only way an actor refers to itself — there is no
+        endpoint that takes another actor's id.
+      responses:
+        "200":
+          description: The authenticated actor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /todos:
+    get:
+      operationId: listTodos
+      summary: List the caller's own todos.
+      description: >
+        Returns only the caller's own todos, created_at descending,
+        unpaginated (deliberate — see `_contract/API.md` Conventions).
+      responses:
+        "200":
+          description: The caller's own todos.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TodoList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      operationId: createTodo
+      summary: Create a todo owned by the caller.
+      description: >
+        `owner_id` is always the resolved actor — never accepted from the
+        body (I1). `done` starts false.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTodoRequest"
+      responses:
+        "201":
+          description: The created todo.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Todo"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /todos/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getTodo
+      summary: Get one of the caller's own todos.
+      description: >
+        Owner-scoped (I3): another owner's id, or an id that never
+        existed, both return `not_found` — never `forbidden`.
+      responses:
+        "200":
+          description: The todo.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Todo"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: updateTodo
+      summary: Update one of the caller's own todos.
+      description: Owner-scoped, same 404 rule as GET.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTodoRequest"
+      responses:
+        "200":
+          description: The updated todo.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Todo"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteTodo
+      summary: Delete one of the caller's own todos.
+      description: >
+        Owner-scoped, same 404 rule. Deleting an already-deleted id is
+        also `not_found` (naturally idempotent, no special-casing
+        needed).
+      responses:
+        "204":
+          description: Deleted.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /keys:
+    get:
+      operationId: listKeys
+      summary: List the caller's own non-revoked API keys.
+      description: >
+        Lists the caller's own non-revoked keys (`revoked_at IS NULL`),
+        regardless of expiry — an expired-but-unrevoked key still shows up
+        so the caller can see it needs rotating (I9 is about the
+        auth-time check, not this listing decision).
+      responses:
+        "200":
+          description: The caller's own non-revoked keys.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKeyList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /keys/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      operationId: revokeKey
+      summary: Revoke one of the caller's own API keys.
+      description: >
+        Sets `revoked_at`. Owner-scoped, same 404 rule as todos (I3).
+        There is deliberately no `POST /api/v1/keys` — issuance is
+        CLI-only (`cmd/issue-key`).
+      responses:
+        "204":
+          description: Revoked.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+components:
+  schemas:
+    Me:
+      type: object
+      required: [handle, role, active]
+      properties:
+        handle:
+          type: string
+        role:
+          type: string
+        active:
+          type: boolean
+    Todo:
+      type: object
+      required: [id, title, done, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        done:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    TodoList:
+      type: object
+      required: [todos]
+      properties:
+        todos:
+          type: array
+          items:
+            $ref: "#/components/schemas/Todo"
+    ApiKey:
+      type: object
+      required: [id, prefix, createdAt, expiresAt]
+      properties:
+        id:
+          type: string
+        prefix:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+    ApiKeyList:
+      type: object
+      required: [keys]
+      properties:
+        keys:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApiKey"
+    CreateTodoRequest:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+    UpdateTodoRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        done:
+          type: boolean
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            hint:
+              type: string
+  responses:
+    BadRequest:
+      description: The request violates a request-shape or validation rule.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: >
+        Missing, malformed, expired, revoked, wrong-role, or
+        inactive-user credential — same shape regardless of which check
+        failed (I5).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: >
+        Unknown id, or an id that exists but isn't the caller's (I3 —
+        absence, not permission).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
