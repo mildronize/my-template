@@ -24,8 +24,12 @@ make tools
 
 This installs the three pinned tools into `./bin` (`GOBIN=$(CURDIR)/bin`,
 Makefile). Nothing in Step 1–4 below works without it — `make generate`
-(Step 4's `rm -rf internal/todo` sub-step) shells out to `bin/sqlc` and
-`bin/oapi-codegen` directly, and they won't exist otherwise.
+(the Makefile target, run more than once during Step 4: once after adding
+your new module's migration/queries/openapi content, again after deleting
+`internal/todo`) shells out to `bin/sqlc` and `bin/oapi-codegen` directly,
+and they won't exist otherwise. You need these tools as early as Step 4's
+migration-authoring sub-step (`bin/goose create`, see "Writing a new
+migration" below) — well before the deletion sub-step, not just at it.
 
 ## Step 1: Rename the Go module path
 
@@ -53,8 +57,10 @@ itself resolves the module path dynamically at run time (`go list -m`),
 never hardcoded. The same test also doesn't need editing for adding,
 renaming, or removing a domain module (Step 4) — the set of domain
 modules it checks is likewise resolved dynamically (an `internal/*`
-directory listing that excludes the three infrastructure directories
-`api`/`db`/`platform`), not hardcoded.
+directory listing that excludes the four infrastructure directories
+`api`/`db`/`dbquery`/`platform` — `dbquery` is a small shared test-helper
+package behind every domain module's I4 check, see its own doc comment),
+not hardcoded.
 
 ## Step 2: Rename the service
 
@@ -72,11 +78,20 @@ code, the service name is what it's called everywhere else:
   service by name (out of scope for this doc to enumerate — see
   `docs/DEPLOY-REQUIREMENTS.md` and coordinate with hestia directly, since
   that's her domain per `GOAL.md`'s Context section).
-- `docs/DEPLOY-REQUIREMENTS.md` itself — it's written for *this* template
-  (its example audience, its service name in the `issue-key` example
-  command) and hands off to hestia for the fork's real deployment, so it
-  needs the same rename pass as everything else on this list, not just a
-  copy left as-is.
+- `docs/DEPLOY-REQUIREMENTS.md` — already written generically as of this
+  milestone (its audience example is a placeholder URL, not this
+  template's real one, and its `issue-key` example already notes that its
+  compose service key is renameable per this step) — skim it once for
+  anything that still assumes this template's specifics, but there's
+  little left to actually change; it's primarily a hand-off document for
+  hestia's own deployment specifics, not a rename target the way the rest
+  of this list is.
+- `docs/GETTING-STARTED.md` itself — this document. It accumulates the
+  largest number of dangling `todo`/`todos` references of any file in the
+  repo once you've forked (see "Dangling references after a correct fork"
+  below for the count and why), since it's the document that explains the
+  domain being replaced. Give it the same pass once you're done, or plan
+  to replace it with your own fork's documentation.
 
 ## Step 3: Set `AUTH_AUDIENCE` to the new service's own public URL
 
@@ -127,66 +142,14 @@ delete anything.** `internal/todo` is the only worked example this repo
 has of several patterns nothing else documents — deleting it first, then
 trying to reconstruct those patterns from scratch, is what a second blind
 fork test called *"the single worst instruction in the document"* when an
-earlier version of this step led with `rm -rf`. Do it in this order
-instead:
-
-1. **Read `internal/todo` end to end** — `handler.go`, `service.go`,
-   `repo.go`, `*_test.go`, its migration (`db/migrations/*_create_todos.sql`),
-   its sqlc queries (`db/queries/todos.sql`), its `openapi.yaml` paths, and
-   how `cmd/server/main.go` wires it in. See "Patterns worth preserving"
-   below for the specific things in here that are easy to miss and hard to
-   reconstruct if you skip straight to deleting.
-2. **Copy `internal/todo` to your new module's directory and rename it** —
-   new package name, new file/type/identifier names, new table name.
-   Get the copy compiling and its tests passing *as a copy* before you
-   touch its actual logic; this proves you've correctly reproduced the
-   wiring (handler↔service↔repo, the sqlc/openapi/migration trio, the
-   `main.go` registration) before you start changing what the domain
-   actually does. Then adapt the copy: your own migration, your own sqlc
-   queries, your own `openapi.yaml` paths (following the same conventions
-   — owner-scoped, `me`-only actor reference, no actor field in the
-   body/query/header; `_contract/API.md` has the milestone-1 rationale,
-   though your fork's own contract is what governs going forward), and
-   your own domain logic in `service.go`/`repo.go`.
-3. **Wire the new module into `cmd/server/main.go`** the same way
-   `internal/todo` was wired — a domain module's `handler.go` contributes
-   methods to `apiServer` (see "Patterns worth preserving" below),
-   its `service.go`/`repo.go` stay behind `handler.go`, not imported
-   directly elsewhere (`ARCHITECTURE.md` rules 1–2, enforced by
-   `internal/architecture_test.go`). At this point both the copy and the
-   original `internal/todo` exist side by side and both work — confirm
-   `go build ./...` and `go test ./...` are still green with both present
-   before moving on, so a mistake in step 2 or 3 doesn't get masked by
-   also deleting the thing you could have compared against.
-4. **Only now, `rm -rf internal/todo`.** Also remove its migration
-   (`db/migrations/*_create_todos.sql`) and its sqlc queries
-   (`db/queries/todos.sql`), then re-run `make generate` — it cleans up
-   `internal/db`'s stale generated output for you (it deletes every
-   sqlc-generated file there before regenerating, so a query file you
-   removed doesn't leave its old `.sql.go` behind breaking the build); no
-   manual `rm` step needed. Remove its registration from
-   `cmd/server/main.go` too (the `apiServer` embed and
-   `todo.NewService(todo.NewRepo(conn))` line — see "Patterns worth
-   preserving" below for what that struct is doing before you touch it).
-5. **Deal with the invariants this deletes.** `internal/todo` carried the
-   `TestI3_...`/`TestI4_...` tests for `_contract/INVARIANTS.md`'s I3 and
-   I4 (per-domain-module scope — see "Invariants: two things, not one"
-   below); deleting it deletes those tests along with everything else.
-   If you copied them into your new module in step 2 and renamed them,
-   you're already covered — otherwise `internal/invariants_test.go`'s
-   Done-when-12 check fails the moment you run it, naming your new module
-   specifically. Resolve it one of the ways "Invariants: two things, not
-   one" describes.
-
-`internal/identity/` and `internal/platform/` are **not** part of this
-step — keep both as-is on fork (user/API-key identity and
-config/logging/db/server wiring aren't template placeholders).
+earlier version of this step led with `rm -rf`.
 
 ### Patterns worth preserving
 
 These are the specific things in `internal/todo` and its wiring that
-nothing else in this repo documents — read this before step 1's read-through
-above, so you know what to look for:
+nothing else in this repo documents — read this **before** step 1 below,
+so you know what to look for during that read-through instead of
+discovering it's missing later:
 
 - **How `handler.go` implements the generated `ServerInterface`.**
   `oapi-codegen` generates `internal/api.ServerInterface` from
@@ -232,9 +195,163 @@ above, so you know what to look for:
   `api.RegisterHandlers` as the single value satisfying the whole
   generated interface. This works with plain Go embedding, no hand-written
   delegation methods, *because* no two domain modules' `operationId`
-  values collide into the same generated method name. Your new module
-  adds one more embedded field to that same struct; it doesn't need its
-  own composition mechanism.
+  values collide into the same generated method name — but that's a
+  separate concern from the embedded *field names* themselves, which
+  **do** collide the instant two domain modules coexist, since this
+  repo's convention names every module's adapter type `Server`. One
+  module embedded at a time genuinely doesn't need its own composition
+  mechanism, as this bullet used to claim outright; two coexisting during
+  Step 4's copy-then-delete window do — see "Two modules, briefly, at
+  once" (below the numbered list) for the type-alias workaround this
+  actually requires.
+
+Do it in this order:
+
+1. **Read `internal/todo` end to end** — `handler.go`, `service.go`,
+   `repo.go`, `*_test.go`, its migration (`db/migrations/*_create_todos.sql`),
+   its sqlc queries (`db/queries/todos.sql`), its `openapi.yaml` paths, and
+   how `cmd/server/main.go` wires it in, with "Patterns worth preserving"
+   above in mind — those are the specific things in here that are easy to
+   miss and hard to reconstruct if you skip straight to deleting.
+2. **Copy `internal/todo` to your new module's directory and rename it** —
+   new package name, new file/type/identifier names, new table name —
+   but **keep the field names todo-shaped for now** (still `title`/`done`,
+   not your real domain's fields yet). Don't touch what the domain
+   actually does in this step, only what it's called.
+3. **In the same pass, add your new module's own migration, sqlc
+   queries, and `openapi.yaml` paths/schemas** — a new table, new query
+   file, new paths with new `operationId` values (e.g. `createSnippet`,
+   not `createTodo`) — still todo-shaped: the same `title`/`done`-style
+   fields your copy from step 2 already has, just declared under your new
+   table/type/operation names. This is what actually produces the
+   generated types your renamed copy references (`api.Snippet`,
+   `db.CreateSnippetParams`, ...) — a rename alone doesn't regenerate
+   anything, so skip this step and the copy from step 2 can't compile no
+   matter how carefully you renamed it.
+4. **Wire the new module into `cmd/server/main.go`** the same way
+   `internal/todo` was wired — a domain module's `handler.go` contributes
+   methods to `apiServer` (see "Patterns worth preserving" above), its
+   `service.go`/`repo.go` stay behind `handler.go`, not imported directly
+   elsewhere (`ARCHITECTURE.md` rules 1–2, enforced by
+   `internal/architecture_test.go`). At this point both your new module
+   and the original `internal/todo` exist side by side and both need to
+   work — **read "Two modules, briefly, at once" right below before you
+   do this step**, because it breaks two ways every time, not
+   hypothetically, and the fix for one of them (a naming collision) has
+   to go in as you write this wiring, not after.
+5. `make generate`.
+6. **This is the real checkpoint** — the previous version of this
+   instruction claimed one existed a step earlier than it actually could:
+   `go build ./...` and `go test ./...` green here, with the copy's
+   fields still todo-shaped, proves the wiring (handler↔service↔repo, the
+   sqlc/openapi/migration trio, the `main.go` registration from step 4) is
+   correct, independent of what the domain actually does. A renamed copy
+   straight out of step 2, with no migration/queries/openapi/regenerate
+   behind it yet, cannot reach a green build — it references generated
+   types that don't exist until steps 3 and 5 create them. That was the
+   actual bug in the old "get the copy compiling and its tests passing as
+   a copy" instruction: it described a checkpoint one step earlier than
+   the one that's actually reachable.
+7. **Only now, change the copy's fields to your real domain shape** — your
+   own `service.go`/`repo.go` logic, and your `openapi.yaml`
+   paths/schemas' actual field names (following the same conventions —
+   owner-scoped, `me`-only actor reference, no actor field in the
+   body/query/header; `_contract/API.md` has the milestone-1 rationale,
+   though your fork's own contract is what governs going forward). If
+   this step breaks the build or a test, you now know the break is in
+   your domain logic, not in the wiring — step 6's checkpoint already
+   ruled the wiring out.
+8. **Only now, `rm -rf internal/todo`.** Also remove its migration
+   (`db/migrations/*_create_todos.sql`), its sqlc queries
+   (`db/queries/todos.sql`), and **its `openapi.yaml` content — the
+   `/todos` paths and the `Todo`/`TodoList`/`CreateTodoRequest`/
+   `UpdateTodoRequest` schemas.** This last one is easy to skip because
+   nothing on this list says "edit `openapi.yaml`" the way it says `rm`
+   for the other two — but skipping it leaves `oapi-codegen` regenerating
+   the old `CreateTodo`/`ListTodos`/etc. methods on every `make generate`,
+   and the build breaks with `apiServer does not implement
+   api.ServerInterface (missing method CreateTodo)` the moment you delete
+   `internal/todo` out from under those regenerated methods. Then re-run
+   `make generate` — it cleans up `internal/db`'s stale generated output
+   for you (it deletes every sqlc-generated file there before
+   regenerating, so a query file you removed doesn't leave its old
+   `.sql.go` behind breaking the build); no manual `rm` step needed
+   **for `internal/db`.** That auto-cleanup is specific to
+   `internal/db` — `openapi.yaml` itself is never auto-cleaned by
+   `make generate` or anything else; the paragraph above is the manual
+   edit that has to happen instead, and it has to happen *before* you run
+   `make generate` again, not after. Finally, remove `internal/todo`'s
+   registration from `cmd/server/main.go` too (the `apiServer` embed and
+   `todo.NewService(todo.NewRepo(conn))` line — see "Patterns worth
+   preserving" above for what that struct is doing before you touch it).
+9. **Deal with the invariants this deletes.** `internal/todo` carried the
+   `TestI3_...`/`TestI4_...` tests for `_contract/INVARIANTS.md`'s I3 and
+   I4 (per-domain-module scope — see "Invariants: two things, not one"
+   below); deleting it deletes those tests along with everything else.
+   If you copied them into your new module in step 2 and renamed them,
+   you're already covered — otherwise `internal/invariants_test.go`'s
+   Done-when-12 check fails the moment you run it, naming your new module
+   specifically. Resolve it one of the ways "Invariants: two things, not
+   one" describes.
+
+`internal/identity/` and `internal/platform/` are **not** part of this
+step — keep both as-is on fork (user/API-key identity and
+config/logging/db/server wiring aren't template placeholders).
+
+### Two modules, briefly, at once
+
+Between step 4 above and step 8's delete, your new module and
+`internal/todo` both exist and both have to work — this is required, not
+an accident: task-6's own fix to this document made "study, then copy,
+then delete last" the rule specifically so you always have a working
+original to compare against. But two domain modules coexisting breaks
+two things, every time, not as an edge case:
+
+- **`apiServer` (in `cmd/server/main.go`) embeds every domain module's
+  `ServerInterface`-contributing type — and this repo's own convention
+  names every one of them `Server`** (`todo.Server`, and your new
+  module's own type if you followed the same convention). Go names an
+  embedded field after its type, so embedding two types both named
+  `Server` is a guaranteed `Server redeclared in this block` compile
+  error the instant you add the second embed in step 4 — not something
+  that depends on your domain's specifics. **The workaround: a type
+  alias for the embed**, e.g.
+  ```go
+  type snippetServer = snippet.Server
+
+  type apiServer struct {
+      identity.MeServer
+      *identity.KeysServer
+      *todo.Server
+      *snippetServer
+  }
+  ```
+  Contrast this with "Patterns worth preserving" above, which used to
+  claim plain embedding "doesn't need its own composition mechanism" —
+  true only as long as exactly one domain module is embedded at a time;
+  the moment a second one joins it, that claim stops holding and the
+  alias above is the composition mechanism. Once step 8 deletes
+  `internal/todo`, only your new module's embed remains and the alias is
+  no longer strictly necessary — but there's no harm in leaving it.
+- **Each domain module's integration tests exercise the entire
+  `api.ServerInterface`**, not just their own module's slice of it (they
+  drive a real `gin.Engine` wired with `apiServer`, the same struct
+  `main.go` builds). That means adding a second module temporarily breaks
+  `internal/todo`'s own existing tests too — they now run against an
+  `apiServer` that also has to satisfy your new module's routes — and
+  your new module's own tests won't compile without embedding
+  `*todo.Server` (or the alias above) alongside your own type, purely so
+  the test harness's `apiServer` satisfies the full interface. This is a
+  temporary cross-module test dependency, in a repo whose architecture
+  rule is otherwise that domain modules stay independent
+  (`ARCHITECTURE.md`) — it resolves itself the moment step 8 deletes
+  `internal/todo`, at which point your new module's tests only need to
+  embed their own type again.
+
+Both of these are expected and temporary — they're what step 6's
+checkpoint (`go build ./...`/`go test ./...` green with both modules
+present) is actually proving you got right, not a sign something's wrong
+with your fork.
 
 ## Running what you forked
 
@@ -327,6 +444,27 @@ shape:
 
 ## Invariants: two things, not one
 
+I3 and I4 are referenced throughout this document — including the two
+paragraphs right below and Step 4's invariant-deletion sub-step — without
+ever being explained here; their actual text lives only in
+`.chief/milestone-1/_contract/INVARIANTS.md`, which this document assumes
+you have open. In short, so the choices below can be made informed even if
+you don't:
+
+- **I3 — ownership scoping is absence, not permission.** A row that exists
+  but belongs to a different owner (a todo, an API key) reads back as
+  `not_found`, identical to a row that never existed — never `forbidden`,
+  which would confirm the row's existence to someone who shouldn't be able
+  to tell. Applies per domain module, to whatever that module's own
+  owner-scoped resource is.
+- **I4 — one seam reads identity.** Only the actor-resolution middleware
+  ever queries `users`/`api_keys` to determine who's calling; every other
+  repo (todos, your new domain) only ever queries its own table(s), never
+  identity's. In practice this is checked as "one repo, one table (or
+  table-set)" per domain module — `TestI4_TodoRepoOnlyQueriesTodosTable`,
+  its `internal/identity` equivalent — statically, against the sqlc query
+  source.
+
 A new invariant needs both an `INVARIANTS.md` entry and a `TestI<N>_`
 test — the check in `internal/invariants_test.go` enforces the second
 half, not the first. Adding a numbered entry to `_contract/INVARIANTS.md`
@@ -346,8 +484,8 @@ whether one exists:
   the repo** satisfies it, same as before this tag existed.
 - `scope: per-domain-module` (I3, I4 — both about ownership/table
   scoping): every domain module (`internal/*`, excluding `api`/`db`/
-  `platform` — the same enumeration `internal/architecture_test.go` uses)
-  must have **its own dedicated** `TestI<N>_...` test. A test that
+  `dbquery`/`platform` — the same enumeration `internal/architecture_test.go`
+  uses) must have **its own dedicated** `TestI<N>_...` test. A test that
   happens to live in a different module no longer counts, even if it
   incidentally covers your module's tables too — this closes a real hole
   a second blind fork test found (task-7): one domain module's test used
@@ -362,6 +500,23 @@ existed; it matters more now that per-domain-module invariants require a
 dedicated test per module — writing an empty one to make the check pass
 is a deliberate lie about your fork's coverage, not an accidental miss,
 and nothing catches that for you. Write the real test.
+
+**Say what that actually means, plainly, because "just a name check" reads
+like a mild caveat and understates it:** a fork can gut every
+`TestI3_`/`TestI4_` body down to `{}` and simultaneously make `get`/
+`update`/`delete` owner-blind (drop the `WHERE owner_id = ?` clause,
+return whatever row matches the id regardless of who's asking), and the
+full suite — Done-when 12 included — stays green throughout. The result is
+one authenticated user reading, changing, or deleting another user's rows
+over HTTP with a `200`, with every automated check saying everything is
+fine. This is exactly what a test agent on this milestone did once,
+deliberately, to prove the point. A name-check cannot close this gap by
+construction — an author willing to empty out a test body to make a check
+pass is choosing to defeat their own safety net, and no naming convention
+detects that choice — so don't read "the check enforces the name, not the
+body" as a minor asterisk. It's the difference between "a suite that's
+green" and "an API that's actually safe," and only a real test body, read
+by a human, closes it.
 
 **Removal works the same way, in reverse, and it's the direction Step 4
 above actually hits.** Your new domain module needs its own
@@ -441,21 +596,52 @@ Not spelled out elsewhere, though every existing migration under
 
 ## Dangling references after a correct fork
 
-Even a fork that gets every step above exactly right leaves roughly two
-dozen references to `todo`/`todos` behind in places `go build`/`go vet`
-can't see: doc comments (`internal/identity/doc.go`,
-`internal/platform/config.go`, `internal/api/validator.go` all mention
-todos in prose, not code) and test/example fixtures
-(`{"title": "a todo"}`-shaped literals). None of these break anything —
-that's exactly why they survive a correct fork instead of getting caught
-by `go build ./...`. This document's own opening line claims "skipping a
-step leaves a specific, identifiable trace"; a leftover `todo` in a
-comment is a trace regardless of whether any step was actually skipped,
-so it doesn't uniquely identify a missed step the way a stale import path
-does. After Steps 1–4, run one more pass:
+Even a fork that gets every step above exactly right leaves references to
+`todo`/`todos` behind in places `go build`/`go vet` can't see: doc
+comments (`internal/identity/doc.go`, `internal/platform/config.go`,
+`internal/api/validator.go`, `internal/architecture_test.go`, and several
+more across `internal/identity/*_test.go` all mention todos in prose, not
+code) and test/example fixtures (`{"title": "a todo"}`-shaped literals).
+**Roughly 40 of these survive a fully correct fork** (verified by grep,
+below, excluding everything a correct Step 4 already deletes or edits —
+`internal/todo/` itself, its migration and query file, the two generated
+outputs `internal/db`/`internal/api/openapi.gen.go`, `openapi.yaml`'s own
+`/todos` content per Step 4's now-corrected delete list, and
+`cmd/server/main.go`'s registration — and excluding this repo's unrelated
+`.chief`-planning-framework use of the word "todo" in `_todo.md`,
+`AGENTS.md`, `.agents/`, which has nothing to do with the domain).
+**This document's own text accounts for a further ~44** self-references
+(it's the doc that explains the todo domain, so it necessarily says
+"todo" a lot) — not part of the 40 above, and not something a fork edits
+away by rewriting this file, but worth knowing about if you're grepping
+your own fork and wondering why the count looks higher than expected
+before you've excluded this file.
+
+**These are not all harmless**, contrary to an earlier version of this
+paragraph's claim that "none of these break anything." Most are inert
+prose — but not all: P0-4's kind of issue (a hardcoded table/module name
+baked into a test assertion's *arguments*, not its prose) is exactly a
+dangling reference that's also live code, and grepping for `todo` is one
+of the ways you'd actually catch a hardcoded `"todos"` string left behind
+in a check that's supposed to be dynamic. Treat a hit inside a `_test.go`
+file's assertion arguments (not its comments) as worth a closer look, not
+an automatic skip.
+
+This document's own opening line claims "skipping a step leaves a
+specific, identifiable trace"; a leftover `todo` in a comment is a trace
+regardless of whether any step was actually skipped, so it doesn't
+uniquely identify a missed step the way a stale import path does. After
+Steps 1–4, run one more pass — **excluding `.chief/`**, which is kept
+deliberately as historical record (see "`.chief/`" below) and would
+otherwise dominate the results with hits that aren't about your fork at
+all, and **including `docs/GETTING-STARTED.md` itself** in what you check
+(Step 2 already lists `docs/DEPLOY-REQUIREMENTS.md` as a rename-pass
+target for the same reason — this file collects the most references of
+any single file once you've forked, precisely because it's the file that
+explains the domain being replaced):
 
 ```sh
-grep -rn 'todo' --include='*.go' --include='*.md' --include='*.sql' --include='*.yaml' .
+grep -rn 'todo' --include='*.go' --include='*.md' --include='*.sql' --include='*.yaml' . --exclude-dir=.chief
 ```
 
 and update or remove whatever's left that's about the old domain, not
