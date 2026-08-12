@@ -39,7 +39,7 @@ milestone without anyone ever having deliberately done it).
       (missing/malformed/expired/revoked/wrong-role) returns the identical
       401 body (I5).
       **Owns: Done-when 5, 6.**
-- [ ] task-3: Todos — `internal/todo/`: `todos` migration + sqlc queries
+- [x] task-3: Todos — `internal/todo/`: `todos` migration + sqlc queries
       (last new table this milestone adds — nothing after this task changes
       the schema), `openapi.yaml` for `/me` and the `/todos` endpoints,
       oapi-codegen + gin-middleware wiring, `handler.go`/`service.go`/
