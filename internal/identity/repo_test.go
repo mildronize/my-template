@@ -96,6 +96,46 @@ func TestI8_APIKeyStoredHashedNotRaw(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 
+// TestRepo_ListAPIKeysByOwner_ExcludesRevoked_IncludesExpired_OwnRowsOnly
+// exercises API.md's `GET /api/v1/keys` listing rule at the repo layer: a
+// revoked key never shows up, an expired-but-unrevoked key still does
+// (this is a listing decision, not I9's auth-time check — see
+// service.go's ListAPIKeys doc comment), and another owner's keys never
+// leak in.
+func TestRepo_ListAPIKeysByOwner_ExcludesRevoked_IncludesExpired_OwnRowsOnly(t *testing.T) {
+	ctx := context.Background()
+	repo := NewRepo(newTestDB(t))
+
+	owner, err := repo.CreateUser(ctx, "owner-of-keys", "agent", nil)
+	require.NoError(t, err)
+	other, err := repo.CreateUser(ctx, "someone-else", "agent", nil)
+	require.NoError(t, err)
+
+	live, err := repo.CreateAPIKey(ctx, owner.ID, HashAPIKey("tpl_live"), "tpl_livelive1", time.Now().Add(time.Hour))
+	require.NoError(t, err)
+
+	expiredButUnrevoked, err := repo.CreateAPIKey(ctx, owner.ID, HashAPIKey("tpl_expired"), "tpl_expiredex", time.Now().Add(-time.Hour))
+	require.NoError(t, err)
+
+	toRevoke, err := repo.CreateAPIKey(ctx, owner.ID, HashAPIKey("tpl_revoked"), "tpl_revokedre", time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	_, err = repo.RevokeAPIKey(ctx, toRevoke.ID, owner.ID)
+	require.NoError(t, err)
+
+	_, err = repo.CreateAPIKey(ctx, other.ID, HashAPIKey("tpl_someone-else"), "tpl_otherowne", time.Now().Add(time.Hour))
+	require.NoError(t, err)
+
+	list, err := repo.ListAPIKeysByOwner(ctx, owner.ID)
+	require.NoError(t, err)
+
+	ids := make([]string, 0, len(list))
+	for _, k := range list {
+		ids = append(ids, k.ID)
+	}
+	assert.ElementsMatch(t, []string{live.ID, expiredButUnrevoked.ID}, ids,
+		"a revoked key must be excluded, an expired-but-unrevoked key must still show up, and another owner's key must never leak in")
+}
+
 func TestRepo_RevokeAPIKeyScopedToOwner(t *testing.T) {
 	ctx := context.Background()
 	repo := NewRepo(newTestDB(t))

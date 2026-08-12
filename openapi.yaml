@@ -131,6 +131,45 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+  /keys:
+    get:
+      operationId: listKeys
+      summary: List the caller's own non-revoked API keys.
+      description: >
+        Lists the caller's own non-revoked keys (`revoked_at IS NULL`),
+        regardless of expiry — an expired-but-unrevoked key still shows up
+        so the caller can see it needs rotating (I9 is about the
+        auth-time check, not this listing decision).
+      responses:
+        "200":
+          description: The caller's own non-revoked keys.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKeyList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /keys/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      operationId: revokeKey
+      summary: Revoke one of the caller's own API keys.
+      description: >
+        Sets `revoked_at`. Owner-scoped, same 404 rule as todos (I3).
+        There is deliberately no `POST /api/v1/keys` — issuance is
+        CLI-only (`cmd/issue-key`).
+      responses:
+        "204":
+          description: Revoked.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
 components:
   schemas:
     Me:
@@ -167,6 +206,28 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Todo"
+    ApiKey:
+      type: object
+      required: [id, prefix, createdAt, expiresAt]
+      properties:
+        id:
+          type: string
+        prefix:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+    ApiKeyList:
+      type: object
+      required: [keys]
+      properties:
+        keys:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApiKey"
     CreateTodoRequest:
       type: object
       required: [title]

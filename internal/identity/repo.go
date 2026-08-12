@@ -186,6 +186,24 @@ func (r *Repo) CreateAPIKey(ctx context.Context, userID, keyHash, keyPrefix stri
 	return apiKeyFromRow(row), nil
 }
 
+// ListAPIKeysByOwner returns userID's own non-revoked keys
+// (`revoked_at IS NULL`), regardless of expiry — an expired-but-unrevoked
+// key still shows up so the caller can see it needs rotating (API.md
+// `GET /api/v1/keys`; this is a listing decision, distinct from I9's
+// auth-time check in Service.tryAPIKey). Ordered created_at descending,
+// matching todo's ListByOwner.
+func (r *Repo) ListAPIKeysByOwner(ctx context.Context, userID string) ([]APIKey, error) {
+	rows, err := r.q.ListAPIKeysByOwner(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]APIKey, 0, len(rows))
+	for _, row := range rows {
+		keys = append(keys, apiKeyFromRow(row))
+	}
+	return keys, nil
+}
+
 // RevokeAPIKey sets revoked_at on the key identified by (id, userID) — the
 // userID scoping means a caller can only ever revoke its own key.
 // ErrNotFound covers both "no such key" and "not this caller's key",

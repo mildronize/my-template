@@ -23,12 +23,14 @@ func init() {
 }
 
 // compositeServer mirrors cmd/server's apiServer — identity.MeServer
-// contributes GetMe, *Server (this package's) contributes the todo CRUD
-// methods — so these integration tests exercise the exact same
-// generated-interface/openapi-validated wiring production uses, not a
-// hand-rolled subset of it.
+// contributes GetMe, *identity.KeysServer contributes ListKeys/RevokeKey
+// (task-4), *Server (this package's) contributes the todo CRUD methods —
+// so these integration tests exercise the exact same generated-interface/
+// openapi-validated wiring production uses, not a hand-rolled subset of
+// it.
 type compositeServer struct {
 	identity.MeServer
+	*identity.KeysServer
 	*Server
 }
 
@@ -51,7 +53,10 @@ func newIntegrationRouter(t *testing.T) (*gin.Engine, *sql.DB) {
 	router := gin.New()
 	group := router.Group("/api/v1")
 	group.Use(identity.RejectActorFields(), identity.RequireActor(identitySvc), validator)
-	api.RegisterHandlers(group, compositeServer{Server: NewServer(todoSvc)})
+	api.RegisterHandlers(group, compositeServer{
+		KeysServer: identity.NewKeysServer(identitySvc),
+		Server:     NewServer(todoSvc),
+	})
 
 	return router, conn
 }

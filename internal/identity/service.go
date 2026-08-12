@@ -34,6 +34,7 @@ type UserRepo interface {
 type APIKeyRepo interface {
 	GetAPIKeyByHash(ctx context.Context, hash string) (APIKey, error)
 	CreateAPIKey(ctx context.Context, userID, keyHash, keyPrefix string, expiresAt time.Time) (APIKey, error)
+	ListAPIKeysByOwner(ctx context.Context, userID string) ([]APIKey, error)
 	RevokeAPIKey(ctx context.Context, id, userID string) (APIKey, error)
 }
 
@@ -225,6 +226,25 @@ func (s *Service) gate(user User) (User, error) {
 		return User{}, s.unauthorized("resolved user is inactive")
 	}
 	return user, nil
+}
+
+// --- key management (GET /api/v1/keys, DELETE /api/v1/keys/:id) ----------
+
+// ListAPIKeys returns ownerID's own non-revoked keys (API.md
+// `GET /api/v1/keys`), regardless of expiry. This is a listing decision,
+// not a credential check — the auth-time "expired or revoked fails
+// identically to wrong" rule (I9) lives in tryAPIKey, not here, which is
+// exactly why an expired-but-unrevoked key deliberately still shows up.
+func (s *Service) ListAPIKeys(ctx context.Context, ownerID string) ([]APIKey, error) {
+	return s.APIKeys.ListAPIKeysByOwner(ctx, ownerID)
+}
+
+// RevokeAPIKey revokes ownerID's own key by id (API.md
+// `DELETE /api/v1/keys/:id`) — ErrNotFound for both an unknown id and a
+// different owner's id, the same "absence, not permission" shape I3 gives
+// todos, applied here to keys (mirrors todo.Service.DeleteTodo).
+func (s *Service) RevokeAPIKey(ctx context.Context, ownerID, id string) (APIKey, error) {
+	return s.APIKeys.RevokeAPIKey(ctx, id, ownerID)
 }
 
 // --- CLI key issuance (cmd/issue-key) -------------------------------------

@@ -68,6 +68,43 @@ func (q *Queries) GetAPIKeyByHash(ctx context.Context, keyHash string) (ApiKey, 
 	return i, err
 }
 
+const listAPIKeysByOwner = `-- name: ListAPIKeysByOwner :many
+SELECT id, user_id, key_hash, key_prefix, created_at, expires_at, revoked_at FROM api_keys
+WHERE user_id = ? AND revoked_at IS NULL
+ORDER BY created_at DESC
+`
+
+func (q *Queries) ListAPIKeysByOwner(ctx context.Context, userID string) ([]ApiKey, error) {
+	rows, err := q.db.QueryContext(ctx, listAPIKeysByOwner, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ApiKey
+	for rows.Next() {
+		var i ApiKey
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.KeyHash,
+			&i.KeyPrefix,
+			&i.CreatedAt,
+			&i.ExpiresAt,
+			&i.RevokedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const revokeAPIKey = `-- name: RevokeAPIKey :one
 UPDATE api_keys
 SET revoked_at = ?

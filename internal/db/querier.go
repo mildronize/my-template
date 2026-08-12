@@ -21,6 +21,7 @@ type Querier interface {
 	GetUserByHandle(ctx context.Context, handle string) (User, error)
 	GetUserByID(ctx context.Context, id string) (User, error)
 	GetUserBySSOSubject(ctx context.Context, ssoSubject sql.NullString) (User, error)
+	ListAPIKeysByOwner(ctx context.Context, userID string) ([]ApiKey, error)
 	ListTodosByOwner(ctx context.Context, ownerID string) ([]Todo, error)
 	RevokeAPIKey(ctx context.Context, arg RevokeAPIKeyParams) (ApiKey, error)
 	UpdateTodoByIDAndOwner(ctx context.Context, arg UpdateTodoByIDAndOwnerParams) (Todo, error)

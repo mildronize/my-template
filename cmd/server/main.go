@@ -48,12 +48,12 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	apiV1, err := wireIdentity(ctx, router, db, cfg, logger)
+	apiV1, identitySvc, err := wireIdentity(ctx, router, db, cfg, logger)
 	if err != nil {
 		return fmt.Errorf("wiring identity module: %w", err)
 	}
 
-	if err := wireAPI(apiV1, db); err != nil {
+	if err := wireAPI(apiV1, db, identitySvc); err != nil {
 		return fmt.Errorf("wiring api module: %w", err)
 	}
 
@@ -75,7 +75,14 @@ func run() error {
 // (task-3) instead of a bespoke route added here. Composing routes across
 // domain modules is exactly what this file's own doc comment says it does
 // ("Domain routes ... are registered here").
-func wireIdentity(ctx context.Context, router *gin.Engine, conn *sql.DB, cfg *platform.Config, logger *slog.Logger) (*gin.RouterGroup, error) {
+//
+// It also returns the built *identity.Service (not just the
+// gin.RouterGroup), so wireAPI can build identity.KeysServer (task-4) on
+// top of the exact same Service instance RequireActor authenticates
+// requests with — one Service per process, not a second one constructed
+// independently in wireAPI that would happen to work today but drift the
+// moment identity.NewService gains a dependency wireAPI doesn't have.
+func wireIdentity(ctx context.Context, router *gin.Engine, conn *sql.DB, cfg *platform.Config, logger *slog.Logger) (*gin.RouterGroup, *identity.Service, error) {
 	repo := identity.NewRepo(conn)
 
 	// The JWT branch is a wired-but-dormant seam (GOAL.md) — a
@@ -86,7 +93,7 @@ func wireIdentity(ctx context.Context, router *gin.Engine, conn *sql.DB, cfg *pl
 	if cfg.SSOIssuer != "" && cfg.AuthAudience != "" {
 		v, err := identity.NewJWTVerifier(ctx, cfg.SSOIssuer, cfg.AuthAudience)
 		if err != nil {
-			return nil, fmt.Errorf("building JWT verifier: %w", err)
+			return nil, nil, fmt.Errorf("building JWT verifier: %w", err)
 		}
 		jwtVerifier = v
 	} else {
@@ -98,29 +105,31 @@ func wireIdentity(ctx context.Context, router *gin.Engine, conn *sql.DB, cfg *pl
 	apiV1 := router.Group("/api/v1")
 	apiV1.Use(identity.RejectActorFields(), identity.RequireActor(svc))
 
-	return apiV1, nil
+	return apiV1, svc, nil
 }
 
 // apiServer composes every domain module's ServerInterface piece into the
 // one type internal/api.RegisterHandlers needs: identity.MeServer
-// contributes GetMe, *todo.Server contributes the todo CRUD methods. No
-// method names collide, so plain embedding is sufficient — no hand-written
+// contributes GetMe, *identity.KeysServer contributes ListKeys/RevokeKey
+// (task-4), *todo.Server contributes the todo CRUD methods. No method
+// names collide, so plain embedding is sufficient — no hand-written
 // delegation methods to keep in sync as endpoints are added.
 type apiServer struct {
 	identity.MeServer
+	*identity.KeysServer
 	*todo.Server
 }
 
 var _ api.ServerInterface = apiServer{}
 
 // wireAPI builds the openapi.yaml request validator and every domain
-// module's route-level API surface (currently just internal/todo — the
-// last new table this milestone adds, task-3), then registers all of it,
+// module's route-level API surface (internal/identity's keys endpoints as
+// of task-4, internal/todo's CRUD from task-3), then registers all of it,
 // identity's GetMe included, on apiV1 in one call. The validator is
 // mounted after RejectActorFields/RequireActor (see wireIdentity) so a
 // request is authenticated before its payload shape is validated, not the
 // other way around.
-func wireAPI(apiV1 *gin.RouterGroup, conn *sql.DB) error {
+func wireAPI(apiV1 *gin.RouterGroup, conn *sql.DB, identitySvc *identity.Service) error {
 	validator, err := api.RequestValidator()
 	if err != nil {
 		return fmt.Errorf("building openapi request validator: %w", err)
@@ -130,8 +139,9 @@ func wireAPI(apiV1 *gin.RouterGroup, conn *sql.DB) error {
 	todoSvc := todo.NewService(todo.NewRepo(conn))
 
 	api.RegisterHandlers(apiV1, apiServer{
-		MeServer: identity.MeServer{},
-		Server:   todo.NewServer(todoSvc),
+		MeServer:   identity.MeServer{},
+		KeysServer: identity.NewKeysServer(identitySvc),
+		Server:     todo.NewServer(todoSvc),
 	})
 
 	return nil

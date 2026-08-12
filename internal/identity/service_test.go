@@ -97,6 +97,16 @@ func (f *fakeAPIKeyRepo) CreateAPIKey(_ context.Context, userID, keyHash, keyPre
 	return k, nil
 }
 
+func (f *fakeAPIKeyRepo) ListAPIKeysByOwner(_ context.Context, userID string) ([]APIKey, error) {
+	var keys []APIKey
+	for _, k := range f.byHash {
+		if k.UserID == userID && k.RevokedAt == nil {
+			keys = append(keys, k)
+		}
+	}
+	return keys, nil
+}
+
 func (f *fakeAPIKeyRepo) RevokeAPIKey(_ context.Context, id, userID string) (APIKey, error) {
 	f.revokeCalled = true
 	for hash, k := range f.byHash {
