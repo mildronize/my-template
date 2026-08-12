@@ -59,6 +59,47 @@ func repoRoot(t *testing.T) string {
 	return filepath.Dir(filepath.Dir(thisFile))
 }
 
+// nonDomainInternalDirs lists the internal/ subdirectories that are
+// infrastructure, not domain modules: api (oapi-codegen output), db
+// (sqlc-generated output), and platform (config/logging/db/server
+// wiring — the one direction TestArchitecture_PlatformNeverImportsDomain
+// itself enforces must never import a domain module). Every other
+// directory directly under internal/ is a domain module.
+var nonDomainInternalDirs = map[string]bool{
+	"api":      true,
+	"db":       true,
+	"platform": true,
+}
+
+// domainModuleNames discovers every domain module by listing internal/'s
+// own subdirectories and excluding the three infrastructure ones above —
+// derived from the filesystem, not a hardcoded list of module names, so
+// it stays correct the instant a fork renames internal/todo, adds
+// internal/note beside it, or removes internal/todo entirely (task-6.md:
+// a hardcoded {internal/todo, internal/identity} list gave a fork that
+// added a third domain module zero import-rule coverage on it — the
+// guardrail failing exactly the case this template exists to prove out).
+// Both architecture tests below call this so there is one place that
+// defines "what counts as a domain module," not two lists that can
+// drift from each other.
+func domainModuleNames(t *testing.T, root string) []string {
+	t.Helper()
+	internalDir := filepath.Join(root, "internal")
+	entries, err := os.ReadDir(internalDir)
+	require.NoErrorf(t, err, "reading %s", internalDir)
+
+	var names []string
+	for _, entry := range entries {
+		if !entry.IsDir() || nonDomainInternalDirs[entry.Name()] {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	require.NotEmptyf(t, names,
+		"no domain modules found under %s — expected at least one directory besides api/db/platform", internalDir)
+	return names
+}
+
 // modulePath returns this repo's module path (e.g.
 // github.com/mildronize/my-template) via `go list -m`, rather than
 // hardcoding it, so the test keeps working after a fork renames the
@@ -95,21 +136,24 @@ func fileImports(path string) ([]string, error) {
 }
 
 // TestArchitecture_DomainFileImportRules enforces ARCHITECTURE.md rules 1
-// and 2 across every .go file directly inside internal/todo and
-// internal/identity: only a handler-role file may import gin, and only a
-// repo-role file may import the sqlc-generated package. Both domain
-// directories are still empty of real files as of this task (task-1) —
-// this test is written now precisely so it starts enforcing the instant
-// task-2/task-3 add handler.go/service.go/repo.go, rather than being
-// added retroactively once a violation already landed.
+// and 2 across every .go file directly inside every domain module
+// (domainModuleNames, derived from the filesystem — not a hardcoded
+// {internal/todo, internal/identity} pair): only a handler-role file may
+// import gin, and only a repo-role file may import the sqlc-generated
+// package. Domain directories were still empty of real files as of
+// task-1, when this test was first written, precisely so it starts
+// enforcing the instant a task adds handler.go/service.go/repo.go rather
+// than being added retroactively once a violation already landed — the
+// same reasoning now extends to whatever domain module a fork adds or
+// renames later.
 func TestArchitecture_DomainFileImportRules(t *testing.T) {
 	root := repoRoot(t)
 	module := modulePath(t, root)
 	sqlcImportPath := module + "/" + sqlcPackageImportPath
 
-	domainDirs := []string{
-		filepath.Join(root, "internal", "todo"),
-		filepath.Join(root, "internal", "identity"),
+	var domainDirs []string
+	for _, name := range domainModuleNames(t, root) {
+		domainDirs = append(domainDirs, filepath.Join(root, "internal", name))
 	}
 
 	for _, dir := range domainDirs {
@@ -157,10 +201,12 @@ type goListPackage struct {
 }
 
 // TestArchitecture_PlatformNeverImportsDomain enforces ARCHITECTURE.md
-// rule 3: internal/platform must never import internal/todo or
-// internal/identity. Unlike rules 1/2, this is a clean package-level
-// check — internal/platform is a distinct package with its own import
-// list, so `go list -json` is sufficient here.
+// rule 3: internal/platform must never import any domain module
+// (domainModuleNames, derived from the filesystem, same as the test
+// above — not a hardcoded {internal/todo, internal/identity} pair).
+// Unlike rules 1/2, this is a clean package-level check — internal/
+// platform is a distinct package with its own import list, so
+// `go list -json` is sufficient here.
 func TestArchitecture_PlatformNeverImportsDomain(t *testing.T) {
 	root := repoRoot(t)
 	module := modulePath(t, root)
@@ -170,9 +216,9 @@ func TestArchitecture_PlatformNeverImportsDomain(t *testing.T) {
 	out, err := cmd.Output()
 	require.NoError(t, err, "go list -json ./...")
 
-	forbidden := map[string]bool{
-		module + "/internal/todo":     true,
-		module + "/internal/identity": true,
+	forbidden := make(map[string]bool)
+	for _, name := range domainModuleNames(t, root) {
+		forbidden[module+"/internal/"+name] = true
 	}
 	platformPkg := module + "/internal/platform"
 

@@ -26,8 +26,12 @@ As of this milestone, that's `go.mod` plus ten `.go` files across
 `internal/todo/` — update each import path, then `go build ./...` to
 confirm nothing was missed (a stale import path fails the build loudly,
 it doesn't compile-and-silently-misbehave). `internal/architecture_test.go`
-itself does **not** need editing for this — it resolves the module path
-at test time via `go list -m` rather than hardcoding it.
+itself does **not** need editing for a module rename, nor for adding,
+renaming, or removing a domain module (Step 4) — both the module path
+and the set of domain modules it checks are resolved dynamically at test
+time (`go list -m` for the former; an `internal/*` directory listing that
+excludes the three infrastructure directories `api`/`db`/`platform` for
+the latter), rather than either being hardcoded.
 
 ## Step 2: Rename the service
 
