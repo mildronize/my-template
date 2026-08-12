@@ -63,6 +63,10 @@ that needs one, against the running deployment's own database:
 docker compose exec app /app/issue-key <handle>
 ```
 
+(`app` is `docker-compose.yml`'s service key in this template — Step 2 of
+`docs/GETTING-STARTED.md` lets a fork rename it, so substitute the fork's
+actual service key if it's not `app`.)
+
 (or, outside compose, `DATABASE_PATH=<path> ./issue-key <handle>` with the
 built binary run directly against the same file the server uses). The raw
 key prints to stdout **exactly once** and is never stored anywhere

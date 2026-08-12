@@ -41,15 +41,20 @@ grep -rl 'github.com/mildronize/my-template' --include='*.go' .
 As of this milestone, that's `go.mod` plus ten `.go` files across
 `cmd/issue-key`, `cmd/server`, `internal/architecture_test.go`,
 `internal/identity/`, `internal/platform/migrate.go`, and
-`internal/todo/` — update each import path, then `go build ./...` to
-confirm nothing was missed (a stale import path fails the build loudly,
-it doesn't compile-and-silently-misbehave). `internal/architecture_test.go`
-itself does **not** need editing for a module rename, nor for adding,
-renaming, or removing a domain module (Step 4) — both the module path
-and the set of domain modules it checks are resolved dynamically at test
-time (`go list -m` for the former; an `internal/*` directory listing that
-excludes the three infrastructure directories `api`/`db`/`platform` for
-the latter), rather than either being hardcoded.
+`internal/todo/`. Nine of those ten need a **functional** import-path
+change — an actual `import "github.com/.../my-template/..."` line the
+build depends on — and `go build ./...` afterward confirms nothing was
+missed (a stale import path fails the build loudly, it doesn't
+compile-and-silently-misbehave). The tenth, `internal/architecture_test.go`,
+is only in the grep's output because the module path also appears once in
+a **doc comment** (`modulePath`'s example), not in its logic — editing it
+is harmless but has no functional effect either way, since the test
+itself resolves the module path dynamically at run time (`go list -m`),
+never hardcoded. The same test also doesn't need editing for adding,
+renaming, or removing a domain module (Step 4) — the set of domain
+modules it checks is likewise resolved dynamically (an `internal/*`
+directory listing that excludes the three infrastructure directories
+`api`/`db`/`platform`), not hardcoded.
 
 ## Step 2: Rename the service
 
@@ -247,18 +252,32 @@ to see it work at all):
 
    Either way, migrations apply automatically on startup
    (`platform.Migrate`, idempotent) — no separate migrate step.
-3. Check it's actually up: `curl http://localhost:8080/healthz` (or
-   whatever `PORT` you've set) should return `200 OK`. This is the
-   liveness check `docker-compose.yml` itself points at, since the
-   runtime image ships no shell or HTTP client to run a Docker
-   `HEALTHCHECK` with.
+3. **Check the server actually started, before checking `/healthz`.**
+   Look for its own startup log line first — `internal/platform/server.go`'s
+   `RunServer` logs `"server starting"` with the address it's about to
+   listen on (`:8080`, or whatever `PORT` you've set) before it calls
+   `ListenAndServe`. Confirming this
+   line is what tells you *your* process is the one now listening. Only
+   then does `curl http://localhost:8080/healthz` returning `200 OK` mean
+   what you want it to mean — a `200` alone doesn't prove your fork
+   started at all, it proves *something* is answering on that port, which
+   can just as easily be a stale process left over from a previous run
+   that never exited (a real failure mode: starting a second instance
+   against an already-bound port fails with `bind: address already in
+   use`, logged as an error, not a silent hang — but only if you're
+   looking at the log rather than only the health check). `healthz` is
+   still the right liveness check `docker-compose.yml` itself points at
+   (the runtime image ships no shell or HTTP client to run a Docker
+   `HEALTHCHECK` with) — just don't treat it as your only signal.
 4. Issue yourself an agent API key — there is no `POST` endpoint for
    this, it's CLI-only by design (`_contract/API.md`,
    `docs/DEPLOY-REQUIREMENTS.md`'s "Seeding the first agent API key"):
 
    ```sh
    go run ./cmd/issue-key <handle>
-   # or, against a running docker compose service:
+   # or, against a running docker compose service (docker-compose.yml's
+   # service key is "app" in this template — use your fork's own key if
+   # you renamed it in Step 2):
    docker compose exec app /app/issue-key <handle>
    ```
 
