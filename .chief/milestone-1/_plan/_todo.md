@@ -7,7 +7,7 @@ task below — none are left to "the full test suite passing" as an implicit
 catch-all (per Clara's review: an unowned stopping condition can close a
 milestone without anyone ever having deliberately done it).
 
-- [ ] task-1: Scaffold — `cmd/server`; `internal/platform/` (config via
+- [x] task-1: Scaffold — `cmd/server`; `internal/platform/` (config via
       `caarlos0/env/v11` + `godotenv`, logging via `slog`+`tint`, db-open,
       server wiring); empty `internal/todo/` and `internal/identity/`
       directories (populated by task-2/task-3); a health endpoint; goose
