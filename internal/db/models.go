@@ -19,6 +19,15 @@ type ApiKey struct {
 	RevokedAt sql.NullTime `json:"revoked_at"`
 }
 
+type Todo struct {
+	ID        string    `json:"id"`
+	OwnerID   string    `json:"owner_id"`
+	Title     string    `json:"title"`
+	Done      bool      `json:"done"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type User struct {
 	ID         string         `json:"id"`
 	Handle     string         `json:"handle"`

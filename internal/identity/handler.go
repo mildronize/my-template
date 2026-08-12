@@ -13,15 +13,18 @@ type meResponse struct {
 	Active bool   `json:"active"`
 }
 
-// RegisterRoutes mounts this module's HTTP routes on group — the
-// /api/v1 group cmd/server builds with RejectActorFields and
-// RequireActor already attached (I1's request-shape guard runs before
-// I2/I5's credential resolution). Settings endpoints (/keys) are
-// task-4's; this task wires only GET /me, the natural smoke test that
-// the actor-resolution middleware actually works end to end.
-func RegisterRoutes(group *gin.RouterGroup, svc *Service) {
-	group.GET("/me", handleMe)
-}
+// MeServer adapts handleMe to internal/api's generated
+// ServerInterface's GetMe method. GET /api/v1/me predates openapi.yaml
+// (task-2 hand-wired it directly on the gin group before that file
+// existed) — task-3 brings it onto the same generated-interface,
+// openapi-validated path as every other endpoint instead of leaving it on
+// a bespoke route, by embedding MeServer alongside internal/todo's Server
+// in cmd/server's composite api.ServerInterface implementation. The
+// underlying handleMe function, and its behavior/tests, are unchanged.
+type MeServer struct{}
+
+// GetMe implements api.ServerInterface.
+func (MeServer) GetMe(c *gin.Context) { handleMe(c) }
 
 // handleMe reads the actor RequireActor already resolved onto the gin
 // context — it never queries users/api_keys itself (I4).

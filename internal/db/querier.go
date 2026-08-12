@@ -11,14 +11,19 @@ import (
 
 type Querier interface {
 	CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (ApiKey, error)
+	CreateTodo(ctx context.Context, arg CreateTodoParams) (Todo, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
+	DeleteTodoByIDAndOwner(ctx context.Context, arg DeleteTodoByIDAndOwnerParams) (int64, error)
 	GetAPIKeyByHash(ctx context.Context, keyHash string) (ApiKey, error)
+	GetTodoByIDAndOwner(ctx context.Context, arg GetTodoByIDAndOwnerParams) (Todo, error)
 	// handle is COLLATE NOCASE at the schema level (see migration), so this
 	// comparison is case-insensitive without needing an explicit COLLATE here.
 	GetUserByHandle(ctx context.Context, handle string) (User, error)
 	GetUserByID(ctx context.Context, id string) (User, error)
 	GetUserBySSOSubject(ctx context.Context, ssoSubject sql.NullString) (User, error)
+	ListTodosByOwner(ctx context.Context, ownerID string) ([]Todo, error)
 	RevokeAPIKey(ctx context.Context, arg RevokeAPIKeyParams) (ApiKey, error)
+	UpdateTodoByIDAndOwner(ctx context.Context, arg UpdateTodoByIDAndOwnerParams) (Todo, error)
 }
 
 var _ Querier = (*Queries)(nil)
