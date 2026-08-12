@@ -1,0 +1,10 @@
+# Pinned dev tools installed via `make tools` (see Makefile) — not checked
+# in; go.mod/go.sum are the source of truth for versions.
+/bin/
+
+# Local SQLite database file(s) and .env — never commit local state or
+# secrets.
+/data/
+*.db
+*.db-journal
+.env
