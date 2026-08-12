@@ -52,7 +52,7 @@ milestone without anyone ever having deliberately done it).
       I1,I2,I5–I10; this task supplies I3,I4) — write the grep-based check
       now and let it confirm that, rather than assuming it.
       **Owns: Done-when 2, 4, 7, 12.**
-- [ ] task-4: Settings — `GET /api/v1/keys`, `DELETE /api/v1/keys/:id`
+- [x] task-4: Settings — `GET /api/v1/keys`, `DELETE /api/v1/keys/:id`
       added to `openapi.yaml` and implemented inside `internal/identity/`
       (new sqlc queries against the existing `api_keys` table — last task
       this milestone adds queries in, so this is where "sqlc generate
@@ -68,6 +68,21 @@ milestone without anyone ever having deliberately done it).
       adds an event log or a list that can grow large — a forker reads this
       doc, not a stale milestone's API.md. Full `go test ./...` and
       `docker compose up` smoke pass.
+
+      **Also fix `internal/invariants_test.go`'s Done-when-12 check before
+      closing this task — Clara found it hardcodes `for n := 1; n <= 10`
+      instead of deriving the required set from `_contract/INVARIANTS.md`
+      itself.** A fork that adds `I11` to `INVARIANTS.md` without touching
+      this test file gets a check that stays green forever while I11 has no
+      test — silent, in the exact direction `ARCHITECTURE.md`'s own
+      allowlist reasoning warns against (fail loud on an unrecognized case,
+      not quietly pass it through). Fix: parse `INVARIANTS.md` for
+      `**I<N> —` headings and use that set instead of a hardcoded range; if
+      parsing isn't practical, at minimum fail when the count of those
+      headings disagrees with the hardcoded bound, so drift is loud instead
+      of invisible. Add a line to `GETTING-STARTED.md`: "a new invariant
+      needs both an `INVARIANTS.md` entry and a `TestI<N>_` test — the
+      check enforces the second half, not the first."
       **Owns: Done-when 8, 9, 10.**
 
 ## Resolved during grill
