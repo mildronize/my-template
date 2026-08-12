@@ -2,14 +2,14 @@ package todo
 
 import (
 	"context"
-	"os"
 	"path/filepath"
-	"regexp"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/mildronize/my-template/internal/dbquery"
 )
 
 func TestRepo_CreateAndGetRoundTrip(t *testing.T) {
@@ -160,35 +160,23 @@ func TestRepo_Create_TitleTooLongRejectedByStorageLayer(t *testing.T) {
 // TestI4_TodoRepoOnlyQueriesTodosTable — I4 ("one seam reads identity";
 // applied here as "one repo, one table" for the non-identity side of that
 // boundary): internal/todo's repo must only ever query the todos table,
-// and internal/identity's repo must only ever query users/api_keys.
-// Checked statically against the sqlc query source each repo.go is
-// generated from (db/queries/*.sql) — the same static-source approach
-// internal/architecture_test.go uses for the gin/sqlc import rules —
-// rather than inferred indirectly from runtime behavior.
+// never a table owned by a different domain module (users/api_keys, or
+// whatever a fork's own other modules own). Checked statically against
+// the sqlc query source each repo.go is generated from (db/queries/*.sql)
+// — the same static-source approach internal/architecture_test.go uses
+// for the gin/sqlc import rules — via internal/dbquery, the single shared
+// implementation behind this check and internal/identity's equivalent
+// (task-8: the two used to be near-duplicate implementations that could
+// drift, and had drifted — this one used to also forbid users.sql and
+// api_keys.sql from referencing each other, which internal/identity's own
+// version correctly didn't, since both tables belong to the same
+// module). The forbidden-table set is derived dynamically from whatever
+// db/queries/*.sql files exist, never hardcoded — see
+// internal/dbquery's doc comment for the regression a hardcoded list
+// caused.
 func TestI4_TodoRepoOnlyQueriesTodosTable(t *testing.T) {
 	root := repoRootForTests(t)
 	queriesDir := filepath.Join(root, "db", "queries")
 
-	assertQueriesReferenceOnlyTable(t, filepath.Join(queriesDir, "todos.sql"), "todos", []string{"users", "api_keys"})
-	assertQueriesReferenceOnlyTable(t, filepath.Join(queriesDir, "users.sql"), "users", []string{"todos", "api_keys"})
-	assertQueriesReferenceOnlyTable(t, filepath.Join(queriesDir, "api_keys.sql"), "api_keys", []string{"todos", "users"})
-}
-
-// assertQueriesReferenceOnlyTable asserts that the sqlc query file at path
-// mentions ownTable (as a whole word — proving the file isn't vacuously
-// empty of the table it's supposed to own) and mentions none of
-// forbiddenTables.
-func assertQueriesReferenceOnlyTable(t *testing.T, path, ownTable string, forbiddenTables []string) {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	require.NoErrorf(t, err, "reading %s", path)
-	content := string(data)
-
-	assert.Regexpf(t, `(?i)\b`+regexp.QuoteMeta(ownTable)+`\b`, content,
-		"%s must reference its own table %q at least once", path, ownTable)
-
-	for _, forbidden := range forbiddenTables {
-		assert.NotRegexpf(t, `(?i)\b`+regexp.QuoteMeta(forbidden)+`\b`, content,
-			"%s must not reference table %q — I4: one repo, one table", path, forbidden)
-	}
+	dbquery.AssertQueryFileReferencesOnlyOwnTable(t, queriesDir, "todos.sql", "todos")
 }

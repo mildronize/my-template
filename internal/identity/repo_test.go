@@ -2,14 +2,14 @@ package identity
 
 import (
 	"context"
-	"os"
 	"path/filepath"
-	"regexp"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/mildronize/my-template/internal/dbquery"
 )
 
 func TestRepo_UserCRUDRoundTrip(t *testing.T) {
@@ -175,48 +175,38 @@ func TestRepo_RevokeAPIKeyScopedToOwner(t *testing.T) {
 // identity side of that boundary, mirroring
 // internal/todo/repo_test.go's TestI4_TodoRepoOnlyQueriesTodosTable):
 // internal/identity's repo must only ever query users/api_keys, and must
-// never query todos (or any other domain module's table). Checked
-// statically against the sqlc query source each repo.go is generated
-// from (db/queries/*.sql), same as the todo test.
+// never query a table that belongs to a different domain module (todos,
+// or whatever a fork replaces it with). Checked statically against the
+// sqlc query source each repo.go is generated from (db/queries/*.sql),
+// via internal/dbquery — the single shared implementation behind this
+// check and internal/todo's equivalent, so the two can't drift into two
+// different (and, as task-8 found, differently buggy) copies of the same
+// logic. The forbidden-table set is derived dynamically from whatever
+// db/queries/*.sql files exist, never hardcoded — see
+// internal/dbquery's doc comment for the regression this fixes (an
+// earlier version of this test hardcoded "todos" as the only forbidden
+// table, which kept "passing" even after a fork deleted todos and added
+// an entirely different table it never checked for).
 //
 // This is I4's dedicated identity-module test, added in task-7 once
 // _contract/INVARIANTS.md tagged I4 `scope: per-domain-module`
 // (internal/invariants_test.go): before that, internal/todo's
 // TestI4_TodoRepoOnlyQueriesTodosTable happened to already check
-// users.sql/api_keys.sql too (it asserts every one of the three query
-// files only references its own table), so I4 had real coverage for
-// identity's tables — but that coverage lived entirely outside
-// internal/identity's own package, which is exactly the gap task-7's
-// per-domain-module scope closes: a repo-wide grep for "a TestI4_ test
-// exists somewhere" doesn't prove identity has any dedicated test of its
-// own, only that some module does.
+// users.sql/api_keys.sql too, so I4 had real coverage for identity's
+// tables — but that coverage lived entirely outside internal/identity's
+// own package, which is exactly the gap task-7's per-domain-module scope
+// closes: a repo-wide grep for "a TestI4_ test exists somewhere" doesn't
+// prove identity has any dedicated test of its own, only that some module
+// does.
 func TestI4_IdentityRepoOnlyQueriesUsersAndAPIKeysTables(t *testing.T) {
 	root := repoRootForTests(t)
 	queriesDir := filepath.Join(root, "db", "queries")
 
-	assertQueryFileReferencesOnlyTables(t, filepath.Join(queriesDir, "users.sql"), "users", []string{"todos"})
-	assertQueryFileReferencesOnlyTables(t, filepath.Join(queriesDir, "api_keys.sql"), "api_keys", []string{"todos"})
-}
-
-// assertQueryFileReferencesOnlyTables asserts that the sqlc query file at
-// path mentions ownTable (as a whole word — proving the file isn't
-// vacuously empty of the table it's supposed to own) and mentions none of
-// forbiddenTables. Deliberately does not also assert users.sql/api_keys.sql
-// never mention each other — both tables belong to this same module, so a
-// query joining them (e.g. resolving an API key's owning user) is I4-legal;
-// only a reference to a table owned by a *different* domain module (todos)
-// would violate "one seam reads identity."
-func assertQueryFileReferencesOnlyTables(t *testing.T, path, ownTable string, forbiddenTables []string) {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	require.NoErrorf(t, err, "reading %s", path)
-	content := string(data)
-
-	assert.Regexpf(t, `(?i)\b`+regexp.QuoteMeta(ownTable)+`\b`, content,
-		"%s must reference its own table %q at least once", path, ownTable)
-
-	for _, forbidden := range forbiddenTables {
-		assert.NotRegexpf(t, `(?i)\b`+regexp.QuoteMeta(forbidden)+`\b`, content,
-			"%s must not reference table %q — I4: one seam reads identity", path, forbidden)
-	}
+	// users.sql and api_keys.sql both belong to this same module — passing
+	// each other as sameModuleFiles means a query joining them (e.g.
+	// resolving an API key's owning user) stays I4-legal, while a
+	// reference to any *other* module's table (todos, or whatever a fork
+	// replaces it with) is still forbidden.
+	dbquery.AssertQueryFileReferencesOnlyOwnTable(t, queriesDir, "users.sql", "users", "api_keys.sql")
+	dbquery.AssertQueryFileReferencesOnlyOwnTable(t, queriesDir, "api_keys.sql", "api_keys", "users.sql")
 }

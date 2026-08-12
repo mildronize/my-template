@@ -61,14 +61,18 @@ func repoRoot(t *testing.T) string {
 
 // nonDomainInternalDirs lists the internal/ subdirectories that are
 // infrastructure, not domain modules: api (oapi-codegen output), db
-// (sqlc-generated output), and platform (config/logging/db/server
-// wiring — the one direction TestArchitecture_PlatformNeverImportsDomain
-// itself enforces must never import a domain module). Every other
-// directory directly under internal/ is a domain module.
+// (sqlc-generated output), platform (config/logging/db/server wiring —
+// the one direction TestArchitecture_PlatformNeverImportsDomain itself
+// enforces must never import a domain module), and dbquery (a small
+// shared test-helper package behind every domain module's I4 check —
+// task-8's fix for a hardcoded-forbidden-table regression, see
+// internal/dbquery's doc comment). Every other directory directly under
+// internal/ is a domain module.
 var nonDomainInternalDirs = map[string]bool{
 	"api":      true,
 	"db":       true,
 	"platform": true,
+	"dbquery":  true,
 }
 
 // domainModuleNames discovers every domain module by listing internal/'s
@@ -96,7 +100,7 @@ func domainModuleNames(t *testing.T, root string) []string {
 		names = append(names, entry.Name())
 	}
 	require.NotEmptyf(t, names,
-		"no domain modules found under %s — expected at least one directory besides api/db/platform", internalDir)
+		"no domain modules found under %s — expected at least one directory besides api/db/dbquery/platform", internalDir)
 	return names
 }
 
