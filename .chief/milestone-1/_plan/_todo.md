@@ -125,6 +125,23 @@ task-1 gained the `tools/tools.go` pinning requirement (Decisions table,
 Done-when 1). See `task-2.md` for the identity/auth task spec loop-readiness
 called for.
 
+**Doc-vs-enforcement drift (2026-08-12, task-2 → post-review):** task-2's
+builder-agent correctly extended `architecture_test.go`'s regex to allow a
+handler/repo file's own `_test.go` (needed because Go's test-file naming
+collided with the original pattern — the code fix was right), but never
+updated `ARCHITECTURE.md`'s prose, which still described the pre-fix
+pattern. Clara caught it by diffing the regex against the doc directly, not
+by trusting the commit message. Fixed: `ARCHITECTURE.md`'s Enforcement
+section now states the real regex and distinguishes the two separate
+reasons to touch it (fork rename vs. Go's `_test.go` suffix). **Standing
+practice for the rest of this milestone: whenever a task changes an
+enforcement mechanism (a test, a generated check, a script), check whether
+the doc that defines that mechanism moved with it, in the same commit — not
+as a follow-up.** No Done-when item catches this class of drift; it has to
+be checked deliberately. task-3/4 are the next likely place it recurs,
+since both touch `openapi.yaml` and the schema, and `_contract/API.md`/
+`DATA_MODEL.md` are the docs that define those.
+
 Task-5's `docs/GETTING-STARTED.md` should use this exact paragraph for the
 JWT seam (per working standard rule 5 — a claim about mutable state carries
 its read-time, so a future reader knows to re-check rather than trust it
