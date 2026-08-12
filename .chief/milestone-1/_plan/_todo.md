@@ -146,6 +146,121 @@ milestone without anyone ever having deliberately done it).
       fork test with a fresh context-free agent after this lands (the first
       one is contaminated).
 
+- [ ] task-7: Fix findings from Clara's second blind fork test (2026-08-12,
+      real `git clone`, domain `bookmarks`, stricter criterion). Forked
+      successfully, `go test ./...` green — but the agent's own words:
+      *"the green suite is partly a lie."* Full detail is in Clara's ship
+      message; this entry has the essentials.
+
+      **P0-1 (a genuine security hole, not a doc gap):**
+      `TestDoneWhen12_EveryInvariantHasANamedTest` greps for `TestI<N>_`
+      **anywhere in the repo**. `internal/identity` already has a
+      `TestI3_..._Keys` test, so it satisfies I3's requirement for the
+      **entire repo forever** — a forked domain module can ship with zero
+      ownership-scoping tests of its own and the suite stays green (proven:
+      Clara's agent renamed all three `TestI3_` tests out of its new
+      `internal/bookmark` module and the suite still passed). This is the
+      review's own (c) design from earlier in the milestone — grep for a
+      name, not for where it lives — and the flaw is in that design, not in
+      how it was implemented.
+
+      Fix: `_contract/INVARIANTS.md` gains a `scope:` tag per invariant —
+      ``**I3 — ...** `scope: per-domain-module` `` for I3/I4, `scope:
+      global` for I1/I2/I5–I10 (or an equivalent explicit marking — your
+      call on exact syntax, but it must be parsed, not just prose). For
+      every invariant tagged `per-domain-module`, the check must require a
+      `TestI<N>_` **inside that specific domain module's own package** —
+      reuse `domainModuleNames()` from the earlier architecture-guardrail
+      fix (P0 of task-6) rather than inventing a second way to enumerate
+      domain modules. Global-scope invariants keep the existing
+      repo-wide-grep behavior.
+
+      **Known consequence to handle, not a surprise to discover later:**
+      once this lands, `internal/identity` — itself a domain module under
+      `domainModuleNames()` — will need its **own** dedicated `TestI4_`
+      test (table-isolation for `users`/`api_keys`), since
+      `TestI4_TodoRepoOnlyQueriesTodosTable` living in `internal/todo` only
+      covers `todo`'s own table today and (per Clara's finding) is
+      apparently the *only* thing incidentally covering table isolation
+      more broadly. Write that test now, in `internal/identity`, rather
+      than letting the stricter check surface it as a surprise failure.
+
+      **Document the residual limitation precisely once fixed**: the check
+      only looks at test *names*, not test bodies — an empty
+      `func TestI3_Foo(t *testing.T) {}` still satisfies it. Once
+      per-module, writing an empty one is a deliberate lie, not an
+      accidental miss — say this in `GETTING-STARTED.md` so it isn't
+      mistaken for a stronger guarantee than it is.
+
+      **P0-2 — Step 4's order actively hurts.** The agent called it *"the
+      single worst instruction in the document."* Deleting `internal/todo`
+      as literally the first sub-step removes the only worked example of:
+      how `handler.go` implements the generated `ServerInterface`, the
+      `Repository` interface + fake-repo pattern, and the full integration
+      test harness (`identity.NewService(repo, repo, nil, nil)` — two nil
+      args nothing explains, `RejectActorFields`/`RequireActor` wiring,
+      `HashAPIKey`/`CreateAPIKey` test fixtures, the `compositeServer`
+      embedding trick). None of this is in `GETTING-STARTED.md` at all —
+      the test agent only survived by reading `internal/todo` to
+      completion *before* deleting it, which the doc never told it to do.
+      Fix: reorder Step 4 to **study `internal/todo` fully → copy it into
+      the new module and rename → delete the old one** (not delete-first),
+      and add a short "patterns worth preserving" list covering at least
+      the `identity.NewService` argument meanings and the `compositeServer`
+      embedding trick, since those are flagged as unguessable.
+
+      **P1:**
+      - Option (b) in the invariants section ("remove the `INVARIANTS.md`
+        entry instead of writing a new test") can walk someone into
+        deleting `internal/identity`'s only table-isolation coverage
+        (`TestI4_TodoRepoOnlyQueriesTodosTable`, per the P0-1 finding) even
+        though the doc says to keep `internal/identity` as-is. Narrow
+        option (b), or reframe it as "re-home the test to your new module"
+        rather than "delete the requirement" as an equally-valid choice.
+        (Note: once P0-1's per-module fix lands, this mostly resolves
+        itself — but state it correctly regardless.)
+      - `docker compose exec app /app/issue-key` and
+        `DEPLOY-REQUIREMENTS.md:63` hardcode the compose service key `app`
+        even though Step 2 tells forkers they may rename it — add the
+        caveat inline wherever `app` appears in a run command.
+      - Step 1 now contradicts itself: says 10 files including
+        `architecture_test.go` need the import path changed, then two
+        sentences later says that file doesn't need editing. True cause:
+        the module path string only appears in that file's **doc
+        comment**, not its logic — pick one consistent story (e.g., "9
+        files need functional changes; the 10th's only occurrence is a
+        comment — harmless either way, but keep it accurate if you touch
+        it") instead of leaving two sentences that disagree.
+      - `/healthz` returning 200 can be a stale process still holding the
+        old port, not proof the fork actually started — a real failure
+        mode the agent hit (`bind: address already in use`) that a curl
+        200 alone can't distinguish from success. Tell the reader to
+        confirm the server's own startup log line first (verify one
+        exists — add it if it doesn't), not just curl the health check.
+
+      **P2 (do if time allows, not blocking):** document that `openapi.yaml`
+      `operationId` values name the generated `ServerInterface` methods,
+      and that sqlc capitalizes `url` → `Url` not `URL` (both currently
+      discoverable only via compiler error) · document the migration
+      authoring convention (`<14-digit-timestamp>_<name>.sql`, `-- +goose
+      Up/Down` markers, `bin/goose create`, and that a new table needs
+      `owner_id TEXT NOT NULL REFERENCES users (id)` for the ownership
+      model to apply — implied throughout but never stated as a hard
+      requirement) · a short identity-seam cheat sheet for writing
+      integration tests · note that even a correct fork leaves ~20
+      dangling `todo`/`todos` references in comments and fixtures
+      (`internal/identity/doc.go`, `internal/platform/config.go`,
+      `internal/api/validator.go`, fixtures like `{"title":"a todo"}`) —
+      add a step telling forkers to grep the whole tree including doc
+      comments, not just functional code, since the doc's own opening
+      promise ("skipping a step leaves a specific, identifiable trace")
+      is undermined by a trace that's present either way.
+
+      **Owns: none new — hardens Done-when 12's actual guarantee and closes
+      a real gap in what it was believed to cover.** Fix P0-1 and P0-2
+      before anything else; P1 next; re-run a third blind fork test with a
+      fresh context-free agent once landed.
+
 ## Resolved during grill
 
 The JWT/SSO auth path's framing was open (live agent auth vs. a
