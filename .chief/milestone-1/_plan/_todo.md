@@ -261,7 +261,7 @@ milestone without anyone ever having deliberately done it).
       before anything else; P1 next; re-run a third blind fork test with a
       fresh context-free agent once landed.
 
-- [ ] task-8: Fix findings from Clara's third blind fork test (2026-08-12,
+- [x] task-8: Fix findings from Clara's third blind fork test (2026-08-12,
       domain `snippets`). **Clara's stated stopping criterion: this is the
       last required round** — fix all P0 + P1 here, run a fourth
       *confirmatory* (not new-gap-hunting) blind test, and stop if it forks
