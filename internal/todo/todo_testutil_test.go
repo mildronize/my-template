@@ -30,8 +30,10 @@ func repoRootForTests(t *testing.T) string {
 // applies in production — so these tests exercise the real schema, and
 // incidentally re-verify on every run that the full migration set still
 // applies cleanly to a fresh, empty file (GOAL.md Done-when 2; see also
-// TestGooseUp_FullMigrationSetAppliesCleanly below for a dedicated,
-// explicit check of that same fact).
+// internal/platform/migrate_test.go's TestGooseUp_FullMigrationSetAppliesCleanly
+// for a dedicated, explicit, fork-safe check of that same fact — moved
+// there from this package in task-6.md since it doesn't need any
+// domain-module import).
 func newTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 
