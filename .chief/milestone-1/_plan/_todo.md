@@ -85,7 +85,7 @@ milestone without anyone ever having deliberately done it).
       check enforces the second half, not the first."
       **Owns: Done-when 8, 9, 10.**
 
-- [ ] task-6: Fix findings from Clara's first blind fork test (2026-08-12) —
+- [x] task-6: Fix findings from Clara's first blind fork test (2026-08-12) —
       a context-free agent forked the template into `my-notes` using only
       `docs/GETTING-STARTED.md` and succeeded, but only by repairing things
       the doc never warned about. Its own summary: *"the doc says what to
