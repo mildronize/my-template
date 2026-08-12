@@ -396,6 +396,71 @@ fork —
 Leaving both the entries and the failing check as-is is the one option
 that isn't fine — that's exactly the drift Done-when 12 exists to catch.
 
+## Two codegen gotchas only the compiler tells you about
+
+Both of these are easy to lose an hour to on a fork, because nothing
+currently states them and the failure mode is a compile error pointing at
+generated code, not at the source you actually wrote:
+
+- **`openapi.yaml`'s `operationId` values name the generated
+  `ServerInterface` methods.** `oapi-codegen` turns each operation's
+  `operationId` (e.g. `listTodos`) directly into a Go method name
+  (`ListTodos`) on `internal/api.ServerInterface` — your `handler.go` has
+  to implement that exact method name to satisfy the interface. Renaming
+  or adding a path without giving it a sensible `operationId` gets you an
+  auto-generated one you didn't choose.
+- **sqlc capitalizes `url` as `Url`, not `URL`.** sqlc's default Go-name
+  casing doesn't treat `url` as an initialism the way `ID` is — a column
+  named `url` generates a struct field `Url`. If your fork's schema adds
+  a URL column and you write code assuming `.URL` (Go's own convention,
+  e.g. `net/url.URL`), it won't compile. Check `internal/db`'s generated
+  struct after adding such a column rather than assuming.
+
+## Writing a new migration
+
+Not spelled out elsewhere, though every existing migration under
+`db/migrations/` follows it:
+
+- Filename: `<14-digit-timestamp>_<name>.sql` (e.g.
+  `20260812190000_create_todos.sql`) —
+  `bin/goose sqlite3 ./data/app.db -dir db/migrations create <name> sql`
+  generates one with the timestamp and both markers below already in
+  place, run from the repo root once `make tools` has installed `goose`
+  (the `sqlite3 ./data/app.db` part is just goose's required driver/DB
+  arguments for this subcommand — `create` doesn't actually touch that
+  database file).
+- Two markers inside the file: `-- +goose Up` above the forward migration,
+  `-- +goose Down` above its exact reverse (`db/migrations/*_create_todos.sql`
+  is the reference example — `CREATE TABLE` / `DROP TABLE`).
+- **A new table needs `owner_id TEXT NOT NULL REFERENCES users (id)`** for
+  the ownership model (I3, I4) to apply to it — every existing table
+  follows this, but nothing states it as a hard requirement rather than
+  something you'd infer from reading `todos`' schema. Skipping it means
+  your table has no ownership scoping to test in the first place, and I3
+  won't apply to it at all.
+
+## Dangling references after a correct fork
+
+Even a fork that gets every step above exactly right leaves roughly two
+dozen references to `todo`/`todos` behind in places `go build`/`go vet`
+can't see: doc comments (`internal/identity/doc.go`,
+`internal/platform/config.go`, `internal/api/validator.go` all mention
+todos in prose, not code) and test/example fixtures
+(`{"title": "a todo"}`-shaped literals). None of these break anything —
+that's exactly why they survive a correct fork instead of getting caught
+by `go build ./...`. This document's own opening line claims "skipping a
+step leaves a specific, identifiable trace"; a leftover `todo` in a
+comment is a trace regardless of whether any step was actually skipped,
+so it doesn't uniquely identify a missed step the way a stale import path
+does. After Steps 1–4, run one more pass:
+
+```sh
+grep -rn 'todo' --include='*.go' --include='*.md' --include='*.sql' --include='*.yaml' .
+```
+
+and update or remove whatever's left that's about the old domain, not
+your new one.
+
 ## `.chief/`
 
 This directory is milestone-1's planning history for *this* template —
