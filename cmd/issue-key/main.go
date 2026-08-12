@@ -53,6 +53,13 @@ func run(handle string) error {
 	}
 	defer db.Close()
 
+	// Applied here too (not just cmd/server) so this command works
+	// standalone against a fresh volume — e.g. the first thing run in the
+	// docker-compose flow, before the server container has started.
+	if err := platform.Migrate(db); err != nil {
+		return fmt.Errorf("applying migrations: %w", err)
+	}
+
 	repo := identity.NewRepo(db)
 	// No JWT verifier needed — this script only ever issues API keys.
 	svc := identity.NewService(repo, repo, nil, slog.Default())

@@ -43,6 +43,10 @@ func run() error {
 	}
 	defer db.Close()
 
+	if err := platform.Migrate(db); err != nil {
+		return fmt.Errorf("applying migrations: %w", err)
+	}
+
 	router := platform.NewRouter(logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

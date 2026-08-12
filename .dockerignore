@@ -1,0 +1,6 @@
+.git
+.chief
+.agents
+bin
+data
+*.db
