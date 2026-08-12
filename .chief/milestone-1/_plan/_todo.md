@@ -30,7 +30,7 @@ milestone without anyone ever having deliberately done it).
       the loop. A Makefile/script target `go install`s from those pinned
       versions. `go build ./...` and `go vet ./...` pass.
       **Owns: Done-when 1, 11.**
-- [ ] task-2: Identity — `internal/identity/`: `users`/`api_keys`
+- [x] task-2: Identity — `internal/identity/`: `users`/`api_keys`
       migrations + sqlc queries (DATA_MODEL.md), `handler.go` +
       `middleware.go` (actor-resolution: API key → JWT → reject, per
       INVARIANTS.md I1–I2, I6–I10) + `service.go`/`repo.go`, the CLI
