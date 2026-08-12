@@ -16,8 +16,19 @@ milestone without anyone ever having deliberately done it).
       — see that doc for why, and the rationale under "Resolved during
       grill" below). Write the import-graph test now, against the empty
       skeleton, so it fails immediately if a later task puts a file in the
-      wrong place instead of surfacing at task-5. `go build ./...` and
-      `go vet ./...` pass.
+      wrong place instead of surfacing at task-5.
+
+      **Also pin the codegen toolchain — none of sqlc/goose/oapi-codegen
+      exist on this machine (verified: not on `PATH`, `~/go/bin` doesn't
+      even exist), and Go's install-latest-if-missing behavior is worse than
+      failing outright: Done-when 3 requires `sqlc generate` to be
+      byte-reproducible, which an unpinned version can't guarantee — the
+      exact failure mode in the fleet's `generated-output-must-match-its-
+      source-revision` learning.** Use a `tools/tools.go` (`//go:build
+      tools`) blank-importing each tool's `cmd` package, so exact versions
+      live in `go.mod`/`go.sum` — not on whichever machine happens to run
+      the loop. A Makefile/script target `go install`s from those pinned
+      versions. `go build ./...` and `go vet ./...` pass.
       **Owns: Done-when 1, 11.**
 - [ ] task-2: Identity — `internal/identity/`: `users`/`api_keys`
       migrations + sqlc queries (DATA_MODEL.md), `handler.go` +
@@ -103,6 +114,16 @@ stdlib-only, no dependency added). Only the third rule
 (`internal/platform` importing no domain module) is a clean package-level
 `go list -json` check, since platform is its own directory. Full mechanism
 in `.chief/_rules/_standard/ARCHITECTURE.md`'s Enforcement section.
+
+**Preflight + commit (2026-08-12):** Clara ran two checks loop-readiness's
+static review couldn't — actually probing the machine and the repo's git
+state. Neither tool (`sqlc`/`goose`/`oapi-codegen`) exists on `PATH` or in
+`~/go/bin` (doesn't exist), and none of today's planning work had been
+committed. Fixed: planning work is now `main`'s root commit
+(`b988194`) — a clean baseline to diff `chief-loop`'s output against — and
+task-1 gained the `tools/tools.go` pinning requirement (Decisions table,
+Done-when 1). See `task-2.md` for the identity/auth task spec loop-readiness
+called for.
 
 Task-5's `docs/GETTING-STARTED.md` should use this exact paragraph for the
 JWT seam (per working standard rule 5 — a claim about mutable state carries

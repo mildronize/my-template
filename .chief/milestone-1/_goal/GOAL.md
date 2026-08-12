@@ -84,6 +84,7 @@ same code today.
 | API design | OpenAPI-first: `openapi.yaml` at repo root, `oapi-codegen` generates server interfaces, `gin-middleware` validates requests against the spec | Luna (from task stack) |
 | Testing | testify: unit tests on the service layer, integration tests on handlers against a real (temp-file or in-memory) SQLite DB. No e2e/browser tests — there's no browser | Luna |
 | JWT/JWKS library | **`github.com/lestrrat-go/jwx/v3`** — not in TPL-1's original stack list (gin, oapi-codegen, gin-middleware, sqlc, goose, slog+tint, env+godotenv, testify has no JWT library), added here because task-2 needs one and the contract narrows the real choice: §7.3 requires JWKS fetched *and* cached but **never pinned to one key** (Hydra regenerates its signing key on every rebuild). `jwx/v3`'s `jwk.Cache` makes that a guaranteed library feature, not hand-rolled caching code a future forker could get wrong. The alternative, `golang-jwt/jwt/v5`, is more widely used but has no JWKS fetching/caching built in — it would need a second dependency (`MicahParks/keyfunc`) bolted on, making the §7.3 guarantee something assembled rather than something the library owns. RS256 is pinned explicitly regardless of library (§7.2 — never let the token's own `alg` header choose it; `shipd`'s `Validation::new(Algorithm::RS256)` is the fleet reference). **One new dependency, chosen because the security property it must guarantee is the property this library is for** | Clara (recommended), Luna (decided) |
+| Toolchain pinning | `tools/tools.go` (`//go:build tools`) blank-imports `sqlc`, `goose`, and `oapi-codegen`'s `cmd` packages so exact versions live in `go.mod`/`go.sum`, installed via a Makefile/script target — not assumed pre-installed. Found missing entirely by Clara doing a preflight check on the actual machine (none of the three tools exist on `PATH`, `~/go/bin` doesn't exist) rather than assuming dev tooling works. Matters most for Done-when 3 (`sqlc generate` reproducibility) — an unpinned version can't guarantee byte-identical output on a fork built months later | Clara (found it), Luna |
 | Go module path | `github.com/mildronize/my-template` (matches the repo). Go version: not pre-pinned — task-1 runs `go mod init` against whatever Go toolchain is actually installed and the resulting `go.mod` `go` directive is the record, rather than guessing a version number nothing has tested against | Luna |
 | Architecture layout | **Module-first**, not layer-first: `internal/todo/` (example domain, deleted whole on fork), `internal/identity/`, `internal/platform/` — each holding its own handler+service+repo together, not split across parallel trees. Governed by `.chief/_rules/_standard/ARCHITECTURE.md` (repo-wide, outranks this milestone per `AGENTS.md`'s rules hierarchy — the layout must outlive milestone-1 even though the todo domain doesn't). Caught missing entirely from goal/contract by มายด์'s question during this review round: the folders were named in `_todo.md` with no rule making them mean anything, so a passthrough handler→sqlc shortcut would have passed all 10 original Done-when items | มายด์ (layout choice), Clara (found the gap) |
 
@@ -102,7 +103,7 @@ same code today.
 - goose migrations for the schema above; sqlc queries and generated code
 - Dockerfile + docker-compose for local dev (service + SQLite volume)
 - `docs/DEPLOY-REQUIREMENTS.md` for hestia, listing what a real deployment needs (Hydra client registration incl. the public-URL audience per §6, env vars, volume for the SQLite file)
-- `docs/GETTING-STARTED.md` — the fork checklist: what to rename (module path, service name), what to re-register (`AUTH_AUDIENCE` to the new service's own public URL), and where the todo domain lives so it's obvious what to delete and replace with a real domain
+- `docs/GETTING-STARTED.md` — the fork checklist: what to rename (module path, service name), what to re-register (`AUTH_AUDIENCE` to the new service's own public URL), where the todo domain lives so it's obvious what to delete and replace with a real domain, and that `tools/tools.go`'s pinned versions are a deliberate choice to re-check/bump on fork, not an artifact to ignore
 - Unit + integration tests (testify) covering the auth/identity seam (including the owner-invariant above) and CRUD ownership scoping
 
 ### Out of scope
@@ -117,7 +118,7 @@ pipeline setup · real Hydra client registration or any change to
 
 Machine-checkable stopping conditions for the unattended loop:
 
-1. `go build ./...` and `go vet ./...` pass.
+1. `go build ./...` and `go vet ./...` pass, and `tools/tools.go` pins exact versions of `sqlc`, `goose`, and `oapi-codegen` in `go.mod`/`go.sum` — no step in this milestone relies on a tool already being installed on whatever machine runs it.
 2. `goose up` applies cleanly against a fresh, empty SQLite file.
 3. `sqlc generate` produces no diff against committed generated code (queries and schema stay in sync).
 4. `go test ./...` passes, and includes: an agent with only its own key can create/list/update/delete only its own todos, and gets 404 (not 403 — no leaking existence) touching another owner's todo.
