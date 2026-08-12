@@ -76,7 +76,7 @@ var nonDomainInternalDirs = map[string]bool{
 }
 
 // domainModuleNames discovers every domain module by listing internal/'s
-// own subdirectories and excluding the three infrastructure ones above —
+// own subdirectories and excluding the four infrastructure ones above —
 // derived from the filesystem, not a hardcoded list of module names, so
 // it stays correct the instant a fork renames internal/todo, adds
 // internal/note beside it, or removes internal/todo entirely (task-6.md:
