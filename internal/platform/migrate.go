@@ -20,9 +20,10 @@ import (
 // volume the server hasn't started against yet.
 //
 // This is the same migration set and the same goose.Up call
-// db/migrations' own tests (internal/todo/migration_test.go) and
-// bin/goose (Makefile, docs/DEPLOY-REQUIREMENTS.md) apply — embedding
-// just changes where the *.sql bytes come from, not what gets run.
+// this function's own test (migrate_test.go,
+// TestGooseUp_FullMigrationSetAppliesCleanly) and bin/goose (Makefile,
+// docs/DEPLOY-REQUIREMENTS.md) apply — embedding just changes where the
+// *.sql bytes come from, not what gets run.
 func Migrate(db *sql.DB) error {
 	goose.SetBaseFS(migrations.FS)
 	defer goose.SetBaseFS(nil)
