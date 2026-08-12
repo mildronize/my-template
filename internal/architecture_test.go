@@ -34,9 +34,17 @@ const (
 // handlerFileRe and repoFileRe are the filename patterns
 // ARCHITECTURE.md calls "the contract, not an implementation detail":
 // exactly handler.go/repo.go, or anything ending in _handler.go/_repo.go.
+// The optional trailing "_test" accounts for Go's own mandatory _test.go
+// suffix — a handler-role file's test (handler_test.go,
+// middleware_handler_test.go, ...) legitimately imports gin too (e.g. to
+// drive a real gin.Engine with httptest), and without this the rule would
+// otherwise forbid the very test files this task's integration tests need
+// to write, which isn't what ARCHITECTURE.md's rule 1 is protecting
+// against (untestable service-layer code accreting gin.Context params) —
+// that's a production-code concern, not a test-file one.
 var (
-	handlerFileRe = regexp.MustCompile(`^(handler|.+_handler)\.go$`)
-	repoFileRe    = regexp.MustCompile(`^(repo|.+_repo)\.go$`)
+	handlerFileRe = regexp.MustCompile(`^(handler|.+_handler)(_test)?\.go$`)
+	repoFileRe    = regexp.MustCompile(`^(repo|.+_repo)(_test)?\.go$`)
 )
 
 // repoRoot resolves the module root (the parent of the internal/
