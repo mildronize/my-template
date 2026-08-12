@@ -60,7 +60,7 @@ milestone without anyone ever having deliberately done it).
       ownership-scoping rule as todos. Tests for I3 applied to keys, I9
       (expired-but-unrevoked still 401s).
       **Owns: Done-when 3.**
-- [ ] task-5: Ship it — Dockerfile, docker-compose (service + SQLite
+- [x] task-5: Ship it — Dockerfile, docker-compose (service + SQLite
       volume), `docs/DEPLOY-REQUIREMENTS.md`, `docs/GETTING-STARTED.md`.
       The getting-started doc's fork checklist must explicitly call out the
       two deliberate simplifications from `_contract/API.md` Conventions
