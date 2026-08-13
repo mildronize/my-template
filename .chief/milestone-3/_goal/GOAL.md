@@ -170,11 +170,25 @@ own out-of-scope note)
    session-check hook — a failing/erroring check does not bounce a
    previously-authenticated user to `/login`.
 7. `internal/transport/bff/view_handler.go` and milestone-2's Done-when-9
-   test are removed; a replacement test proves the SPA path renders
-   scoped owner data after login (seed an owner session + a todo, hit the
-   new todos-list endpoint through a real session, assert that todo's
-   title is in the response) — the same property Done-when 9 checked,
-   against the artifact that actually ships now.
+   test are removed. **Two checks replace it, because Done-when 9's
+   single assertion covered two properties that split apart once
+   rendering moved off the server**: Done-when 2's create→list round
+   trip already proves the endpoint returns real data through a real
+   session, and Done-when 3 already proves it's scoped. Neither of those
+   is a rendering check — asserting on a JSON response body stopped being
+   equivalent to asserting on a render the moment the render moved to
+   the client. So: **a Vitest component test renders the todos-list
+   component against a mocked API response containing one todo, and
+   asserts (a) that todo's title appears in the rendered output, and
+   (b) the title of a todo that is *not* in the mocked response does not
+   appear** — a negative control against the component silently
+   rendering from stale or global state rather than the query result it
+   actually received. This is what makes the check able to fail for the
+   right reason, the same discipline Done-when 1 applies (a passing
+   build proves nothing; a changed string appearing after a fresh build
+   does). It does not re-prove scoping — that's Done-when 3's job — only
+   that receiving scoped data and displaying it are both actually
+   wired, not just the first one.
 8. `docs/GETTING-STARTED.md` states Node as a prerequisite before the
    first command that needs it (mirrors milestone-2's Done-when-4
    shape for `register-<service>.sh`) and has an explicit React-app
