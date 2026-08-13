@@ -156,4 +156,21 @@ assemble afterward — see task-5.
       acceptance), that's the gap to close or hand to Clara explicitly
       before reporting done — not something to leave for her to
       re-discover the way she had to last time.
+
+      **Explicit hard constraint, found by Clara checking the real Hydra
+      config rather than assuming (2026-08-13): the registered client
+      `my-template-dev` pins `redirect_uris` to
+      `http://localhost:8080/callback` exactly.** Nothing needs
+      re-registering — the existing client already trusts this URL — but
+      that makes the port a requirement, not a default. **Add an explicit
+      check**: the running binary listens on `:8080`, and `GET /callback`
+      actually reaches the BFF's callback handler and not the SPA's
+      `NoRoute` fallback (confirm this directly — a router misconfiguration
+      that let the SPA's own client-side routing claim `/callback` first
+      would break login at the very last step, after Hydra has already
+      done its part, in a way that would misleadingly look like an issuer
+      problem rather than a routing one). Port 8080 was held by the
+      milestone-2 dev server (`mt-server`, Clara's) during this milestone's
+      build — Clara is handling that handover with มายด์ directly; confirm
+      it's free before this task's own live checks rather than assuming.
       **Owns: Done-when 11.**
