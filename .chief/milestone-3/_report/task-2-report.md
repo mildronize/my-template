@@ -216,3 +216,46 @@ done
 - `8ec2d99` — `feat(milestone-3/task-2): export publicapi's error envelope for bff to reuse directly`
 - `456e6c2` — `feat(milestone-3/task-2): implement BFF JSON handlers, wire /api/bff into main.go`
 - `60beba0` — `feat(milestone-3/task-2): add BFF JSON surface tests -- real round trip, first BFF-layer I3 test, negative check`
+- `a4181df` — `fix(milestone-3/task-2): make SPA fallback test-isolated from npm build state`
+
+## Fix-round note (found by independent verification, not by this task's own builder)
+
+`TestBFF_UnmatchedAPIBFFPathAnswers404NotTheSPA`'s `"non-API path still
+falls through to the SPA"` subtest asserted `http.StatusOK` against
+`newSPAHandler()`'s output, which read from the real compile-time embed
+(`web.DistFS`). That assertion's own report line above ("Verified
+against a live instance") was true, but only in a working tree that
+already had `web/dist` built from an earlier `npm run build` step — the
+report's claim that `go test ./...` was fully green did not hold on a
+genuinely fresh `git clone`, where `web/dist` has only the tracked
+`.gitkeep` placeholder and `newSPAHandler` correctly (and
+intentionally, per its own doc comment) degrades to 404 on every
+request. This is the exact class of bug this same task already guarded
+against from the other direction (the `/api/bff/` NoRoute/SPA
+interaction, Decision section above) — a test whose result silently
+depended on out-of-band state nothing guarantees.
+
+Fix: `newSPAHandler` (`cmd/server/spa.go`) now takes an `fs.FS`
+parameter instead of reaching into `web.DistFS` itself. `buildHandler`/
+`wireBFF` (`cmd/server/main.go`) thread that `fs.FS` through; `run()`
+computes `fs.Sub(web.DistFS, "dist")` once and passes it in, so
+production behavior is byte-for-byte unchanged (confirmed manually: real
+`npm run build`, real binary, `curl /settings` returns the real built
+`index.html`, diffed identical to `web/dist/index.html`). The test
+(`cmd/server/bff_negative_check_test.go`, plus `cmd/server/main_test.go`
+for its own unrelated `buildHandler` call) now passes a
+`fstest.MapFS{"index.html": ...}` fixture instead of the real embed —
+standard library, no new dependency.
+
+Verified against a genuinely fresh clone (`git clone` into a scratch
+directory, not the already-built working tree): confirmed `web/dist`
+held only `.gitkeep`, then ran `go build ./...`, `go vet ./...`,
+`gofmt -l .`, and `go test ./...` with zero prior `npm run build` —
+every package passed (exit code 0), including the previously-failing
+SPA-fallback subtest, `TestI3_BFFHandlerOwnershipScoping_ReturnsNotFoundNotForbidden`,
+and the full CRUD round-trip test.
+
+No functional code outside `cmd/server/spa.go` and `cmd/server/main.go`
+changed; the I3 test, the negative check, the I2/I12 boundary comments,
+the round-trip test, the handlers themselves, `bff-openapi.yaml`, and
+`internal/bffapi` were all left untouched, per this fix-round's scope.
