@@ -61,6 +61,13 @@ assemble afterward — see task-5.
       /api/bff/keys`, `DELETE /api/bff/keys/:id`. Wire `oapi-codegen`
       for it (mirrors `openapi.yaml`'s existing `make generate` target —
       second invocation, second output file, not a modified first one).
+      **Generate into a distinctly named Go package** (e.g.
+      `internal/bffapi`, not `internal/api`) — two independent
+      `oapi-codegen` runs each generate their own `Error`,
+      `ServerInterface`, `RegisterHandlers`, etc.; sharing a package name
+      between them risks a symbol collision that a single-spec project
+      never has to think about. Decide the name before generating, not
+      after hitting the collision.
       Handlers call `internal/domain/todo.Service` and
       `internal/identity.Service` directly — no new domain logic, per
       `_contract/API.md`'s per-endpoint service-method citations. Every
@@ -68,13 +75,18 @@ assemble afterward — see task-5.
       request for another owner's todo returns 404, never 403 — **this
       is the first BFF-layer I3 test**, closing the granularity gap
       milestone-2 only documented (its own `TestI3_...` only ever existed
-      at the `publicapi` layer). I2/I12 boundary reasoning
-      (`_contract/API.md`'s own section) added as a code comment at
-      `bff.RequireSession` and at the point BFF writes are enabled, plus
-      confirmed present in `API.md`/`INVARIANTS.md` (already is, per the
-      contract phase — this task is the presence check, not new prose).
-      Negative check: no `POST /api/bff/keys`, no rotate endpoint exists
-      anywhere on this surface.
+      at the `publicapi` layer). **For the real-session-cookie tests this
+      task and Done-when 2 need: reuse the session-seeding helper
+      milestone-2's own Done-when-9 test already built** (seeds a signed
+      session directly rather than driving a real Hydra login — the same
+      shortcut that test's "seeds an owner session + a todo" language
+      describes) instead of rediscovering or reinventing it. I2/I12
+      boundary reasoning (`_contract/API.md`'s own section) added as a
+      code comment at `bff.RequireSession` and at the point BFF writes
+      are enabled, plus confirmed present in `API.md`/`INVARIANTS.md`
+      (already is, per the contract phase — this task is the presence
+      check, not new prose). Negative check: no `POST /api/bff/keys`, no
+      rotate endpoint exists anywhere on this surface.
       **Owns: Done-when 2, 3, 4, 5.**
 - [ ] task-3: Wire the SPA for real — `openapi-typescript` generates
       types from `bff-openapi.yaml`; a thin `fetch` wrapper + TanStack
@@ -111,7 +123,9 @@ assemble afterward — see task-5.
       Vite/npm setup and task-2/3's tests exist; kept as its own task
       rather than folded into task-3 so it's independently checkable
       that the two-suite claim is true, not just that both suites happen
-      to exist.
+      to exist. **JS coverage is deliberately partial (Done-when 10's own
+      wording: two specific hooks, not full coverage) — that's a
+      decision, not a gap to close here or in task-5's final report.**
       **Owns: Done-when 9.**
 - [ ] task-5: Final verification — **last task, full-suite gate, same
       shape as milestone-2's task-8.** `docker compose up` still works
