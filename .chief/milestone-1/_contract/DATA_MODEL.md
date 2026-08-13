@@ -1,5 +1,11 @@
 # Data model
 
+**Superseded 2026-08-13 — promoted to `.chief/_rules/_contract/DATA_MODEL.md`
+in milestone-2.** This file is historical (milestone-1's state at the time
+it was written); the promoted copy is the live authority, kept current
+across milestones.
+
+
 Two tables plus an auth table. No `projects`, no `task_events` — see
 `../_goal/GOAL.md` for why. SQLite via sqlc + goose (Decisions table,
 `../_goal/GOAL.md`).

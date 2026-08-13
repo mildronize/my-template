@@ -46,16 +46,39 @@ const (
 	scopePerDomainModule = "per-domain-module"
 )
 
-// findInvariantsFiles globs for every INVARIANTS.md anywhere under
-// <root>/.chief/, rather than hardcoding a single milestone's path
-// (`.chief/milestone-1/_contract/INVARIANTS.md`) — a fork that
-// reorganizes `.chief/` (a new milestone directory, a renamed
-// `_contract/`) doesn't silently break this test's ability to find the
-// file it needs, and docs/GETTING-STARTED.md doesn't need to document
-// the coupling for the same reason: there's nothing fork-specific left
-// to get out of sync with.
+// promotedInvariantsPath is where a project-wide INVARIANTS.md lives once
+// promoted out of a single milestone (milestone-2's own
+// _rules/_contract/INVARIANTS.md is the first instance of this) — see
+// _rules/_standard/ARCHITECTURE.md's "Contract promotion" note. When this
+// file exists it is the *only* authority; a milestone's own _contract/
+// copy becomes history the moment its content is promoted, and must not
+// keep contributing to this check.
+const promotedInvariantsPath = ".chief/_rules/_contract/INVARIANTS.md"
+
+// findInvariantsFiles returns the file(s) that define the required
+// invariant set. If a promoted, project-wide INVARIANTS.md exists
+// (promotedInvariantsPath), it is the *only* input — not unioned with any
+// milestone's own copy, even a still-live one, because a promoted
+// document is supposed to be the one place this is defined. Without this
+// rule, a superseded milestone copy kept in-tree for history (this repo's
+// own convention — see ARCHITECTURE.md) would silently keep driving a
+// live check: editing the historical copy would change what's required,
+// and an invariant a later milestone deliberately retired would stay
+// demanded forever because an old copy still names it (found by Clara,
+// milestone-2, reviewing this exact promotion).
+//
+// Only when no promoted file exists does this fall back to globbing every
+// INVARIANTS.md under <root>/.chief/ and unioning them — this preserves
+// the original (milestone-1-era) behavior for a fork that never promotes
+// a contract at all, where "one file per milestone, no promotion yet" is
+// still the actual shape.
 func findInvariantsFiles(t *testing.T, root string) []string {
 	t.Helper()
+
+	promoted := filepath.Join(root, promotedInvariantsPath)
+	if _, err := os.Stat(promoted); err == nil {
+		return []string{promoted}
+	}
 
 	var paths []string
 	err := filepath.WalkDir(filepath.Join(root, ".chief"), func(path string, d fs.DirEntry, walkErr error) error {

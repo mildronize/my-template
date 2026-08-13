@@ -1,15 +1,19 @@
-# API contract
+# API contract — public API surface
 
-**Superseded 2026-08-13 — promoted to `.chief/_rules/_contract/API.md` in
-milestone-2**, which sits beside a new `bff` surface documented in
-milestone-2's own `_contract/API.md`. This file is historical.
+Promoted from milestone-1's `_contract/API.md` to `_rules/_contract/` in
+milestone-2, same reasoning as `DATA_MODEL.md`/`INVARIANTS.md` — this
+surface's conventions are cross-milestone now that a second surface
+(`bff`) exists beside it. Milestone-1's copy is historical only.
 
-
-One REST surface, `/api/v1`, OpenAPI-first (`openapi.yaml` at repo root —
-GOAL.md Decisions). No web UI, no session cookie, no tRPC — everything
-authenticates over `Authorization: Bearer <credential>`, where the
-credential is either an `api_keys` row's raw key or an SSO-issued JWT
-(INVARIANTS.md I2, I6–I10).
+`internal/transport/publicapi`, mounted at `/api/v1`, OpenAPI-first
+(`openapi.yaml` at repo root). Everything authenticates over
+`Authorization: Bearer <credential>`, where the credential is either an
+`api_keys` row's raw key or an SSO-issued JWT (`INVARIANTS.md` I2, I6–I10,
+I13–I14). See milestone-2's own `_contract/API.md` for the second surface
+(`bff`) this now sits beside, and for what actually changed this
+milestone (nothing here — only this surface's code location moved, from
+`internal/todo`+`internal/identity` handlers to
+`internal/transport/publicapi`).
 
 ## Conventions
 
@@ -20,17 +24,16 @@ credential is either an `api_keys` row's raw key or an SSO-issued JWT
   takes another actor's id.
 - Any request carrying `actor`, `actorId`, `ownerId`, or `X-Actor` in body,
   query, or header → **400** (I1).
-- No `Idempotency-Key` requirement. **This is a deliberate simplification,
-  not an oversight**: my-task requires it because `TaskService.append()`
-  writes to an append-only event log where a duplicate write is a
-  correctness bug forever. This template has no event log — `PATCH` and
-  `DELETE` are naturally idempotent, and a duplicate `POST /todos` produces
-  a second todo, which is a normal (if mildly annoying) REST outcome, not a
-  data-integrity one. A forked service that re-adds an event log should
-  re-add this requirement too.
-- No pagination on `GET /todos` in this milestone — a personal todo list is
-  small. Flagged here rather than silently decided, since it's the one
-  place this contract diverges furthest from my-task's API shape.
+- No `Idempotency-Key` requirement. Deliberate simplification (this
+  service has no append-only event log — see milestone-1's original
+  `_goal/GOAL.md` for the full reasoning); re-add it if a fork adds one.
+- No pagination on `GET /todos` — a personal todo list is small. Flagged
+  here rather than silently decided, since it's the one place this
+  contract diverges furthest from my-task's API shape.
+- There is no key-rotation HTTP endpoint, and no `POST /api/v1/keys` —
+  issuance and rotation are both CLI-only (milestone-2 `_contract/API.md`'s
+  "Public API — unchanged this milestone" explains why rotation
+  specifically can't be a safe HTTP endpoint).
 
 ## Error shape
 
@@ -45,7 +48,7 @@ credential is either an `api_keys` row's raw key or an SSO-issued JWT
 | Code | Status | When |
 | --- | --- | --- |
 | `unauthorized` | 401 | any credential failure (I2, I5, I9, I10) |
-| `not_found` | 404 | unknown todo id, or a todo id that exists but isn't the caller's (I3 — absence, not 403) |
+| `not_found` | 404 | unknown resource id, or one that exists but isn't the caller's (I3 — absence, not 403) |
 | `actor_field_present` | 400 | request tried to declare an actor (I1) |
 | `validation_error` | 400 | `hint` names the field |
 
@@ -105,6 +108,6 @@ see it needs rotating.
 
 ### `DELETE /api/v1/keys/:id`
 
-Sets `revoked_at`. Owner-scoped, same 404 rule as todos. There is
-deliberately no `POST /api/v1/keys` — issuance is CLI-only (GOAL.md Scope,
-`docs/DEPLOY-REQUIREMENTS.md` covers the script).
+Sets `revoked_at`. Owner-scoped, same 404 rule as todos. Deliberately no
+`POST /api/v1/keys` and no rotation endpoint — issuance and rotation are
+both CLI-only (`docs/DEPLOY-REQUIREMENTS.md` covers the scripts).
