@@ -104,7 +104,7 @@ before this milestone started.
       binding final-suite gate is task-8's (below), since three more
       tasks still touch the repo after this one and could regress it.
       **Owns: Done-when 10, 11.**
-- [ ] task-6: e2e smoke script — real HTTP against a live instance with a
+- [x] task-6: e2e smoke script — real HTTP against a live instance with a
       real minted key (`cmd/smoke` or similar, mirrors my-task's
       `smoke-api-v1.ts` in purpose, not in its task-specific assertion
       list — this template's domain is todos, not my-task's tasks/
