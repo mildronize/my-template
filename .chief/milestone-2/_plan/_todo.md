@@ -131,6 +131,74 @@ before this milestone started.
       from tasks 6/7 having regressed what task-5 landed.**
       **Owns: Done-when 14, 15.**
 
+- [ ] task-9: Fix findings from Clara's fifth blind fork test (2026-08-13,
+      domain `my-quotes`, forked from the post-restructure branch). Not
+      mergeable as-is — four blockers plus the worst finding on this
+      project: `cmd/smoke` is 100% broken after a by-the-book fork (41
+      stale `/todos` references, `title`/`done` payloads) while `go
+      build`/`go test ./...` stay fully green — invisible to build
+      because the paths are strings, invisible to test because `cmd/
+      smoke` has no test files. Real fork run: `3/7 passed` on the exact
+      check (I1/I3 over real HTTP) task-6 exists to guarantee. Same shape
+      as every prior guardrail hole this project has found, one directory
+      over from where the others were caught.
+
+      **Fix in the template, not just the doc, per Clara's explicit call
+      — a shape task-1's blind-test rounds already established (the
+      architecture guardrail was fixed in code, not documented around):**
+      - **Blocker A**: `compositeServer`/`newIntegrationRouter`/
+        `createAgentWithKey` are documented as living in `publicapi_
+        testutil_test.go` but actually live in `todo_handler_test.go` —
+        the file Step 8 deletes on fork. Move the harness for real.
+      - **Blocker B**: `todo_handler.go` holds package-shared code
+        (`newAPIError`, `unauthorizedError`, `actorID`, the package doc
+        comment) every handler needs. `rm`-ing it per Step 8 breaks the
+        package. Move to `middleware.go` or a new `publicapi.go`.
+      - **Blocker C**: copying a handler into the same package
+        redeclares those same shared helpers, plus test function names —
+        resolves once B moves them out of any single domain handler
+        file, but verify, don't assume.
+      - **Blocker D**: `internal/transport/bff`'s own test files
+        (`view_handler_test.go`, `bff_testutil_test.go`) import the todo
+        domain too — the doc's build-vs-test-trap warning only covers
+        `publicapi`, not `bff`. Extend it.
+      - **`cmd/smoke`**: needs a visible, costly fork step of its own —
+        not offered as build-passes-so-it's-fine. Consider restructuring
+        the domain-specific literals into an obviously-marked edit zone
+        at the top of the file, on top of an explicit `GETTING-STARTED`
+        step stating what's lost if it's skipped (mirrors the
+        `Idempotency-Key`/pagination "state the cost" pattern already
+        used elsewhere in the doc).
+      - **View-handler consequence, stated not implied**: stripping
+        `internal/transport/bff/view_handler.go` on fork (offered as an
+        equal option today) silently drops **both** Done-when 9's tests
+        **and** `TestI12_BFFSessionNeverResolvesToAgent_ViewMiddleware` —
+        found by the test agent reading the test files directly, not the
+        doc, since the doc never said. Don't offer strip as an equal
+        option; state the cost, same shape as the Idempotency-Key note.
+      - **Done-when 12 granularity gap** (probe, not one of the four
+        blockers, still real): renaming only `repo_test.go`'s `TestI3_`
+        leaves `service_test.go`'s covering the per-module check —
+        checked per-module, not per-layer, weaker than the invariant's
+        actual current shape (this codebase already writes
+        `TestI3_Repo.../Service.../Handler...` as three separate tests
+        per module). Decide: strengthen to layer-aware, or document the
+        limitation explicitly (mirrors the existing name-not-body
+        limitation) — Luna's call unless Clara wants to weigh in, given
+        the risk of a fragile layer-inference heuristic.
+      - **Also**: `.claude/skills/my-template-api/` has 33 stale `/todos`
+        references and isn't on any rename/delete list — it's the
+        agent-facing contract for a forked service · `internal/
+        invariants_test.go`'s own failure message says `internal/quote`
+        instead of `internal/domain/quote` (stale error-message
+        construction, a code fix) · Step 5's heading still says "two
+        locations" while its own body now names a third · `openapi.yaml`'s
+        keys description says "same 404 rule as todos" — a shipped API
+        string, not internal prose, needs to be domain-agnostic.
+
+      **Owns: none new — hardens what already-closed Done-when items
+      actually guarantee.** Blind test 6 after this lands.
+
 ## Open items, not owned by any task above
 
 - **`docs/DEPLOY-REQUIREMENTS.md`** needs updates threaded through
