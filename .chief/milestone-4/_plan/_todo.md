@@ -102,6 +102,18 @@ wrong-value write instead of a handler-layer skip), and the working tree
 confirmed byte-identical to the original commit (`git diff` empty) after
 every attack was reverted.
 
+**Re-measured at `c2163fc`** (task-7 + the I20 static-check fix-round
+[comment-strip, URL-truncation guard, documented protocol-relative-URL
+residual] + the handle-exposure fix-round [`ApiKey`/`TodoEvent`/`Todo`
+assignee gain handles, matching my-task's own source]): **the list is
+empty.** `go test ./internal/...` is fully green, no exceptions, no named
+residue — the first time that sentence has been true in this milestone.
+Independently reconfirmed cold (Luna): my-task citations spot-checked
+against the real source with line numbers, regenerated-file diff scope
+confirmed narrow, own attack one layer below where each task's own test
+caught the property. From here, **any red at all is a regression**, full
+stop; there is nothing left to classify against.
+
 A baseline is a measurement, and a measurement has a subject — record the
 commit it was taken against, not just the list, since the list can read
 identical while the *reason* underneath it changed (this milestone's own
@@ -307,7 +319,7 @@ caught a missing invariant test.
       **Green gate: full Go suite green, plus this task's own new tests
       (including the rewritten `keys_handler_test.go`).**
       **Owns: Done-when 7, 11.**
-- [ ] task-7: SPA — per-todo detail page (`web/src/app/todos/[id]/` or
+- [x] task-7: SPA — per-todo detail page (`web/src/app/todos/[id]/` or
       equivalent, doesn't exist yet), todos list page updated for the new
       fields (status/assignee/priority/due-date UI, including a
       status-change control that surfaces `closed` only for the owner —
