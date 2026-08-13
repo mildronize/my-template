@@ -32,8 +32,8 @@ const (
 
 // errInvalidCookie is returned by ParseSessionCookie/ParseStateCookie for
 // every failure reason (malformed, bad signature, expired) — callers
-// (RequireSession, the callback handler) collapse all of them to the same
-// "redirect to /login" / "show a generic error page" behavior, mirroring
+// (RequireJSONSession, the callback handler) collapse all of them to the
+// same "answer 401" / "show a generic error page" behavior, mirroring
 // I5's "401 never leaks why" applied to this surface's own failure modes
 // (_contract/API.md's BFF conventions).
 var errInvalidCookie = errors.New("bff: invalid or expired cookie")

@@ -214,12 +214,13 @@ func TestI3_BFFHandlerOwnershipScoping_ReturnsNotFoundNotForbidden(t *testing.T)
 }
 
 // TestBFFHandler_ListTodos_Unauthenticated_Returns401NotRedirect proves
-// _contract/API.md's explicit behavior change on this surface: unlike
-// RequireSession (middleware.go — the html/template view's own
-// session-gate, redirect-to-/login shaped, now unused in production code
-// since milestone-3/task-3 removed its one caller, view_handler.go), a
-// missing session on /api/bff answers 401 JSON, never a 302 redirect —
-// "a fetch call can't follow a redirect the way a browser navigation
+// _contract/API.md's explicit behavior change on this surface: unlike the
+// html/template view's own former session-gate (middleware.go's
+// RequireSession, redirect-to-/login shaped — deleted in a milestone-3/
+// task-3 fix-round once its one production caller, view_handler.go, was
+// itself already retired by the SPA), a missing session on /api/bff
+// answers 401 JSON, never a 302 redirect — "a fetch call can't follow a
+// redirect the way a browser navigation
 // does."
 func TestBFFHandler_ListTodos_Unauthenticated_Returns401NotRedirect(t *testing.T) {
 	router, _, _ := newBFFRouterForOwner(t)

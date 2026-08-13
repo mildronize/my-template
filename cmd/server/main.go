@@ -321,9 +321,10 @@ func wireBFF(ctx context.Context, router *gin.Engine, cfg *platform.Config, repo
 	//
 	// This is the point BFF writes are enabled — the I2/I12 boundary,
 	// condensed from _contract/API.md's "The I2/I12 boundary" section
-	// (see also internal/transport/bff/middleware.go's RequireSession doc
-	// comment, the other point this same reasoning is pinned to): I2 (a
-	// Bearer credential never resolves to role='owner') and I12 (a BFF
+	// (see also internal/transport/bff/json_middleware.go's
+	// RequireJSONSession doc comment, the other point this same reasoning
+	// is pinned to): I2 (a Bearer credential never resolves to
+	// role='owner') and I12 (a BFF
 	// session never resolves to role='agent') are two halves of one
 	// design. An owner has no Bearer credential to present at all, so a
 	// BFF session — gated here by bff.RequireJSONSession — is the *only*

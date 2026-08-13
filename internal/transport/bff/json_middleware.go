@@ -1,20 +1,19 @@
 // json_middleware.go holds the session-gating middleware for
 // milestone-3/task-2's new session-authenticated JSON surface
-// (bff-openapi.yaml, internal/bffapi) — distinct from middleware.go's
-// RequireSession (the pre-existing HTML view's gate) because the two
-// surfaces must fail differently, not because the underlying session
-// check differs: _contract/API.md is explicit that "missing, expired, or
-// wrong-role session → 401 on this JSON surface (a behavior change from
-// milestone-2's redirect-to-/login, since a fetch call can't follow a
-// redirect the way a browser navigation does — the SPA's own
-// AuthGate-equivalent hook is what turns a 401 into a redirect,
-// client-side, not the BFF)". Reusing RequireSession's own gin.HandlerFunc
-// directly would have made every request to this new surface redirect
-// instead of answering 401, which is exactly the behavior the contract
-// says must NOT happen here — so this file reuses RequireSession's
-// checks (cookie parse, signature/expiry, user lookup, I12's role check,
-// active check) via the same Signer/identity.UserRepo primitives, but
-// owns its own response path.
+// (bff-openapi.yaml, internal/bffapi). _contract/API.md is explicit that
+// "missing, expired, or wrong-role session → 401 on this JSON surface (a
+// behavior change from milestone-2's redirect-to-/login, since a fetch
+// call can't follow a redirect the way a browser navigation does — the
+// SPA's own AuthGate-equivalent hook is what turns a 401 into a redirect,
+// client-side, not the BFF)". milestone-2's HTML view had its own
+// redirect-shaped session gate (middleware.go's RequireSession) built on
+// the same checks below (cookie parse, signature/expiry, user lookup,
+// I12's role check, active check) via the same Signer/identity.UserRepo
+// primitives, but answering with a 401 body instead of a redirect is a
+// different-enough response path that this file owns its own middleware
+// rather than parameterizing that one — milestone-3/task-3 later deleted
+// RequireSession once this one became its only caller's replacement (its
+// last production caller, view_handler.go, was retired by the SPA).
 package bff
 
 import (
@@ -40,20 +39,31 @@ var jsonUnauthorizedBody = publicapi.NewErrorEnvelope("unauthorized", "authentic
 
 // RequireJSONSession gates every route under /api/bff (milestone-3/
 // task-2's new JSON surface, bff-openapi.yaml) on a valid session cookie —
-// the JSON-surface counterpart to RequireSession (middleware.go), which
-// gates the HTML view instead. See middleware.go's RequireSession doc
-// comment for the full I2/I12 boundary reasoning (condensed from
-// _contract/API.md): the short version is that a BFF session is the only
-// way an owner ever authenticates (I2 forecloses issuing one a Bearer
-// credential), and every route this middleware gates is therefore safe to
-// treat as an owner-authenticated write surface that internal/transport/
-// publicapi can never grow an equivalent of.
+// this is the html/template view's now-deleted RequireSession, session
+// gate reused here for the JSON surface (see this file's package comment
+// for why the two must fail differently).
+//
+// The I2/I12 boundary (why owner writes exist on bff and never on
+// publicapi), condensed from milestone-3's _contract/API.md: I2 (a Bearer
+// credential never resolves to role='owner') and I12 (checked here — a
+// BFF session never resolves to role='agent') are two halves of one
+// design, not independent rules that happen to coexist. An owner has no
+// Bearer credential to present at all (I2 forecloses it structurally), so
+// a BFF session is the *only* way an owner ever authenticates; an agent
+// has no session to present, so a Bearer credential is the only way an
+// agent ever authenticates. The two proof-of-identity mechanisms are
+// disjoint by construction — which is why the write endpoints this
+// middleware gates exist only on this package and can never be added to
+// internal/transport/publicapi "for consistency": doing so would mean
+// either issuing owners a Bearer credential (breaching I2) or teaching
+// publicapi a session concept it has no reason to grow. See
+// _contract/API.md's "The I2/I12 boundary" section for the full
+// reasoning; this is a pointer, not a restatement.
 //
 // A missing cookie, one that fails signature/expiry verification, or one
 // that resolves to a user that no longer exists, is inactive, or has
 // role="agent" (I12, checked here independently of GET /callback's own
-// check and of RequireSession's own check, for the same defense-in-depth
-// reasoning RequireSession's doc comment gives) all answer 401 with
+// check, for the same defense-in-depth reasoning) all answer 401 with
 // jsonUnauthorizedBody — never a redirect, per _contract/API.md's BFF
 // section quoted above this file's package comment.
 func RequireJSONSession(signer *Signer, users identity.UserRepo, logger *slog.Logger) gin.HandlerFunc {
@@ -82,8 +92,7 @@ func RequireJSONSession(signer *Signer, users identity.UserRepo, logger *slog.Lo
 			return
 		}
 		if user.Role == "agent" {
-			// I12, checked at this layer too, not only at GET /callback and
-			// RequireSession.
+			// I12, checked at this layer too, not only at GET /callback.
 			if logger != nil {
 				logger.Warn("bff: session resolved to role=agent, rejected (I12, json surface)", "user_id", userID)
 			}

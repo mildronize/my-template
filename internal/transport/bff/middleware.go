@@ -81,83 +81,8 @@ func renderLoginError(c *gin.Context, logger *slog.Logger, reason string) {
 		html.EscapeString("Something went wrong signing you in. Please try again."))
 }
 
-// RequireSession gates GET / (and any future authenticated bff route) on a
-// valid session cookie (task-4.md step 3, I1, I12). A missing cookie, one
-// that fails signature/expiry verification, or one that resolves to a
-// user that no longer exists, is inactive, or has role="agent" (I12 —
-// defense in depth: this check exists independently of GET /callback's own
-// I12 check, in case a session cookie somehow carried an agent's users.id)
-// all redirect to /login — never a 401 JSON body, this surface serves
-// HTML (_contract/API.md's BFF conventions).
-//
-// The I2/I12 boundary (why owner writes exist on bff and never on
-// publicapi), condensed from milestone-3's _contract/API.md: I2 (a Bearer
-// credential never resolves to role='owner') and I12 (checked here — a
-// BFF session never resolves to role='agent') are two halves of one
-// design, not independent rules that happen to coexist. An owner has no
-// Bearer credential to present at all (I2 forecloses it structurally), so
-// a BFF session is the *only* way an owner ever authenticates; an agent
-// has no session to present, so a Bearer credential is the only way an
-// agent ever authenticates. The two proof-of-identity mechanisms are
-// disjoint by construction — which is why the write endpoints
-// RequireJSONSession gates (json_middleware.go, milestone-3/task-2) exist
-// only on this package and can never be added to internal/transport/
-// publicapi "for consistency": doing so would mean either issuing owners
-// a Bearer credential (breaching I2) or teaching publicapi a session
-// concept it has no reason to grow. See _contract/API.md's "The I2/I12
-// boundary" section for the full reasoning; this is a pointer, not a
-// restatement.
-func RequireSession(signer *Signer, users identity.UserRepo, logger *slog.Logger) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		cookie, err := c.Cookie(sessionCookieName)
-		if err != nil || cookie == "" {
-			c.Redirect(http.StatusFound, "/login")
-			c.Abort()
-			return
-		}
-
-		userID, err := signer.ParseSessionCookie(cookie)
-		if err != nil {
-			if logger != nil {
-				logger.Debug("bff: session cookie failed verification", "error", err)
-			}
-			c.Redirect(http.StatusFound, "/login")
-			c.Abort()
-			return
-		}
-
-		user, err := users.GetUserByID(c.Request.Context(), userID)
-		if err != nil {
-			if logger != nil {
-				logger.Debug("bff: session resolved to a missing user", "user_id", userID)
-			}
-			c.Redirect(http.StatusFound, "/login")
-			c.Abort()
-			return
-		}
-		if user.Role == "agent" {
-			// I12, checked at this layer too, not only at GET /callback.
-			if logger != nil {
-				logger.Warn("bff: session resolved to role=agent, rejected (I12)", "user_id", userID)
-			}
-			c.Redirect(http.StatusFound, "/login")
-			c.Abort()
-			return
-		}
-		if !user.Active {
-			c.Redirect(http.StatusFound, "/login")
-			c.Abort()
-			return
-		}
-
-		c.Set(actorContextKey, user)
-		c.Next()
-	}
-}
-
-// ActorFromContext returns the identity.User RequireSession or
-// RequireJSONSession (json_middleware.go) resolved for this request — both
-// middlewares set the same actorContextKey, so every handler in this
+// ActorFromContext returns the identity.User RequireJSONSession
+// (json_middleware.go) resolved for this request — every handler in this
 // package (me_handler.go, todo_handler.go, keys_handler.go) reads it
 // through this one function instead of ever querying users itself (I4).
 func ActorFromContext(c *gin.Context) (identity.User, bool) {
