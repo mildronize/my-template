@@ -199,6 +199,67 @@ before this milestone started.
       **Owns: none new — hardens what already-closed Done-when items
       actually guarantee.** Blind test 6 after this lands.
 
+- [ ] task-10: Fix findings from มายด์'s actual acceptance attempt
+      (2026-08-13) and Clara standing up a real dev instance for it — the
+      first time anything, human or agent, tried a real browser login.
+      **มายด์'s login failed in the first minute**, and it's the reason
+      no test ever caught it: five blind fork tests, eight tasks, sixteen
+      Done-when items, and not one of them ever completed a real browser
+      round-trip, because nothing in an automated suite can.
+
+      **The bug**: `internal/transport/bff/middleware.go`'s cookie-setting
+      hardcodes `Secure: true` unconditionally. Safari refuses to store a
+      `Secure` cookie over plain `http://localhost`; Chrome happens to
+      allow it (treats `http://localhost` as a trustworthy origin), which
+      is why this went undetected — it's silently browser-dependent, and
+      มายด์'s own setup (`SERVICE_PUBLIC_URL=http://localhost:8080` over
+      an SSH forward, Safari) hit the failing case. Without a valid
+      `oauth_state` cookie (which carries the PKCE verifier), the
+      callback can't validate anything and the flow dead-ends.
+
+      **มายด์'s decision (asked live, blocking him): derive `Secure` from
+      the configured URL's scheme** (`SERVICE_PUBLIC_URL`/`AUTH_AUDIENCE`)
+      rather than a separately-settable flag — ties it to the same value
+      already driving audience/redirect config instead of an independent
+      knob someone could ship in the wrong position. `http://localhost`
+      keeps working with zero extra setup; a real (always-https)
+      deployment is unaffected. Update `GETTING-STARTED.md`/
+      `DEPLOY-REQUIREMENTS.md` to say the owner-login flow's cookie
+      behavior now follows the configured scheme, so a forker
+      understands why local http "just works" without assuming it's
+      always safe to assume that.
+
+      **Also fold in, found in the same session, both real, neither
+      blocking on their own:**
+      - **`scripts/register.sh` prints `SSO_CLIENT_SECRET` to stdout** —
+        correct design for a human (per hestia's §6 reasoning: writing it
+        to a file is the footgun, not printing it), but **wrong for an
+        agent**, whose stdout is its own context and can't be un-read.
+        On this fleet, most fork setups will be agent-run. Add a warning
+        to the script's own output and to `GETTING-STARTED.md`'s Step 1:
+        if an agent ran this, the secret is now in that agent's context
+        and should be rotated afterward — point at whatever
+        decommission/rotation path hestia's contract update adds.
+      - **The owner has no supported way to create a todo.** Public API
+        rejects owner Bearer tokens by design (I2); the BFF is
+        read-only (`GET /login`/`GET /callback`/`GET /`). Clara had to
+        `INSERT` directly to give มายด์ anything to look at. Not adding
+        write endpoints this milestone (scope, มายด์'s call, not asked
+        for) — but state this as a known limitation rather than let the
+        next person discover it the way Clara did, and record the open
+        design question: if the owner never holds an API credential and
+        the BFF never writes, who creates the owner's data — presumably
+        agents acting on the owner's behalf, my-task's actual answer, if
+        that's the intended pattern here too, say so rather than let the
+        view read as an unfinished stub.
+
+      **Owns: none new — fixes a real login-blocking bug found by the
+      first real user, plus two documentation gaps found standing the
+      first real instance up.** Blind test 6 (already planned) should
+      also include a real browser login attempt this time, not just an
+      API-key path, if that's practical for a context-free agent to
+      attempt.
+
 ## Open items, not owned by any task above
 
 - **`docs/DEPLOY-REQUIREMENTS.md`** needs updates threaded through
