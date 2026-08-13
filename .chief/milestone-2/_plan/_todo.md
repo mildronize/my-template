@@ -274,3 +274,23 @@ before this milestone started.
   consumer of the caveat hestia wrote into the SSO contract at commit
   `b8a4bf9` (per Clara, not a blocker, worth the runner knowing in
   advance).
+- **A sixth blind fork test was deliberately deferred, not skipped — record
+  this as a decision, not an omission (Clara's explicit instruction, since
+  a quietly-skipped verification is how a green milestone hides a broken
+  fork, which is exactly what blind test 5 caught).** Reasoning: milestone-3
+  (the React SPA, มายด์'s scope correction) replaces the Go-template view
+  and will change the fork procedure again — new build tooling, a
+  different `GET /`, likely another fork location — so a full blind round
+  now would certify a procedure already about to be rewritten, and its
+  findings would arrive half-stale. One full round happens after
+  milestone-3 ships, testing the procedure that actually goes out. In its
+  place, Clara ran a **targeted attack** on task-9's two structural fixes
+  specifically (not a doc read, since "I read it and it looks right" is
+  what failed on every one of blind test 5's findings): delete
+  `internal/transport/publicapi/todo_handler.go` per Step 8's own
+  instruction, and check (a) whether the harness moved into
+  `publicapi_testutil_test.go` (Blocker A) actually survives that deletion
+  rather than breaking `keys_handler_test.go` again, and (b) whether the
+  package still compiles without `newAPIError`/`actorID` vanishing with
+  the deleted file (Blocker B). Results recorded in this file once
+  reported.
