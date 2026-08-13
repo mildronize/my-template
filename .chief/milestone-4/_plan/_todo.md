@@ -385,6 +385,21 @@ caught a missing invariant test.
   I4 always meant in practice, not a weakening. Internal engineering, does
   not touch มายด์'s walkthrough — on his told-list, not a gate, same as
   I21 and the migration mapping above.
+- **The activity feed's same-millisecond order is by `id`, not by write
+  order (Clara's decision, `_contract/API.md` states it explicitly)** —
+  two events written within the same millisecond can display in either
+  relative order; only pagination (no drops, no duplicates) is guaranteed,
+  not causal ordering that fine-grained. Found while fixing a real bug: an
+  earlier version silently *dropped* a same-millisecond event from the
+  feed entirely (a precision mismatch between the stored timestamp and
+  the wire cursor), fixed by truncating storage to match the cursor's own
+  millisecond precision — the fix trades that data loss for *this*,
+  cosmetic, undefined-order residue, which matches my-task's own design
+  (its cursor's ids are equally uncorrelated with write order). The feed
+  is the centrepiece of what มายด์ actually asked for, and two events
+  landing out of causal order in a fast burst is exactly the kind of
+  thing he'd notice at acceptance and wonder about — worth him hearing
+  it's known and why, not discovering it unexplained.
 - **The no-browser-automation limit is a known, accepted gap for this
   milestone specifically**, not a general policy — Clara confirmed
   directly (checked for a fleet-wide `docker-playwright` skill, found it

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -27,6 +28,41 @@ func decodeBFFActivityFeed(t *testing.T, rec *httptest.ResponseRecorder) bffapi.
 	var got bffapi.ActivityFeed
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	return got
+}
+
+// onlyEventID reads todoID's own timeline through the real GET
+// .../events endpoint and returns the id of its one and only event —
+// used by TestBFFHandler_ListActivity_OrderingAndPagination to find a
+// just-created todo's own "created" event id, which the todo-creation
+// response itself doesn't carry (that response describes the todo, not
+// the event CreateTodo's own side effect wrote).
+func onlyEventID(t *testing.T, router *gin.Engine, sessionValue, todoID string) string {
+	t.Helper()
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/todos/"+todoID+"/events", sessionValue, nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	list := decodeBFFTodoEventList(t, rec)
+	require.Len(t, list.Events, 1, "expected exactly one event on this todo's timeline")
+	return list.Events[0].Id
+}
+
+// onlyEventIDOfType is onlyEventID's sibling for a todo whose timeline
+// has more than one event — finds the single event of eventType, failing
+// loudly if there's zero or more than one (a test relying on this
+// helper's own timestamp-pinning depends on there being exactly one
+// unambiguous target).
+func onlyEventIDOfType(t *testing.T, router *gin.Engine, sessionValue, todoID, eventType string) string {
+	t.Helper()
+	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/todos/"+todoID+"/events", sessionValue, nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	list := decodeBFFTodoEventList(t, rec)
+	var found []string
+	for _, e := range list.Events {
+		if e.Type == eventType {
+			found = append(found, e.Id)
+		}
+	}
+	require.Lenf(t, found, 1, "expected exactly one %q event on this todo's timeline, found %d", eventType, len(found))
+	return found[0]
 }
 
 // newBFFRouterForOwnerSharedDB is newBFFRouterForOwner's own setup
@@ -230,12 +266,35 @@ func TestDoneWhen12_ActivityFeed_CrossActorAttribution(t *testing.T) {
 
 // TestBFFHandler_ListActivity_OrderingAndPagination is a wiring/shape
 // sanity check beyond the cross-actor proof above: several events across
-// two todos come back newest-first, a page size smaller than the total
-// event count produces a non-nil nextCursor, and following that cursor
-// reaches the remaining events with no gap and no duplicate — mirrors
-// task-4's own TestBFFHandler_EventsRoundTrip_* sanity-check shape.
+// two todos come back paginated with no gap and no duplicate, and newest-
+// first ordering holds between events that are genuinely, distinctly
+// ordered in time — mirrors task-4's own TestBFFHandler_EventsRoundTrip_*
+// sanity-check shape.
+//
+// Two properties, asserted separately, on purpose — this test's first
+// version asserted only a single hardcoded page-by-page order and was
+// genuinely flaky (~30-45% failure rate under repeated runs, confirmed by
+// stress-testing it, not assumed): three events written back-to-back with
+// no delay regularly land two of them on the identical millisecond, and
+// same-millisecond order is undefined (`_contract/API.md`'s I15/pagination
+// note — matches my-task's own {createdAtMs, id} cursor exactly, whose
+// ids are cuids with no causal relationship to write order either;
+// same-millisecond order was never guaranteed by either system, just
+// astronomically unlikely to be exercised before this table existed).
+// `(created_at, id)` gives a *stable total order* (same rows, same order,
+// every query — no drops, no duplicates), which is the real pagination
+// guarantee; it does not give a *causal* one, and this test must not
+// assert a causal property the schema never promised.
+//
+//  1. Set-completeness and no-duplicates across every page, regardless of
+//     order — holds unconditionally, no timestamp control needed.
+//  2. Newest-first ordering, checked only between events pinned to
+//     explicitly distinct milliseconds (the same direct-SQL-overwrite
+//     technique internal/domain/todo/repo_test.go already uses) — so this
+//     assertion can fail for exactly one reason: a real ordering defect,
+//     never an unlucky same-millisecond tie.
 func TestBFFHandler_ListActivity_OrderingAndPagination(t *testing.T) {
-	router, sessionValue, _ := newBFFRouterForOwner(t)
+	router, sessionValue, _, conn, _, _ := newBFFRouterForOwnerSharedDB(t)
 
 	// Two todos, three events total: created(A), created(B), commented(B).
 	createA := doBFFJSONRequest(t, router, http.MethodPost, "/api/bff/todos", sessionValue, map[string]any{
@@ -254,36 +313,63 @@ func TestBFFHandler_ListActivity_OrderingAndPagination(t *testing.T) {
 		"type": "commented", "clientRequestId": "b-comment", "body": "on B",
 	})
 	require.Equal(t, http.StatusCreated, commentB.Code)
+	commentBID := decodeBFFTodoEvent(t, commentB).Id
 
-	// Page 1: limit=2, newest first — should be [commented(B), created(B)].
-	page1Rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/activity?limit=2", sessionValue, nil)
-	require.Equal(t, http.StatusOK, page1Rec.Code)
-	page1 := decodeBFFActivityFeed(t, page1Rec)
-	require.Len(t, page1.Items, 2)
-	assert.Equal(t, "commented", page1.Items[0].Type)
-	assert.Equal(t, todoB.Id, page1.Items[0].Todo.Id)
-	assert.Equal(t, "created", page1.Items[1].Type)
-	assert.Equal(t, todoB.Id, page1.Items[1].Todo.Id)
-	require.NotNil(t, page1.NextCursor, "a third event (created(A)) still exists beyond this page")
-
-	// Page 2: follow the cursor — should be exactly [created(A)], and
-	// exhausted (nil nextCursor).
-	page2Path := "/api/bff/activity?limit=2&cursorCreatedAtMs=" +
-		strconv.FormatInt(page1.NextCursor.CreatedAtMs, 10) + "&cursorId=" + page1.NextCursor.Id
-	page2Rec := doBFFJSONRequest(t, router, http.MethodGet, page2Path, sessionValue, nil)
-	require.Equal(t, http.StatusOK, page2Rec.Code)
-	page2 := decodeBFFActivityFeed(t, page2Rec)
-	require.Len(t, page2.Items, 1)
-	assert.Equal(t, "created", page2.Items[0].Type)
-	assert.Equal(t, todoA.Id, page2.Items[0].Todo.Id)
-	assert.Nil(t, page2.NextCursor, "every event has now been paged through")
-
-	// No overlap between the two pages.
-	page1IDs := map[string]bool{}
-	for _, item := range page1.Items {
-		page1IDs[item.Id] = true
+	// Pin all three events to explicitly distinct, one-hour-apart
+	// milliseconds — created(A) oldest, created(B) middle, commented(B)
+	// newest — removing any dependence on how fast this test happens to
+	// run. This is what makes property 2 below able to fail for only one
+	// reason.
+	base := time.Now().UTC().Truncate(time.Millisecond)
+	pin := func(eventID string, offsetHours int) {
+		_, err := conn.ExecContext(t.Context(), `UPDATE todo_events SET created_at = ? WHERE id = ?`,
+			base.Add(time.Duration(offsetHours)*time.Hour), eventID)
+		require.NoError(t, err)
 	}
-	assert.False(t, page1IDs[page2.Items[0].Id], "page 2's event must not have already appeared on page 1")
+	// createA's and createB's own event ids aren't returned by
+	// doBFFJSONRequest's todo-creation response (that's the todo, not the
+	// event) — look them up via each todo's own timeline.
+	createAEventID := onlyEventID(t, router, sessionValue, todoA.Id)
+	createBEventID := onlyEventIDOfType(t, router, sessionValue, todoB.Id, "created")
+	pin(createAEventID, 0)
+	pin(createBEventID, 1)
+	pin(commentBID, 2)
+
+	// Property 1: walk every page (limit=2, forcing at least two pages)
+	// and confirm the union is exactly the three events written, no more,
+	// no less, no duplicate — regardless of what order they came back in.
+	seen := map[string]bool{}
+	var itemCount int
+	path := "/api/bff/activity?limit=2"
+	for path != "" {
+		rec := doBFFJSONRequest(t, router, http.MethodGet, path, sessionValue, nil)
+		require.Equal(t, http.StatusOK, rec.Code)
+		feed := decodeBFFActivityFeed(t, rec)
+		for _, item := range feed.Items {
+			assert.Falsef(t, seen[item.Id], "event %s appeared on more than one page — duplicate", item.Id)
+			seen[item.Id] = true
+			itemCount++
+		}
+		if feed.NextCursor == nil {
+			break
+		}
+		path = "/api/bff/activity?limit=2&cursorCreatedAtMs=" +
+			strconv.FormatInt(feed.NextCursor.CreatedAtMs, 10) + "&cursorId=" + feed.NextCursor.Id
+	}
+	assert.Equal(t, 3, itemCount, "exactly three events were written; the full paginated walk must surface exactly three, no loss")
+	assert.True(t, seen[createAEventID] && seen[createBEventID] && seen[commentBID], "every written event must appear exactly once across the full walk")
+
+	// Property 2: newest-first ordering, checked only across the pinned,
+	// distinctly-timestamped events — commented(B) (newest) before
+	// created(B) (middle) before created(A) (oldest), on a single
+	// unpaginated fetch of all three.
+	allRec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/activity?limit=10", sessionValue, nil)
+	require.Equal(t, http.StatusOK, allRec.Code)
+	all := decodeBFFActivityFeed(t, allRec)
+	require.Len(t, all.Items, 3)
+	assert.Equal(t, commentBID, all.Items[0].Id, "newest-first: the most recently pinned event must lead")
+	assert.Equal(t, createBEventID, all.Items[1].Id, "newest-first: the middle-pinned event must be second")
+	assert.Equal(t, createAEventID, all.Items[2].Id, "newest-first: the oldest-pinned event must be last")
 }
 
 // TestBFFHandler_ListActivity_MalformedCursorRejected — a lone

@@ -346,6 +346,171 @@ func TestRepo_ListEventsFeed_NewestFirstAcrossTodos_WithJoinFields(t *testing.T)
 	assert.Empty(t, nextPage)
 }
 
+// TestRepo_InsertEvent_CreatedAtSurvivesMillisecondWireRoundTrip targets
+// the fix itself directly, not just its downstream consequence: proves
+// InsertEvent's stored created_at is already millisecond-precision, so
+// converting it to the feed's wire cursor format (UnixMilli) and back
+// (time.UnixMilli) is lossless — the actual property the pagination fix
+// depends on. This is deliberately independent of
+// TestRepo_ListEventsFeed_SameMillisecondCollisionPaginatesCorrectly
+// below, which proves the query's tie-break is correct GIVEN a genuine
+// collision (via a direct SQL overwrite, bypassing InsertEvent's own
+// clock entirely) — that test alone would still pass even without this
+// fix, since it never exercises InsertEvent's actual precision. Together:
+// this test proves storage and wire precision agree; the one below proves
+// pagination is correct once they do.
+//
+// Deliberately re-queries the row with its own fresh SELECT rather than
+// trusting InsertEvent's own returned struct (sourced from the INSERT's
+// RETURNING clause): RETURNING and a later SELECT are not guaranteed to
+// go through identical encode/decode paths in every driver, and the
+// fix's actual dependency is on what modernc.org/sqlite persists to and
+// reads back from the todo_events table's TIMESTAMP column (SQLite has
+// no native timestamp type — the driver's own time.Time <-> stored-value
+// mapping is what this test is really checking), not on what a single
+// Go struct happened to hold in memory immediately after the call that
+// built it.
+func TestRepo_InsertEvent_CreatedAtSurvivesMillisecondWireRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	conn := newTestDB(t)
+	createTestUser(t, conn, "user-1", "user-one")
+	repo := NewRepo(conn)
+
+	todo, err := repo.Create(ctx, "user-1", "task", CreateParams{})
+	require.NoError(t, err)
+
+	inserted, err := repo.InsertEvent(ctx, todo.ID, "user-1", EventCreated, nil, nil, "req-1")
+	require.NoError(t, err)
+
+	var reread time.Time
+	require.NoError(t, conn.QueryRowContext(ctx,
+		`SELECT created_at FROM todo_events WHERE id = ?`, inserted.ID,
+	).Scan(&reread))
+	reread = reread.UTC()
+
+	roundTripped := time.UnixMilli(reread.UnixMilli()).UTC()
+	assert.Truef(t, reread.Equal(roundTripped),
+		"created_at, freshly re-read from the database via its own SELECT (not InsertEvent's own returned "+
+			"struct, which only proves the RETURNING clause's value, not a genuine write-then-read round trip "+
+			"through the driver) (%v), must equal its own millisecond-wire round trip (%v) — a mismatch here is "+
+			"exactly what let the pagination boundary bug through: a cursor rebuilt from the wire format could "+
+			"never equal the fuller-precision value it was supposedly reconstructing", reread, roundTripped)
+}
+
+// TestRepo_ListEventsFeed_SameMillisecondCollisionPaginatesCorrectly proves
+// the millisecond-precision fix by construction, not by repetition.
+//
+// The bug this guards: InsertEvent used to store time.Now().UTC() at full
+// (sub-millisecond) Go precision, while the feed's own wire cursor
+// (bff.ActivityCursor.CreatedAtMs, _contract/API.md) is millisecond-only —
+// mirroring my-task's own Date.getTime()-based cursor. Reconstructing a
+// cursor from that wire value (time.UnixMilli) and comparing it against a
+// full-precision stored created_at meant the query's `created_at =
+// cursor_created_at` tie-break branch essentially never matched the true
+// boundary row, silently dropping any event sharing that row's exact
+// millisecond from the next page. TestBFFHandler_ListActivity_
+// OrderingAndPagination (internal/transport/bff) hit this ~30% of the time
+// under repeated runs — a real, hardware-dependent flake, not a
+// theoretical edge case — because it wrote three events back-to-back with
+// no artificial delay, which regularly landed two of them in the same
+// wall-clock millisecond.
+//
+// A flaky reproduction proves "it did not happen this time", never "it
+// cannot happen" — thirty green runs are still zero proof against the
+// thirty-first. This test instead forces two events onto the exact same
+// millisecond directly (the same technique the test above already uses to
+// force a deterministic ordering) and asserts the page boundary is correct
+// unconditionally, every run, by construction.
+func TestRepo_ListEventsFeed_SameMillisecondCollisionPaginatesCorrectly(t *testing.T) {
+	ctx := context.Background()
+	conn := newTestDB(t)
+	createTestUser(t, conn, "user-1", "user-one")
+	repo := NewRepo(conn)
+
+	todo, err := repo.Create(ctx, "user-1", "collision todo", CreateParams{})
+	require.NoError(t, err)
+
+	older, err := repo.InsertEvent(ctx, todo.ID, "user-1", EventCreated, nil, nil, "req-older")
+	require.NoError(t, err)
+
+	first, err := repo.InsertEvent(ctx, todo.ID, "user-1", EventCommented, nil, strPtr("first"), "req-collide-1")
+	require.NoError(t, err)
+	second, err := repo.InsertEvent(ctx, todo.ID, "user-1", EventCommented, nil, strPtr("second"), "req-collide-2")
+	require.NoError(t, err)
+
+	// Force first and second onto the exact same millisecond-truncated
+	// instant — genuinely equal, not merely close — regardless of how fast
+	// or slow the machine running this test happens to be. Deliberately a
+	// value already truncated to millisecond precision (matches what
+	// InsertEvent itself now writes), so this test exercises the same
+	// invariant the fix establishes, not a stricter one.
+	//
+	// older is ALSO pinned explicitly, to a value unambiguously before the
+	// collision instant — this test's own first version left older's
+	// timestamp at whatever wall-clock InsertEvent happened to write, and
+	// on a fast enough run older could land in the very same millisecond
+	// as first/second too, turning an intended two-way collision into an
+	// accidental three-way one and making the rest of this test flaky in
+	// exactly the way it exists to rule out. Every timestamp this test's
+	// correctness depends on must be pinned; none may be left to the
+	// wall clock.
+	collisionInstant := time.Now().UTC().Truncate(time.Millisecond)
+	olderInstant := collisionInstant.Add(-time.Hour)
+	_, err = conn.ExecContext(ctx, `UPDATE todo_events SET created_at = ? WHERE id = ?`, olderInstant, older.ID)
+	require.NoError(t, err)
+	for _, id := range []string{first.ID, second.ID} {
+		_, err := conn.ExecContext(ctx, `UPDATE todo_events SET created_at = ? WHERE id = ?`, collisionInstant, id)
+		require.NoError(t, err)
+	}
+
+	// Sanity: the collision is real before trusting anything downstream of
+	// it — reading the rows back and comparing timestamps directly,
+	// independent of whatever the feed query itself does with them.
+	var storedCount int
+	require.NoError(t, conn.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM todo_events WHERE created_at = ? AND id IN (?, ?)`,
+		collisionInstant, first.ID, second.ID,
+	).Scan(&storedCount))
+	require.Equal(t, 2, storedCount, "both rows must genuinely share one created_at value before this test proves anything about pagination across it")
+
+	// Page 1, limit 1: newest first, so whichever of {first, second} sorts
+	// later by id (the query's own tie-break for equal created_at) comes
+	// back, with a non-nil cursor pointing at that exact row.
+	page1, err := repo.ListEventsFeed(ctx, nil, nil, 1)
+	require.NoError(t, err)
+	require.Len(t, page1, 1)
+	boundary := page1[0]
+	assert.Contains(t, []string{first.ID, second.ID}, boundary.Event.ID)
+
+	// Page 2, following that cursor: must return the OTHER same-millisecond
+	// row, not skip straight past both of them to `older`. This is exactly
+	// where the bug dropped a row — the truncated, reconstructed cursor
+	// failing to `=`-match the full-precision stored value meant the true
+	// tie-break sibling was excluded by both branches of the query's WHERE
+	// clause.
+	page2, err := repo.ListEventsFeed(ctx, &boundary.Event.CreatedAt, &boundary.Event.ID, 1)
+	require.NoError(t, err)
+	require.Len(t, page2, 1, "the same-millisecond sibling must not be silently dropped")
+	otherOfPair := first.ID
+	if boundary.Event.ID == first.ID {
+		otherOfPair = second.ID
+	}
+	assert.Equal(t, otherOfPair, page2[0].Event.ID)
+
+	// Page 3: the older, distinctly-timestamped event, and only that —
+	// proving the walk continues correctly past the collision rather than
+	// re-returning something already seen.
+	page3, err := repo.ListEventsFeed(ctx, &page2[0].Event.CreatedAt, &page2[0].Event.ID, 1)
+	require.NoError(t, err)
+	require.Len(t, page3, 1)
+	assert.Equal(t, older.ID, page3[0].Event.ID)
+
+	// No duplicates and no loss across the full walk: exactly the three
+	// events inserted, each exactly once.
+	seen := map[string]bool{page1[0].Event.ID: true, page2[0].Event.ID: true, page3[0].Event.ID: true}
+	assert.Len(t, seen, 3)
+}
+
 // --- I15's transaction seam, exercised directly at the repo layer -------
 
 // TestRepo_WithinTx_RollsBackOnError proves WithinTx's own mechanism: a

@@ -405,7 +405,26 @@ func (r *Repo) InsertEvent(ctx context.Context, todoID, actorID string, eventTyp
 		Payload:         ptrToNullString(payload),
 		Body:            ptrToNullString(body),
 		ClientRequestID: clientRequestID,
-		CreatedAt:       time.Now().UTC(),
+		// Truncated to millisecond precision (Truncate, not left at Go's
+		// full sub-millisecond time.Now() resolution) — task-5 (activity
+		// feed) found that storing full precision while the feed's own
+		// wire cursor is millisecond-only (its own contract shape,
+		// matching my-task's own Date.getTime()-based cursor) silently
+		// drops rows: the query's tie-break compares the millisecond-
+		// truncated *reconstructed* cursor against the full-precision
+		// *stored* value with `<`/`=`, and a truncated value is never
+		// equal to and never later than the original it was truncated
+		// from — so the boundary row's own equality branch never fires,
+		// and any other row sharing that millisecond looks earlier than
+		// the cursor and gets excluded. Storage and wire precision must
+		// agree for a millisecond-cursor tie-break to work at all; this
+		// is that agreement, not an arbitrary precision choice. Restores
+		// parity with my-task's own source (Date.getTime(), natively
+		// millisecond) rather than adding a constraint beyond it — this
+		// Go port introduced the finer precision the source never had.
+		// The *next* cursor anyone adds to this table must keep this
+		// true, not just this one.
+		CreatedAt: time.Now().UTC().Truncate(time.Millisecond),
 	})
 	if err != nil {
 		return TodoEvent{}, err

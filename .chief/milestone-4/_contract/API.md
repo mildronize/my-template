@@ -117,6 +117,21 @@ adapted from tRPC to this surface's plain-JSON convention. Owner-session
 only; no agent-facing equivalent (same reasoning `activity.list` itself
 has no REST counterpart in my-task).
 
+**Same-millisecond order is by `id`, not by write order — stated
+explicitly, not left implicit.** `(created_at, id)` gives the cursor a
+*stable total order* (no drops, no duplicates across a paginated walk,
+regardless of how a tie resolves), which is the guarantee this endpoint
+actually makes. It does not give a *causal* one: two events written
+within the same millisecond can come back in either relative order, since
+`id` (a UUID) carries no relationship to write sequence. This matches
+my-task's own design exactly (its `{createdAtMs, id}` cursor uses cuids,
+equally uncorrelated with write order) — same-millisecond order was never
+guaranteed by either system, only unlikely to be exercised until this
+table's own write frequency made it common. Causal order *within* one
+todo is `seq`, monotonic and unaffected by any of this; what's undefined
+is only cross-todo interleaving inside a single millisecond, which
+neither this endpoint nor the named source has ever promised.
+
 ## `bff` — key endpoints, semantics replaced (I21)
 
 `GET /api/bff/keys` now returns every `role='agent'` user's non-revoked
