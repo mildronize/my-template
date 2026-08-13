@@ -57,6 +57,31 @@ import (
 // Deliberately not a general "handle every form" parser — the same
 // restraint the SQL scanner's own fix used — this closes the one
 // realistic case (a URL) named directly, nothing broader.
+//
+// Known, accepted residual: a protocol-relative URL (`"//cdn.example.com"`,
+// no scheme, no leading `:`) still trips the same truncation this guard
+// closes for `https://` — the preceding character there is a quote, not
+// a colon, so the `:` guard doesn't cover it. Rarer than a scheme'd URL
+// and largely obsolete in a Vite app, but real. Deliberately NOT fixed:
+// this is the third round of hardening this one heuristic today, each
+// round narrower than the last (a comment naming the API, then a scheme'd
+// URL, now a schemeless one) — that pattern is a regress, not convergence
+// on correctness, and the next fix would reveal a case narrower still. A
+// better parser is the arms race this file already declined once (see
+// above); declining it a second time, for the same reason, is the
+// consistent call, not a lapse.
+//
+// Why stopping here is legitimate rather than lazy: this check is not
+// I20's primary proof. It is the structural half — a future component
+// cannot quietly reach for the forbidden API without this catching it in
+// the realistic cases above — sitting behind the behavioral half
+// (web/src/components/TimelineEventRow.test.tsx's Done-when-10 suite),
+// which proves the property that actually protects anyone: a comment
+// body containing raw HTML genuinely renders escaped, not live. A
+// heuristic gap here is a gap in defence-in-depth, not a gap in the
+// invariant itself — and that framing is only available because two
+// independent proofs exist. If this were I20's only evidence, accepting
+// a known hole in it would not be a legitimate call to make.
 var (
 	jsBlockCommentRe = regexp.MustCompile(`(?s)/\*.*?\*/`)
 	jsLineCommentRe  = regexp.MustCompile(`(^|[^:])//[^\n]*`)
