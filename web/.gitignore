@@ -1,0 +1,17 @@
+node_modules
+dist-ssr
+*.local
+*.tsbuildinfo
+
+# web/dist is the Vite build output cmd/server's //go:embed directive
+# (web/embed.go) reads at Go compile time — see that file's own comment.
+# A real `npm run build` output is a generated artifact, not something to
+# commit; but go:embed needs *something* on disk to reference even before
+# anyone has run `npm run build` (a fresh `git clone` + `go build ./...`,
+# with no npm step first, is a real path — go build/go test/go vet all
+# hit this). So dist's real build output is ignored, except for a single
+# tracked placeholder (dist/.gitkeep) that keeps the directory non-empty
+# on a fresh checkout. `npm run build` overwrites/adds to this directory
+# freely; .gitkeep just sits alongside the real output, untouched.
+dist/*
+!dist/.gitkeep
