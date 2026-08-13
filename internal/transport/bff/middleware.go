@@ -155,9 +155,11 @@ func RequireSession(signer *Signer, users identity.UserRepo, logger *slog.Logger
 	}
 }
 
-// ActorFromContext returns the identity.User RequireSession resolved for
-// this request. view_handler.go reads this instead of ever querying
-// users itself (I4).
+// ActorFromContext returns the identity.User RequireSession or
+// RequireJSONSession (json_middleware.go) resolved for this request — both
+// middlewares set the same actorContextKey, so every handler in this
+// package (me_handler.go, todo_handler.go, keys_handler.go) reads it
+// through this one function instead of ever querying users itself (I4).
 func ActorFromContext(c *gin.Context) (identity.User, bool) {
 	v, ok := c.Get(actorContextKey)
 	if !ok {

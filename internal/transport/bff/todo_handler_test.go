@@ -28,10 +28,11 @@ func decodeBFFTodo(t *testing.T, rec *httptest.ResponseRecorder) bffapi.Todo {
 // newBFFRouterForOwner is this file's single-owner setup: a fresh test
 // DB, a freshly seeded owner, a live signed session cookie for that owner
 // (session.go's Signer.NewSessionCookie, called directly — the same
-// session-seeding shortcut milestone-2's Done-when-9 test
-// (view_handler_test.go) already established and
-// .chief/milestone-3/_plan/_todo.md's task-2 spec points at reusing, "no
-// need to drive it through /callback"), and the full /api/bff router
+// session-seeding shortcut milestone-2's own Done-when-9 test established
+// (its view_handler_test.go, removed by milestone-3/task-3 once the SPA
+// replaced what it rendered) and .chief/milestone-3/_plan/_todo.md's
+// task-2 spec points at reusing, "no need to drive it through /callback"),
+// and the full /api/bff router
 // (real middleware chain: RejectActorFields, RequireJSONSession,
 // bff-openapi.yaml's request validator, then the composed
 // ServerInterface — newTestRouter, bff_testutil_test.go).
@@ -214,10 +215,12 @@ func TestI3_BFFHandlerOwnershipScoping_ReturnsNotFoundNotForbidden(t *testing.T)
 
 // TestBFFHandler_ListTodos_Unauthenticated_Returns401NotRedirect proves
 // _contract/API.md's explicit behavior change on this surface: unlike
-// GET / (RequireSession, view_handler_test.go's own
-// TestViewMiddleware_MissingSessionRedirectsToLogin), a missing session on
-// /api/bff answers 401 JSON, never a 302 redirect — "a fetch call can't
-// follow a redirect the way a browser navigation does."
+// RequireSession (middleware.go — the html/template view's own
+// session-gate, redirect-to-/login shaped, now unused in production code
+// since milestone-3/task-3 removed its one caller, view_handler.go), a
+// missing session on /api/bff answers 401 JSON, never a 302 redirect —
+// "a fetch call can't follow a redirect the way a browser navigation
+// does."
 func TestBFFHandler_ListTodos_Unauthenticated_Returns401NotRedirect(t *testing.T) {
 	router, _, _ := newBFFRouterForOwner(t)
 

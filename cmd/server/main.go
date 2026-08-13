@@ -262,25 +262,19 @@ var _ bffapi.ServerInterface = bffServer{}
 // oauth.go's configured() themselves at request time, returning a clear
 // error page instead of a working flow when the config is incomplete.
 //
-// milestone-3/task-1 note on GET /: internal/transport/bff/view_handler.go
-// (the old Go-html/template owner view) and its test are deliberately NOT
-// touched here or anywhere in this task — that file's removal is task-3's,
-// per this task's own "what NOT to do" list. What *does* change here is
-// which route claims the exact path "/": this function no longer
-// registers view_handler.go's GET / on router at all, so the embedded SPA
-// (below, via NoRoute) can actually serve "/" — leaving the old
-// registration in place would have made "/" permanently unreachable for
-// the SPA, since gin always prefers an explicit route over NoRoute.
-// NewViewHandler itself is untouched and still fully covered by its own
-// package's tests (internal/transport/bff/view_handler_test.go builds its
-// own router directly, independent of this function — see that package's
-// bff_testutil_test.go's newTestRouter) — it's just not wired into the
-// live binary's routing table from this call site anymore. todoSvc is
-// still accepted here (now used by the /api/bff JSON surface below,
-// milestone-3/task-2 — the same instance wirePublicAPI's own TodoServer
-// uses, per ARCHITECTURE.md's shared-service-layer rule) so an obvious
-// place already existed for task-2 to wire a todos-backed route at this
-// layer, exactly as this comment predicted it would.
+// milestone-3/task-1/task-3 note on GET /: internal/transport/bff/
+// view_handler.go (the old Go-html/template owner view) claimed the exact
+// path "/" until task-1, which stopped registering it here so the embedded
+// SPA (below, via NoRoute) could actually serve "/" instead — gin always
+// prefers an explicit route over NoRoute, so leaving that registration in
+// place would have made "/" permanently unreachable for the SPA.
+// view_handler.go and its test were deliberately left in place through
+// task-1/task-2 (each task's own "what NOT to do" list) and removed by
+// task-3, once the SPA's own todos screen replaced what it rendered —
+// there is no view_handler.go left in this package at all now. todoSvc is
+// still accepted here for the /api/bff JSON surface below
+// (milestone-3/task-2 — the same instance wirePublicAPI's own TodoServer
+// uses, per ARCHITECTURE.md's shared-service-layer rule).
 // distFS is the SPA's already-fs.Sub'd dist filesystem — see buildHandler's
 // own doc comment on why this is a parameter rather than wireBFF reaching
 // into web.DistFS itself.

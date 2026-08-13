@@ -238,6 +238,11 @@ func newIDVerifier(t *testing.T, f *fakeIDP) identity.JWTVerifier {
 // prove this package's own handlers, not main.go's composition, which
 // Done-when 3's own test (cmd/server/main_test.go) covers separately.
 //
+// milestone-3/task-3 removed view_handler.go (the old Go-html/template
+// owner view, replaced by the embedded SPA) and its own GET / route
+// registration that used to live here — todoSvc is still accepted for the
+// /api/bff group's TodoServer, below.
+//
 // identitySvc (milestone-3/task-2, new) backs the /api/bff group's
 // KeysServer (ListKeys/RevokeKey) the same way todoSvc backs its
 // TodoServer — nil is an acceptable value for any test that only
@@ -249,7 +254,6 @@ func newTestRouter(cfg *platform.Config, signer *Signer, idVerifier identity.JWT
 	logger := testLogger()
 	r.GET("/login", NewLoginHandler(cfg, signer, logger))
 	r.GET("/callback", NewCallbackHandler(cfg, signer, idVerifier, repo, logger))
-	r.GET("/", RequireSession(signer, repo, logger), NewViewHandler(todoSvc))
 
 	// /api/bff mirrors cmd/server/main.go's wireBFF composition exactly
 	// (RejectActorFields -> RequireJSONSession -> bff-openapi.yaml's
