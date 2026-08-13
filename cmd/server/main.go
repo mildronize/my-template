@@ -1,16 +1,24 @@
 // Command server is the template's HTTP service entrypoint. It wires
-// config, logging, the SQLite connection, and the gin router together and
-// starts listening. internal/transport/publicapi's routes (todo CRUD,
-// GET /me, /keys) are composed here — this file stays thin on purpose.
-// internal/transport/bff's own routes are wired the same way once task-4
-// adds that engine.
+// config, logging, the SQLite connection, and two gin engines together and
+// starts listening on one port: internal/transport/publicapi's routes
+// (todo CRUD, GET /me, /keys, mounted under /api/v1 plus /healthz) and
+// internal/transport/bff's routes (GET /login, GET /callback, GET / —
+// task-4) share one *sql.DB and one *identity.Repo/*todo.Service, but each
+// gets its own *gin.Engine (and its own copy of platform's cross-cutting
+// middleware — see buildHandler) since they're different transport
+// surfaces per ARCHITECTURE.md. A stdlib http.ServeMux in front dispatches
+// by path prefix to whichever engine owns it — this keeps the "one port"
+// deployment model docker-compose.yml and DEPLOY-REQUIREMENTS.md already
+// document, rather than needing a second listener for bff.
 package main
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -21,6 +29,7 @@ import (
 	"github.com/mildronize/my-template/internal/domain/todo"
 	"github.com/mildronize/my-template/internal/identity"
 	"github.com/mildronize/my-template/internal/platform"
+	"github.com/mildronize/my-template/internal/transport/bff"
 	"github.com/mildronize/my-template/internal/transport/publicapi"
 )
 
@@ -50,54 +59,93 @@ func run() error {
 		return fmt.Errorf("applying migrations: %w", err)
 	}
 
-	// platform.NewRouter already wires the cross-cutting middleware every
-	// engine needs (RequestID, RequestLogging, Recovery — platform/
-	// middleware.go) — this router is internal/transport/publicapi's
-	// engine; internal/transport/bff gets its own from the same
-	// constructor once task-4 adds it.
-	router := platform.NewRouter(logger)
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	apiV1, identitySvc, err := wireIdentity(ctx, router, db, cfg, logger)
+	handler, err := buildHandler(ctx, cfg, db, logger)
 	if err != nil {
-		return fmt.Errorf("wiring identity module: %w", err)
-	}
-
-	if err := wirePublicAPI(apiV1, db, identitySvc); err != nil {
-		return fmt.Errorf("wiring public API: %w", err)
+		return fmt.Errorf("building HTTP handler: %w", err)
 	}
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
-	if err := platform.RunServer(ctx, logger, addr, router); err != nil {
+	if err := platform.RunServer(ctx, logger, addr, handler); err != nil {
 		return fmt.Errorf("running server: %w", err)
 	}
 
 	return nil
 }
 
-// wireIdentity builds the identity module (repo, service, JWT verifier)
-// and mounts the /api/v1 group with its two request-gating middlewares —
-// I1's RejectActorFields before I2/I5's RequireActor, both now living in
-// internal/transport/publicapi (ARCHITECTURE.md — internal/identity holds
-// no transport code of its own). It does not register any routes itself:
-// route registration happens once, in wirePublicAPI, after every piece of
-// publicapi's ServerInterface exists to compose (identity's GetMe/keys
-// alongside todo's CRUD), so GET /api/v1/me runs through the same
+// buildHandler composes both this service's transport surfaces into one
+// http.Handler — split out of run() so a test can build (and inspect) the
+// exact same handler without actually binding a port. This is what
+// task-1's Done-when 3 ("platform/middleware.go's recovery/logging/
+// request-ID wired into both publicapi and bff engines — a test confirms
+// both, not just one") is checked against: main_test.go builds this
+// handler against a temp test database and asserts both the /api/v1
+// surface and the bff surface set RequestID's response header, which only
+// happens if each engine actually has platform.NewRouter's middleware
+// registered on it (gin's Use()-registered middleware runs even on an
+// unmatched route, per gin's own 404-handler-chain behavior, so this is
+// checkable without a single real route on either engine needing to
+// match).
+func buildHandler(ctx context.Context, cfg *platform.Config, db *sql.DB, logger *slog.Logger) (http.Handler, error) {
+	repo := identity.NewRepo(db)
+	todoSvc := todo.NewService(todo.NewRepo(db))
+
+	// --- publicapi ----------------------------------------------------
+	apiRouter := platform.NewRouter(logger)
+
+	apiV1, identitySvc, err := wireIdentity(ctx, apiRouter, repo, cfg, logger)
+	if err != nil {
+		return nil, fmt.Errorf("wiring identity module: %w", err)
+	}
+	if err := wirePublicAPI(apiV1, todoSvc, identitySvc); err != nil {
+		return nil, fmt.Errorf("wiring public API: %w", err)
+	}
+
+	// --- bff ------------------------------------------------------------
+	bffRouter := platform.NewRouter(logger)
+	if err := wireBFF(ctx, bffRouter, cfg, repo, todoSvc, logger); err != nil {
+		return nil, fmt.Errorf("wiring bff: %w", err)
+	}
+
+	// Both engines share one port — a stdlib mux dispatches by path prefix.
+	// "/api/v1/" and "/healthz" are publicapi's; everything else (bff's
+	// "/", "/login", "/callback") falls through to the "/" pattern, which
+	// net/http.ServeMux treats as the catch-all for anything not matched
+	// by a more specific registered pattern. Neither engine strips a
+	// prefix — each still sees the request's full original path, which is
+	// exactly what each engine's own route registrations (below) expect.
+	mux := http.NewServeMux()
+	mux.Handle("/api/v1/", apiRouter)
+	mux.Handle("/healthz", apiRouter)
+	mux.Handle("/", bffRouter)
+
+	return mux, nil
+}
+
+// wireIdentity builds the identity module's actor-resolution
+// middlewares onto router's "/api/v1" group — I1's RejectActorFields
+// before I2/I5's RequireActor, both living in internal/transport/publicapi
+// (ARCHITECTURE.md — internal/identity holds no transport code of its
+// own). It does not register any routes itself: route registration
+// happens once, in wirePublicAPI, after every piece of publicapi's
+// ServerInterface exists to compose (identity's GetMe/keys alongside
+// todo's CRUD), so GET /api/v1/me runs through the same
 // generated/validated path as everything else (task-3) instead of a
 // bespoke route added here.
+//
+// repo is built once by buildHandler and passed in (rather than
+// constructed here) so internal/transport/bff's own callback/view
+// handlers resolve users through the exact same *identity.Repo instance —
+// one repo per process, not two independently-constructed ones that
+// happen to wrap the same *sql.DB today but could drift.
 //
 // It also returns the built *identity.Service (not just the
 // gin.RouterGroup), so wirePublicAPI can build publicapi.KeysServer on top
 // of the exact same Service instance RequireActor authenticates requests
-// with — one Service per process, not a second one constructed
-// independently in wirePublicAPI that would happen to work today but
-// drift the moment identity.NewService gains a dependency wirePublicAPI
-// doesn't have.
-func wireIdentity(ctx context.Context, router *gin.Engine, conn *sql.DB, cfg *platform.Config, logger *slog.Logger) (*gin.RouterGroup, *identity.Service, error) {
-	repo := identity.NewRepo(conn)
-
+// with.
+func wireIdentity(ctx context.Context, router *gin.Engine, repo *identity.Repo, cfg *platform.Config, logger *slog.Logger) (*gin.RouterGroup, *identity.Service, error) {
 	// The JWT branch is a wired-but-dormant seam (GOAL.md) — a
 	// deployment without both SSO_ISSUER and AUTH_AUDIENCE configured
 	// simply never builds a verifier, and Service treats a nil
@@ -141,21 +189,78 @@ var _ api.ServerInterface = apiServer{}
 // identity's GetMe included, on apiV1 in one call. The validator is
 // mounted after RejectActorFields/RequireActor (see wireIdentity) so a
 // request is authenticated before its payload shape is validated, not the
-// other way around.
-func wirePublicAPI(apiV1 *gin.RouterGroup, conn *sql.DB, identitySvc *identity.Service) error {
+// other way around. todoSvc is built once by buildHandler and shared with
+// wireBFF's own GET / handler (ARCHITECTURE.md's shared-service-layer
+// rule — one todo.Service instance, not two).
+func wirePublicAPI(apiV1 *gin.RouterGroup, todoSvc *todo.Service, identitySvc *identity.Service) error {
 	validator, err := api.RequestValidator()
 	if err != nil {
 		return fmt.Errorf("building openapi request validator: %w", err)
 	}
 	apiV1.Use(validator)
 
-	todoSvc := todo.NewService(todo.NewRepo(conn))
-
 	api.RegisterHandlers(apiV1, apiServer{
 		MeServer:   publicapi.MeServer{},
 		KeysServer: publicapi.NewKeysServer(identitySvc),
 		TodoServer: publicapi.NewTodoServer(todoSvc),
 	})
+
+	return nil
+}
+
+// wireBFF builds internal/transport/bff's session signer and its
+// owner-login flow's id-token verifier, then registers GET /login,
+// GET /callback, and the session-gated GET / on router (task-4.md,
+// _contract/API.md's BFF section) — completing task-1's Done-when 3
+// (platform's middleware wired into both engines): router here already
+// carries platform.NewRouter's RequestID/RequestLogging/Recovery, applied
+// by buildHandler exactly the way it's applied to publicapi's own router.
+//
+// Neither cfg.SessionSecret being auto-generated nor
+// SSOClientID/SSOClientSecret being unset stop this from wiring routes —
+// GETTING-STARTED.md's own walkthrough promises the server (and the
+// public API) keep working with no Hydra client registered yet, so
+// GET /login and GET /callback mount unconditionally and check
+// oauth.go's configured() themselves at request time, returning a clear
+// error page instead of a working flow when the config is incomplete.
+func wireBFF(ctx context.Context, router *gin.Engine, cfg *platform.Config, repo *identity.Repo, todoSvc *todo.Service, logger *slog.Logger) error {
+	secret := []byte(cfg.SessionSecret)
+	if len(secret) == 0 {
+		secret = make([]byte, 32)
+		if _, err := rand.Read(secret); err != nil {
+			return fmt.Errorf("generating ephemeral session secret: %w", err)
+		}
+		logger.Warn("SESSION_SECRET not set — generated an ephemeral one for this process; " +
+			"existing BFF sessions will not survive a restart. Set SESSION_SECRET for any real " +
+			"deployment (docs/DEPLOY-REQUIREMENTS.md).")
+	}
+	signer := bff.NewSigner(secret)
+
+	// The id-token verifier is built the same way internal/identity's own
+	// Bearer-JWT verifier is (identity.NewJWTVerifier — RS256-pinned,
+	// iss/aud/exp checked, I6/I7), but audienced to this OAuth client's own
+	// id rather than AUTH_AUDIENCE: an id_token's `aud` claim is the
+	// client_id per OIDC, not the API audience publicapi's Bearer path
+	// checks. Left nil (the same "dormant seam" shape as wireIdentity's own
+	// jwtVerifier) when SSO_ISSUER/SSO_CLIENT_ID aren't both set —
+	// callback_handler.go's configured() check already covers the same
+	// condition, so requests fail with a clear message rather than this
+	// verifier being nil unexpectedly.
+	var idVerifier identity.JWTVerifier
+	if cfg.SSOIssuer != "" && cfg.SSOClientID != "" {
+		v, err := identity.NewJWTVerifier(ctx, cfg.SSOIssuer, cfg.SSOClientID)
+		if err != nil {
+			return fmt.Errorf("building bff id-token verifier: %w", err)
+		}
+		idVerifier = v
+	} else {
+		logger.Warn("SSO_ISSUER/SSO_CLIENT_ID not both set — owner login (bff) will show a " +
+			"configuration error until scripts/register.sh's Step 1 is run (see docs/GETTING-STARTED.md)")
+	}
+
+	router.GET("/login", bff.NewLoginHandler(cfg, signer, logger))
+	router.GET("/callback", bff.NewCallbackHandler(cfg, signer, idVerifier, repo, logger))
+	router.GET("/", bff.RequireSession(signer, repo, logger), bff.NewViewHandler(todoSvc))
 
 	return nil
 }

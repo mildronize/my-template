@@ -17,6 +17,7 @@ require (
 	github.com/pressly/goose/v3 v3.27.3
 	github.com/sqlc-dev/sqlc v1.31.1
 	github.com/stretchr/testify v1.11.1
+	golang.org/x/oauth2 v0.36.0
 	modernc.org/sqlite v1.56.0
 )
 

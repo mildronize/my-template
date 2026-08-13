@@ -14,8 +14,10 @@ more, no fewer:
 | --- | --- | --- | --- |
 | `PORT` | no | `8080` | TCP port the HTTP server listens on. |
 | `DATABASE_PATH` | no | `./data/app.db` | Filesystem path to the SQLite file. Its parent directory is created on startup if missing. **Must resolve to a path on a volume that survives container restarts and rebuilds** — see "SQLite volume" below. |
-| `SSO_ISSUER` | only to enable the JWT path | *(empty)* | Hydra's issuer URL — used both to validate a Bearer JWT's `iss` claim and to locate its `/.well-known/jwks.json` for JWKS fetch+cache (contract §7.3, I7). |
-| `AUTH_AUDIENCE` | only to enable the JWT path | *(empty)* | This service's own public URL. See "Audience convention" below — do **not** treat this as an opaque service name. |
+| `SSO_ISSUER` | only to enable the JWT path | *(empty)* | Hydra's issuer URL — used both to validate a Bearer JWT's `iss` claim and to locate its `/.well-known/jwks.json` for JWKS fetch+cache (contract §7.3, I7). Also used, when set, as the base URL `internal/transport/bff` builds `/oauth2/auth` and `/oauth2/token` from for the owner-login flow — one issuer var, two consumers. |
+| `AUTH_AUDIENCE` | only to enable the JWT path, **and** required for owner login | *(empty)* | This service's own public URL. See "Audience convention" below — do **not** treat this as an opaque service name. `internal/transport/bff`'s `GET /callback` redirect URI is derived from this (`${AUTH_AUDIENCE}/callback`) — the same value Step 1's `scripts/register.sh` registered as `SERVICE_PUBLIC_URL`. |
+| `SSO_CLIENT_ID` / `SSO_CLIENT_SECRET` | only to enable owner login (`internal/transport/bff`) | *(empty)* | This service's own Hydra OAuth2 client credentials for the `authorization_code`+PKCE owner-login flow (contract §2) — printed once by `scripts/register.sh` on success (see "Owner-login Hydra client registration" below). Leaving either unset is supported: the server still starts and the public API still works (`docs/GETTING-STARTED.md`'s walkthrough never touches `bff`) — `GET /login`/`GET /callback` just answer with a plain "owner login isn't configured yet" page instead of a working flow. |
+| `SESSION_SECRET` | no (but strongly recommended for anything beyond one-off local testing) | *(none — generated per-process if unset)* | HMAC key `internal/transport/bff` signs/verifies its session and state cookies with (`DATA_MODEL.md`'s "BFF session" note — no server-side session store; the signature is the whole validity proof). If unset, `cmd/server` generates a random one at startup and logs a warning — the server still starts, but every existing owner session is invalidated on the next restart. Set this explicitly (and keep it stable across restarts/`chmod 600`) for any deployment where "stay logged in across a restart" matters. |
 
 `SSO_ISSUER` and `AUTH_AUDIENCE` are a pair: `cmd/server` only builds a JWT
 verifier when **both** are set (`main.go`'s `wireIdentity`). Leaving either
@@ -26,6 +28,13 @@ only`) rather than failing to start. **Read `docs/GETTING-STARTED.md`'s
 "JWT seam" section before deciding to set these for a real deployment** —
 as of this milestone the JWT path is wired-but-dormant by design, not a
 live SSO integration hestia should turn on by default.
+
+**`AUTH_AUDIENCE`/`SSO_ISSUER` being dormant-by-design for the JWT path
+above is a separate question from whether owner login works.** Owner login
+(`internal/transport/bff`) needs `SSO_ISSUER` + `AUTH_AUDIENCE` +
+`SSO_CLIENT_ID` + `SSO_CLIENT_SECRET` all set — see "Owner-login Hydra
+client registration" below, which is needed unconditionally, unlike the
+JWT-Bearer client registration section further down.
 
 A `.env` file in the working directory is loaded first if present
 (`godotenv`); real environment variables always take precedence over it.

@@ -34,6 +34,33 @@ type Config struct {
 
 	// DatabasePath is the filesystem path to the SQLite database file.
 	DatabasePath string `env:"DATABASE_PATH" envDefault:"./data/app.db"`
+
+	// SSOClientID/SSOClientSecret are internal/transport/bff's Hydra OAuth2
+	// client credentials for the owner-login flow (authorization_code +
+	// PKCE, sso-consumer-contract.md §2) — printed by scripts/register.sh
+	// on success (docs/DEPLOY-REQUIREMENTS.md). Unlike SSOIssuer/
+	// AuthAudience's JWT-path dormant seam, leaving these unset does not
+	// stop cmd/server from starting: GETTING-STARTED.md's own walkthrough
+	// (steps 1-5) never touches bff, so the server and the public API must
+	// keep working with no Hydra client registered yet. internal/transport/
+	// bff's own wiring (cmd/server/main.go's wireBFF) checks these and
+	// simply serves a clear "owner login isn't configured" error from
+	// GET /login and GET /callback instead of a working flow when either is
+	// empty — the same pattern wireIdentity already uses for the JWT branch.
+	SSOClientID     string `env:"SSO_CLIENT_ID"`
+	SSOClientSecret string `env:"SSO_CLIENT_SECRET"`
+
+	// SessionSecret HMAC-signs/verifies internal/transport/bff's session
+	// and state cookies (DATA_MODEL.md's "BFF session" note — no
+	// server-side session store; the signature itself is the whole
+	// validity proof). Deliberately not required at startup, unlike the
+	// fields above staying-optional-by-design being an availability
+	// concern — this one is a security concern instead, so cmd/server
+	// doesn't silently run with an empty (trivially forgeable) key: if
+	// unset, it generates a random one for that process's lifetime and
+	// logs a warning that existing sessions won't survive a restart. Set
+	// this explicitly for any real deployment (docs/DEPLOY-REQUIREMENTS.md).
+	SessionSecret string `env:"SESSION_SECRET"`
 }
 
 // LoadConfig loads a .env file if one exists in the working directory
