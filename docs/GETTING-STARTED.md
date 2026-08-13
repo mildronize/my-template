@@ -48,6 +48,18 @@ before that target can succeed. A bare `go build ./...`/`go test ./...`
 checkout — but the resulting binary would serve an empty SPA at `GET /`,
 which is never what you actually want to ship or test against.
 
+**`make test` runs both suites — `go test ./...` and web/'s own Vitest
+suite — from a bare fresh clone, no manual `npm install` first.** The
+Makefile's `test` target depends on `web-test`
+(`cd web && npm ci && npm test`), so `make test` alone installs `web/`'s
+dependencies from its lockfile and runs both suites; a green `make test`
+means neither suite silently sat unrun. That is not a claim the JS suite
+is exhaustive — it deliberately covers only the two hooks that replaced
+tRPC-coupled logic (session-check, todos-CRUD; GOAL.md Done-when 10), not
+all of `web/`. Running just `go test ./...` by hand still works and still
+skips the JS suite, same as before; `make test` is the command that
+covers both.
+
 ## Step 1: Register a Hydra client for owner login
 
 **Run this first, before any of the rename steps below — including if

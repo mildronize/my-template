@@ -11,10 +11,10 @@ import { defineConfig } from "vitest/config";
 // Vitest (package.json: "vitest": "^4.1.2") per GOAL.md's Decisions table
 // ("`make test` and the two-suites problem").
 //
-// Deliberately NOT wired into `make test` — that's task-4's job
-// specifically (.chief/milestone-3/_plan/_todo.md), so it can verify the
-// two-suite claim independently. Run this suite directly with
-// `npm run test` / `npx vitest run`.
+// Wired into `make test` as of milestone-3/task-4 (Makefile's `web-test`
+// target, which `test` depends on) — that task verified the two-suite
+// claim independently from a fresh clone before wiring it in. Still
+// runnable directly with `npm test` / `npx vitest run` from web/.
 export default defineConfig({
   plugins: [react()],
   resolve: {

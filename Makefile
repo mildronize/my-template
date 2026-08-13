@@ -74,8 +74,28 @@ build: web-build
 vet:
 	go vet ./...
 
+# web-test runs web/'s own Vitest suite (`npm test` → `vitest run`,
+# web/package.json) — its own target so it's independently invokable, the
+# same reasoning web-build already follows. `npm ci` (not `npm install`)
+# runs first, same reproducibility reason as web-build: a fresh clone has
+# no web/node_modules yet, and this makes `make test` self-contained
+# rather than silently depending on someone having run `npm install` by
+# hand first.
+#
+# `test` depends on it so `make test` runs both suites together
+# (milestone-3/task-4, closing GOAL.md's "`make test` and the two-suites
+# problem" — a second green light next to `go test ./...` proves nothing
+# about the first one unless something actually runs both). JS coverage
+# here is deliberately partial — one test per replaced hook (GOAL.md
+# Done-when 10), not full coverage of web/ — `make test` passing is a
+# claim that neither suite is silently skipped, not a claim about how
+# exhaustive either one is.
+.PHONY: web-test
+web-test:
+	cd web && npm ci && npm test
+
 .PHONY: test
-test:
+test: web-test
 	go test ./...
 
 .PHONY: fmt-check
