@@ -385,3 +385,63 @@ works at the API layer, now exercised through the real UI as
 That's the whole path: one command, one URL, one real login — the gap
 milestone-2's acceptance attempt exposed (a login that led to nothing to
 create) is closed.
+
+## Fix-round note (found by independent verification, not by this task's own builder)
+
+Clara's own check — extracting every backticked filename from
+`docs/GETTING-STARTED.md` and testing each as a real repo path, restricted
+to full repo-relative paths after an initial pass produced mostly false
+positives (bare names like `main.go` in prose, Go type references like
+`internal/domain/todo.Service`) — found that Check 4's doc pass above
+fixed the `ApiKeySettingsPlaceholder.tsx` rename and the "known
+limitation" section, but missed a bigger one: **Step 5 ("Locate and
+replace the todo domain") still instructed forkers to edit
+`internal/transport/bff/view_handler.go` and `view_handler_test.go` in six
+places**, both deleted by milestone-3/task-3. Three were live instructions
+(the "optional BFF view" paragraph in step 4, and two passages in step
+8's delete/adapt block), not background prose — a forker following the
+checklist literally would hit a file that isn't there and reasonably
+conclude they'd broken something, exactly the class of problem a blind
+fork test caught once already last milestone.
+
+Fixed by replacing the "third file" framing throughout Step 5 (the
+section intro, step 1, step 4's optional BFF paragraph, and step 8's full
+adapt-or-carry-tests block) with what's actually there now:
+`internal/transport/bff/todo_handler.go` is structurally the BFF-side twin
+of `internal/transport/publicapi/todo_handler.go` (`NewTodoServer`,
+`ListTodos`/`CreateTodo`/`GetTodo`/`UpdateTodo`/`DeleteTodo` methods
+calling `s.Service.*Todo(...)`, generated from a second OpenAPI spec,
+`bff-openapi.yaml`, into a second package, `internal/bffapi`) — the same
+rename-in-place already described for the `publicapi` handler applies
+here, not a bespoke Go-`html/template` adaptation. Also added the SPA
+screens under `web/src/app/` and `web/src/lib/todos.ts` (which reference
+the domain by name through generated types) to the same instruction, and
+named the three real Go tests to carry over
+(`TestBFFHandler_FullCRUDRoundTrip_RealSessionCookie`,
+`TestI3_BFFHandlerOwnershipScoping_ReturnsNotFoundNotForbidden`,
+`TestBFFHandler_ListTodos_Unauthenticated_Returns401NotRedirect`) and the
+two Vitest files that guard the SPA side (`TodosList.test.tsx`,
+`todos.test.tsx`) in place of the deleted view-handler tests' now-wrong
+names. Fixed the same stale reference in the "Dangling references after a
+correct fork" section's delete-list parenthetical (also added
+`bff-openapi.yaml`/`internal/bffapi/bffapi.gen.go` to that list, which the
+original text never covered even for the BFF surface in general).
+
+**Also checked, per Clara's own note**: `internal/todo/` (singular
+mention, Step 5's intro paragraph) is legitimate historical prose — "this
+superseded milestone-1's single-directory `internal/todo/` shape" —
+describing a shape that no longer exists, not an instruction pointing at
+a live path. Not stale, correctly framed as history already.
+
+Verified via a mechanical scan (restricted to backticked strings
+containing a `/` that resolve as repo-relative paths, run against every
+file in `docs/`) that the only remaining `view_handler.go` mention in
+`docs/GETTING-STARTED.md` is one intentional historical note (Step 1's
+"an earlier version of this document pointed here at a Go-`html/template`
+view ... retired by milestone-3's SPA"), explicitly framed as retired
+rather than as an instruction. No functional code changed — doc only.
+`go build ./...` reconfirmed clean (doc-only change).
+
+### Commits pushed (branch `milestone-2/close-parity-gap`)
+
+- `dc60435` — `docs(milestone-3/task-5): fix Step 5's stale view_handler.go references`
