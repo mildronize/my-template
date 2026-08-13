@@ -85,6 +85,13 @@ CREATE INDEX todo_events_actor_id_idx ON todo_events (actor_id);
 CREATE UNIQUE INDEX todo_events_client_request_id_idx ON todo_events (client_request_id);
 
 -- +goose Down
+-- IRRECOVERABLE DATA LOSS: this DROP TABLE discards every todo_events
+-- row (the entire activity history) with no backup and no later
+-- migration that restores it. A fork that runs this Down loses that
+-- history for good, not just until some future Up re-applies — there is
+-- nothing left afterward to reconstruct it from. Anyone rolling back
+-- this migration on a fork with real data must accept that before
+-- running it, not discover it after.
 DROP TABLE todo_events;
 
 CREATE TABLE todos_old (
@@ -96,12 +103,37 @@ CREATE TABLE todos_old (
     updated_at TIMESTAMP NOT NULL
 );
 
+-- The reverse mapping has to collapse four status values back into one
+-- boolean, and only two of the four collapse "cleanly" (done, open).
+-- Every one of the four is named explicitly below, none left to fall
+-- out of an ELSE by default — an unexamined ELSE is exactly how this
+-- mapping was wrong before (it sent status = 'closed' to done = FALSE):
+--   * status = 'done'        -> done = TRUE  (finished work)
+--   * status = 'closed'      -> done = TRUE  (also finished work: I18
+--     makes 'closed' the terminal, owner-only state that replaces the
+--     DELETE this milestone removes — finishing work means moving to
+--     'closed', not deleting the row. Mapping it to FALSE would
+--     silently turn every real fork's finished, closed todos back into
+--     open ones on rollback, and — per the DROP TABLE above — there is
+--     no todo_events history left afterward to reconstruct that they
+--     were ever closed.)
+--   * status = 'open'        -> done = FALSE (not started)
+--   * status = 'in_progress' -> done = FALSE (deliberate choice, not a
+--     default: the pre-migration schema has no "in progress" boolean
+--     state, and of the two available booleans, FALSE — "not yet
+--     done" — is the accurate one; work that is in progress is, by
+--     definition, not done yet.)
 INSERT INTO todos_old (id, owner_id, title, done, created_at, updated_at)
 SELECT
     id,
     created_by,
     title,
-    CASE WHEN status = 'done' THEN TRUE ELSE FALSE END,
+    CASE
+        WHEN status = 'done'        THEN TRUE
+        WHEN status = 'closed'      THEN TRUE
+        WHEN status = 'open'        THEN FALSE
+        WHEN status = 'in_progress' THEN FALSE
+    END,
     created_at,
     updated_at
 FROM todos;
