@@ -210,3 +210,105 @@ done
   per `_goal/GOAL.md`'s own "Human acceptance" section is a real browser
   clicking through a real Hydra consent screen — task-5/มายด์'s own step,
   not reattempted here.
+
+## Fix-round note (post-verification, 2026-08-13)
+
+A verification pass found three small issues in the above. All three are
+fixed on `milestone-2/close-parity-gap`.
+
+- **`AuthGate.test.tsx` had a real coverage gap.** The Done-when-6 test
+  (`does not redirect ... when a confirmed session later fails
+  transiently`) only exercises `confirmedLoggedOut`'s `session === null`
+  clause: `auth-client.ts`'s `useSession()` does `data: query.data ??
+  null`, and TanStack Query retains the last successful `data` across a
+  failed background refetch, so once a check has ever succeeded, `session`
+  never goes back to `null` just because a *later* check errors. That left
+  the guard's `!error` clause provably unexercised — confirmed by
+  temporarily deleting `!error` from `AuthGate.tsx` and watching the
+  existing test still pass. `!error` is load-bearing exactly once: a
+  *first-ever* session check that fails transiently, before any check has
+  succeeded, where `session` genuinely is `null` (nothing cached yet) and
+  `error` is truthy — without it, a user with a perfectly valid session
+  could be bounced to `/login` by nothing more than a first-request
+  network blip.
+  Added two tests to `AuthGate.test.tsx` (did not touch `AuthGate.tsx`
+  itself, whose logic was already correct): a first-ever transient
+  failure must **not** redirect, and — as the contrast case proving the
+  guard distinguishes "flaky" from "confirmed logged out," not just that
+  it never redirects — a first-ever *genuine* no-session response (a real
+  non-200 `Response`, not a rejected `fetch`) still **must** redirect.
+  Adding a second/third test in the same `describe` block also surfaced a
+  latent test-isolation gap: `vitest.config.ts`'s `globals: false` means
+  `@testing-library/react`'s automatic `afterEach` cleanup never
+  registers, so a prior test's rendered DOM was leaking into the next
+  test's queries. Added an explicit `cleanup()` call to this file's own
+  `afterEach` to fix it — scoped to this file; the other two test files
+  (`todos.test.tsx`, `TodosList.test.tsx`) each have only one test per
+  `describe` block today so the gap doesn't bite them yet, but it's worth
+  keeping in mind if either grows a second test.
+  Verified by attack: reintroduced the `!error` mutation, confirmed via
+  `tsc -b` that it still compiles (had to add a throwaway `void error;` to
+  dodge `noUnusedLocals`, since removing the clause alone made TypeScript
+  refuse to build for an unrelated reason), confirmed the new first-load
+  test — and only that one — now fails, then reverted and confirmed clean.
+
+- **Deleted `RequireSession` (`internal/transport/bff/middleware.go`).**
+  The original report above flagged this as dead code left in place out
+  of caution ("felt like scope creep for a function nothing asked me to
+  delete"). This fix-round's task explicitly asked for the removal, so:
+  deleted the function and its doc comment. Its I2/I12 boundary reasoning
+  was real and worth keeping, so the full paragraph moved into
+  `RequireJSONSession`'s own doc comment (`json_middleware.go`), replacing
+  the condensed version and the now-dangling pointer to `RequireSession`'s
+  comment. Updated every other comment that named `RequireSession`
+  (`session.go`'s `errInvalidCookie`, `todo_handler_test.go`, `main.go`'s
+  `/api/bff` wiring comment, `ActorFromContext`) so nothing in the tree
+  points at deleted code.
+  Verified by removing, not by inspection: `go build ./...`, `go vet
+  ./...`, and `go test ./...` all pass clean with `RequireSession` gone.
+  **Nothing depended on it** — the deletion touched no other production
+  behavior; `middleware_test.go` (which does still exist) tests
+  `secureFromURL`, an unrelated function in the same file, and was
+  untouched.
+
+- **`web/package.json`'s `engines` field.** Turned out `web/package.json`
+  had **no `engines` field at all** — the fix-round task's premise that it
+  "currently declares `^22.22.2 || ^24.15.0 || >=26.0.0`" was tracing a
+  *transitive* dependency's own requirement (`jsdom@30.0.1`'s
+  `package.json`, confirmed via `package-lock.json`; `@redocly/openapi-
+  core@1.34.19`'s `>=18.17.0` floor also warns) rather than this project's
+  own field. Added `"engines": { "node": ">=22.22.1" }` to
+  `web/package.json` anyway — it's the actually-verified floor and a
+  correct, harmless addition — but flagging plainly: **this does not, and
+  cannot, eliminate the `npm install` `EBADENGINE` warnings**, since those
+  come from `jsdom`'s and `@redocly/openapi-core`'s own declared engine
+  requirements, which npm checks independently of this project's own
+  `engines` field. Fresh-clone `npm install` below still shows both
+  warnings (installed Node `22.22.1` is one patch version short of
+  `jsdom`'s `^22.22.2` floor). Fixing that for real would mean upgrading
+  Node past `22.22.2` or pinning `jsdom` to an older, looser-range
+  version — both out of this fix's scope (touching dependency versions
+  wasn't asked for, and downgrading a test-only dependency has its own
+  tradeoffs) — so this is left as a known, non-blocking pre-existing
+  condition for a future task to pick up if it matters.
+
+### Fresh-clone verification
+
+New `git clone`, `milestone-2/close-parity-gap` @ `541202e`,
+`web/dist/` holding only the tracked `.gitkeep`:
+
+- `go build ./...`, `go vet ./...`, `gofmt -l .` — all clean.
+- `go test ./...` — all packages green (`internal/transport/bff` included).
+- `web/`: `npm install` — succeeds; still shows the two `EBADENGINE`
+  warnings described above (`jsdom`, `@redocly/openapi-core` — both
+  pre-existing, both unrelated to this project's own `engines` field).
+  `npx tsc -b` clean. `npm run build` clean (`dist/index.html` 1.13 kB,
+  JS bundle 475.86 kB / gzip 147.73 kB). `npx vitest run` — **3 files, 7
+  tests, all passing** (`AuthGate.test.tsx` grew from 1 test to 3;
+  `todos.test.tsx` and `TodosList.test.tsx` unchanged at 3 and 1).
+
+### Commits pushed (branch `milestone-2/close-parity-gap`)
+
+- `6c38c84` — `fix(milestone-3/task-3): close AuthGate's untested first-load transient-failure gap`
+- `5557095` — `fix(milestone-3/task-3): delete dead RequireSession middleware`
+- `541202e` — `fix(milestone-3/task-3): set web/package.json's engines.node to a verified floor`
