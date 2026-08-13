@@ -359,7 +359,7 @@ caught a missing invariant test.
       only readers who act on it.
       **Green gate: full Go suite green (doc-only task, unaffected).**
       **Owns: Done-when 6.**
-- [ ] task-9: Final verification — **last task, full-suite gate, same
+- [x] task-9: Final verification — **last task, full-suite gate, same
       shape as milestone-3's task-5.** `go test ./...` and the JS suite
       green together, from a fresh clone, not independently at the point
       each was last touched. `docker compose up` still works.
