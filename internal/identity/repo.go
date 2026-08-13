@@ -226,6 +226,43 @@ func (r *Repo) RevokeAPIKey(ctx context.Context, id, userID string) (APIKey, err
 	return apiKeyFromRow(row), nil
 }
 
+// ListAllAgentAPIKeys returns every role='agent' user's non-revoked keys
+// (I21) — the owner-facing settings-page query, deliberately not scoped to
+// any one user_id. Unlike ListAPIKeysByOwner (which structurally can never
+// be non-empty for a session owner, since no key is ever issued to
+// role='owner' — I2), this is the query the settings page actually needs.
+func (r *Repo) ListAllAgentAPIKeys(ctx context.Context) ([]APIKey, error) {
+	rows, err := r.q.ListAllAgentAPIKeys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]APIKey, 0, len(rows))
+	for _, row := range rows {
+		keys = append(keys, apiKeyFromRow(row))
+	}
+	return keys, nil
+}
+
+// RevokeAPIKeyByID revokes the key identified by id alone (I21) — no
+// user_id scoping, since the owner-facing endpoint may revoke any agent's
+// key, not just one caller's own. Session-gating (must be an owner at all)
+// is the handler's job, not this query's; ErrNotFound covers both "no such
+// key" and "already revoked", the same "absence, not permission" shape
+// RevokeAPIKey gives the self-scoped case.
+func (r *Repo) RevokeAPIKeyByID(ctx context.Context, id string) (APIKey, error) {
+	row, err := r.q.RevokeAPIKeyByID(ctx, db.RevokeAPIKeyByIDParams{
+		RevokedAt: sql.NullTime{Time: time.Now().UTC(), Valid: true},
+		ID:        id,
+	})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return APIKey{}, ErrNotFound
+		}
+		return APIKey{}, err
+	}
+	return apiKeyFromRow(row), nil
+}
+
 // DisableOtherAPIKeys revokes every one of userID's still-live keys except
 // keepID, returning how many it revoked. This is service.go's Rotate
 // (I13) calling in, after it has already issued and stored the key it

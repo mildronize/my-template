@@ -178,6 +178,82 @@ func TestI3_RevokeAPIKeyScopedToOwner_AbsenceNotPermission(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 
+// TestI21_ListAllAgentAPIKeys_SpansEveryAgent_ListAPIKeysByOwner_StaysSelfScoped
+// is I21's own dedicated test — internal/invariants_test.go's
+// TestDoneWhen12 requires a test named TestI21_<something> specifically
+// inside internal/identity (I21's scope tag is `domain:identity`, not
+// `per-domain-module`: this is the one and only package it belongs in, not
+// a coverage sweep across every domain module). Two agents each get a
+// real key (seeded via repo.CreateUser(..., "agent", ...) directly, the
+// same repo-layer-fixture convention TestI3_RevokeAPIKeyScopedToOwner_
+// AbsenceNotPermission above already uses — this is NOT the trap GOAL.md
+// warns about: that trap was seeding role='owner' fixtures with keys,
+// simulating a state production can never reach; role='agent' is exactly
+// what a real key-holder is, at the layer that has no access to
+// identity.Service.IssueAPIKeyForHandle's CLI-mirroring path in the first
+// place). A third, revoked agent key proves the "non-revoked" half of
+// I21's own wording.
+//
+// Both halves of I21's sentence get one test each: the owner-facing query
+// spans every agent (not one user_id), and the agent-facing query
+// (ListAPIKeysByOwner, GET /api/v1/keys's own repo call, untouched by this
+// milestone) stays exactly as self-scoped as it always was.
+func TestI21_ListAllAgentAPIKeys_SpansEveryAgent_ListAPIKeysByOwner_StaysSelfScoped(t *testing.T) {
+	ctx := context.Background()
+	repo := NewRepo(newTestDB(t))
+
+	agentA, err := repo.CreateUser(ctx, "agent-a", "agent", nil)
+	require.NoError(t, err)
+	agentB, err := repo.CreateUser(ctx, "agent-b", "agent", nil)
+	require.NoError(t, err)
+
+	keyA, err := repo.CreateAPIKey(ctx, agentA.ID, HashAPIKey("tpl_agent_a"), "tpl_agenta001", time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	keyB, err := repo.CreateAPIKey(ctx, agentB.ID, HashAPIKey("tpl_agent_b"), "tpl_agentb001", time.Now().Add(time.Hour))
+	require.NoError(t, err)
+
+	// A revoked agent key must never appear in the owner-facing listing —
+	// I21's own wording is "non-revoked keys", not "every key ever issued".
+	revokedKey, err := repo.CreateAPIKey(ctx, agentB.ID, HashAPIKey("tpl_agent_b_old"), "tpl_agentbold1", time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	_, err = repo.RevokeAPIKey(ctx, revokedKey.ID, agentB.ID)
+	require.NoError(t, err)
+
+	// Half 1: the owner-facing query spans BOTH agents, not one user_id.
+	all, err := repo.ListAllAgentAPIKeys(ctx)
+	require.NoError(t, err)
+	allIDs := make([]string, 0, len(all))
+	for _, k := range all {
+		allIDs = append(allIDs, k.ID)
+	}
+	assert.ElementsMatch(t, []string{keyA.ID, keyB.ID}, allIDs,
+		"ListAllAgentAPIKeys must return every agent's non-revoked key — both agent-a's and agent-b's — and exclude agent-b's revoked one")
+
+	// Half 2: I21's other clause — an agent's own key-listing stays
+	// self-scoped (I3, unchanged for this half of the identity domain).
+	// agentA's own listing must never include agentB's key.
+	scopedToA, err := repo.ListAPIKeysByOwner(ctx, agentA.ID)
+	require.NoError(t, err)
+	require.Len(t, scopedToA, 1, "an agent's own key-listing must stay scoped to that agent alone")
+	assert.Equal(t, keyA.ID, scopedToA[0].ID)
+
+	// RevokeAPIKeyByID (the owner-facing DELETE's own query) can revoke
+	// agent-a's key even though the caller isn't "agent-a" itself — no
+	// user_id scoping, unlike RevokeAPIKey.
+	revoked, err := repo.RevokeAPIKeyByID(ctx, keyA.ID)
+	require.NoError(t, err)
+	require.NotNil(t, revoked.RevokedAt)
+
+	allAfterRevoke, err := repo.ListAllAgentAPIKeys(ctx)
+	require.NoError(t, err)
+	afterIDs := make([]string, 0, len(allAfterRevoke))
+	for _, k := range allAfterRevoke {
+		afterIDs = append(afterIDs, k.ID)
+	}
+	assert.NotContains(t, afterIDs, keyA.ID, "a key revoked via RevokeAPIKeyByID must no longer appear in the owner-facing listing")
+	assert.Contains(t, afterIDs, keyB.ID, "revoking agent-a's key must not touch agent-b's")
+}
+
 // TestRepo_DisableOtherAPIKeys_RevokesEverythingExceptKeepID_ScopedToOwner
 // exercises DisableOtherAPIKeys against the real schema: every one of
 // owner's live keys except keepID gets revoked, a key already revoked

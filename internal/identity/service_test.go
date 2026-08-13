@@ -139,6 +139,36 @@ func (f *fakeAPIKeyRepo) DisableOtherAPIKeys(_ context.Context, userID, keepID s
 	return count, nil
 }
 
+// ListAllAgentAPIKeys and RevokeAPIKeyByID exist only to satisfy the
+// APIKeyRepo interface for this fake's other (unrelated) Service tests —
+// this fake has no notion of a users table/role at all, so it cannot
+// reproduce the real Repo's role='agent' filter. I21's actual role-scoping
+// behavior is proven against a real SQLite schema instead: repo_test.go's
+// TestI21_... and internal/transport/bff/keys_handler_test.go's rewritten
+// suite, neither of which uses this fake.
+func (f *fakeAPIKeyRepo) ListAllAgentAPIKeys(_ context.Context) ([]APIKey, error) {
+	var keys []APIKey
+	for _, k := range f.byHash {
+		if k.RevokedAt == nil {
+			keys = append(keys, k)
+		}
+	}
+	return keys, nil
+}
+
+func (f *fakeAPIKeyRepo) RevokeAPIKeyByID(_ context.Context, id string) (APIKey, error) {
+	f.revokeCalled = true
+	for hash, k := range f.byHash {
+		if k.ID == id && k.RevokedAt == nil {
+			now := time.Now()
+			k.RevokedAt = &now
+			f.byHash[hash] = k
+			return k, nil
+		}
+	}
+	return APIKey{}, ErrNotFound
+}
+
 type fakeJWTVerifier struct {
 	sub   string
 	err   error

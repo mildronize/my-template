@@ -41,6 +41,10 @@ type APIKeyRepo interface {
 	// for why this is built from ListAPIKeysByOwner+RevokeAPIKey rather
 	// than a new sqlc query.
 	DisableOtherAPIKeys(ctx context.Context, userID, keepID string) (int, error)
+	// ListAllAgentAPIKeys and RevokeAPIKeyByID back the owner-facing
+	// settings-page endpoints (I21) — see repo.go's doc comments on each.
+	ListAllAgentAPIKeys(ctx context.Context) ([]APIKey, error)
+	RevokeAPIKeyByID(ctx context.Context, id string) (APIKey, error)
 }
 
 // JWTVerifier verifies a Bearer token as an SSO-issued JWT (task-2.md
@@ -260,6 +264,28 @@ func (s *Service) ListAPIKeys(ctx context.Context, ownerID string) ([]APIKey, er
 // todos, applied here to keys (mirrors todo.Service.DeleteTodo).
 func (s *Service) RevokeAPIKey(ctx context.Context, ownerID, id string) (APIKey, error) {
 	return s.APIKeys.RevokeAPIKey(ctx, id, ownerID)
+}
+
+// --- owner-facing key management (GET/DELETE /api/bff/keys) --------------
+
+// ListAllAgentAPIKeys returns every role='agent' user's non-revoked keys
+// (I21, GOAL.md's "Owner-facing key visibility" decision) — the settings
+// page's actual query, replacing milestone-2/3's session-owner-scoped
+// ListAPIKeys for this surface (that query structurally can never be
+// non-empty for an owner, since no key is ever issued to role='owner' —
+// I2). GET /api/v1/keys (ListAPIKeys, above) is unchanged.
+func (s *Service) ListAllAgentAPIKeys(ctx context.Context) ([]APIKey, error) {
+	return s.APIKeys.ListAllAgentAPIKeys(ctx)
+}
+
+// RevokeAnyAgentAPIKey revokes the key identified by id alone, with no
+// user_id scoping (I21) — the owner-facing DELETE /api/bff/keys/:id may
+// revoke any agent's key, not just one the caller "owns" (there are no
+// owner-held keys to compare against — I2). Session-gating (must be a
+// valid owner session at all) is the caller's job (bff's RequireJSONSession
+// middleware), not this method's.
+func (s *Service) RevokeAnyAgentAPIKey(ctx context.Context, id string) (APIKey, error) {
+	return s.APIKeys.RevokeAPIKeyByID(ctx, id)
 }
 
 // --- CLI key issuance (cmd/issue-key) -------------------------------------
