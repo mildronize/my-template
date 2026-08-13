@@ -26,10 +26,10 @@ own error text, not a guaranteed structured field.
 
 | Code | HTTP | When | Carries |
 | --- | --- | --- | --- |
-| `unauthorized` | 401 | any credential failure at all (I2, I5, I9) | — |
-| `not_found` | 404 | unknown todo/key id, or one that exists but isn't the caller's (I3 — absence, not `403`) | — |
+| `unauthorized` | 401 | any credential failure at all (I2, I5, I9); also an agent key attempting `status_changed` to `closed` (I18 — owner-only, no distinct `403` exists on this surface) | — |
+| `not_found` | 404 | an unknown todo id (any todo is readable/actionable by any caller, I3 no longer scopes todos — this is purely "never existed"); a key id that exists but isn't the caller's own, or never existed (I3 still scopes keys — absence, not `403`) | — |
 | `actor_field_present` | 400 | request tried to declare an actor (I1) | — |
-| `validation_error` | 400 | a malformed or missing field, caught either by the OpenAPI request validator or a handler's own fallback check | `hint` names the field, when the underlying error names exactly one |
+| `validation_error` | 400 | a malformed or missing field, caught either by the OpenAPI request validator or a handler's own fallback check; also an `assigned` event's `to` naming a user id that doesn't resolve (`hint: "to"`) | `hint` names the field, when the underlying error names exactly one |
 
 There is no `internal_error` code documented in the contract — an
 unmapped failure is a bug in the service, not a designed response; report
@@ -45,10 +45,16 @@ indistinguishable-401 trap" before assuming the credential itself is what
 failed — an empty or unset key produces the exact same response as a
 genuinely wrong one.
 
-**404 means "not yours or doesn't exist," never "exists but forbidden."**
-There is no `403` on this surface at all. A todo or key you don't own
-returns exactly the same `not_found` a nonexistent id would — this is
-deliberate (I3): a `403` would leak that the row exists.
+**404 means different things for a todo and a key, and there is no `403`
+on this surface at all.** For a key: one you don't own returns exactly
+the same `not_found` a nonexistent id would (I3, unchanged) — deliberate,
+since a `403` would leak that the row exists. For a todo: there is no
+"not yours" case left to leak — every todo is every caller's to read and
+act on — so `not_found` here only ever means the id never existed.
+**Moving a todo to `closed` is the one place this surface uses `401`
+instead of a hypothetical `403`** (I18): an agent key gets the same
+credential-failure-shaped response a bad key would, not a distinct
+"forbidden" code — this project has never had one, on either surface.
 
 **400 `actor_field_present` is a loud refusal, not a dropped field.** The
 guard checks the `X-Actor` header, and `actor` / `actorId` / `ownerId` in
@@ -70,15 +76,20 @@ error.
 
 ## What does not error
 
-`PATCH /todos/:id` with neither `title` nor `done` set is a well-formed,
-no-op update — both fields are optional, and sending neither is not a
-validation failure. It still returns `200` with the todo unchanged.
+**Repeating a `clientRequestId` never errors and never writes twice
+(I19).** `POST /todos`, `PATCH /todos/:id`, and `POST .../events` are all
+idempotent on it: a repeat returns the *original* write's result
+unchanged (same `200`/`201`, same body) and creates nothing new. Retrying
+a request you're unsure went through is always safe on this surface —
+there is no separate `Idempotency-Key` header to remember, the same field
+that names the write is what makes it safe to repeat.
 
-Deleting an already-deleted todo or an already-revoked key is
-`404 not_found`, the same as any other unknown id — deletion and
-revocation are both naturally idempotent from the caller's side with no
+Revoking an already-revoked key is `404 not_found`, the same as any other
+unknown id — naturally idempotent from the caller's side with no
 special-casing needed, but that idempotency shows up as a repeat 404, not
-as a repeat success.
+a repeat success. **There is no `DELETE /todos/:id` to ask the same
+question of** — it was removed in milestone-4; see `references/
+endpoints.md`.
 
 `GET /keys` lists an expired-but-unrevoked key without erroring or
 filtering it out — expiry is checked only when that key is actually
