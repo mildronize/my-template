@@ -152,15 +152,30 @@ a terminal scrollback.
 **I15 — One write path (todo domain).** `scope: per-domain-module`
 *(New, milestone-4.)* Only the todo domain's service module writes to
 `todos` or `todo_events`; no handler, script, or other module touches
-those tables directly. Mirrors my-task's I4 exactly, including its
-enforcement shape: a module-import boundary (only the service/query files
-in `internal/domain/todo` import the generated table types) plus code
-review, not a language-level access modifier — Go has no package-private
-field the way this boundary would need to be airtight. *Enforced by:*
-import-site convention, checked by not exporting the sqlc-generated table
-types outside the domain module's own package. **Verified by test** for
-the transaction property: a failure mid-write leaves neither the event
-row nor the `todos` state change.
+those tables directly. Mirrors my-task's *intent* (its own I4), but
+**not its enforcement shape — the two are not available to this
+codebase in parity, and that gap is stated rather than closed by
+wording.** my-task's I4 works because Drizzle lets a module export table
+objects to only the files that need them; `sqlc.yaml` here emits one
+shared `db` package (`package: "db"`, `out: "internal/db"`) that every
+module can import — there is no per-table export boundary to withhold.
+*Enforced by:* `internal/architecture_test.go`'s
+`TestArchitecture_OnlyRepoFilesImportSqlc` — a real, existing,
+per-file-parsed import-graph test. **State plainly what it actually
+buys**: it's a *layer* rule (only `repo.go`/`*_repo.go` files may import
+the generated package, across every domain module and identity) — it
+does not stop a repo file in one module from querying another module's
+table by name, the way my-task's table-level export boundary would. The
+Go mechanism is coarser than the source's. **Extended this milestone**
+with a second, table-specific check: an architecture test asserting only
+`internal/domain/todo`'s own repo file references the generated
+`*TodoEvent*`-named query functions — cheaper than a second `sqlc`
+output package, and it restores the actual property (not just the
+layer-level approximation of it) without requiring a second generated
+package this template's size doesn't otherwise need. **Verified by
+test**, two of them: the transaction property (a failure mid-write leaves
+neither the event row nor the `todos` state change) and the new
+table-specific reference check above.
 
 **I16 — `created` is never client-specifiable.** `scope: per-domain-module`
 *(New, milestone-4.)* No request body, on either `publicapi` or `bff`,
@@ -201,8 +216,26 @@ I10 (`can()`'s `task:status_change` rule refusing an agent's move into the
 group, since this domain's enum has one `closed` value where my-task has
 a `closed` group that can (in principle) hold more than one status.
 *Enforced by:* the permission layer (`can(actor, action)`, role-based, not
-per-todo-identity-based) checked before the write path's dispatch, same
-shape as my-task's `can()`. **Verified by test**, paired: the same agent,
+per-todo-identity-based), checked **inside I15's single write path**,
+before it dispatches to any type-specific handling — not at each
+`publicapi`/`bff` call site the way my-task's own `can()` is checked (once
+per entry point, before calling `append()`). **This is a deliberate
+strengthening past the named source, stated as one, not an accidental
+reading of an ambiguous sentence**: my-task needs a `can()` call at every
+entry point specifically *because* its `append()` itself doesn't check
+permission (survey, Part 1: *"append() itself does not check permission —
+the caller does"*) — a shape that only works if every current and future
+caller remembers to check first. I15 already centralizes every todo write
+through one function; putting the permission check there means a future
+caller cannot skip it by forgetting, the same way my-task's shape
+structurally can. **This is the opposite direction from I17's
+enforcement, on purpose, not a drift toward inconsistency**: I17
+deliberately matches my-task's append-only enforcement without exceeding
+it, because there was no existing centralization to exploit for that
+property; I18 exceeds my-task's permission enforcement because I15's
+centralization makes exceeding it nearly free, not because "stronger is
+always better" was applied uniformly. **Verified by test**, paired: the
+same agent,
 against the same todo, has a `status: closed` attempt rejected and a
 non-closed action succeed in the same test — a permission layer that
 rejects everything would pass a reject-only assertion just as well as a
