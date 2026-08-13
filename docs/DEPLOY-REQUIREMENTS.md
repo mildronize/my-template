@@ -209,6 +209,20 @@ If this service ever stops using `jwk.Cache` this way, or the retry is
 removed, §7.4's original restart expectation applies again — until then,
 it does not.
 
+**Known, unfixed property: bounded per-call, not bounded across calls.**
+The retry above stops a *single* bad-`kid` request from forcing more than
+one extra issuer hit. It does nothing about N separate requests, each
+carrying a different unknown `kid` — that's still N issuer fetches, no
+negative-caching, no coalescing. Deliberately not fixed here: the obvious
+fix (cache "this kid doesn't exist") reintroduces the exact 15-minute
+outage this task just removed, in miniature, the moment a legitimately
+new key rotates in and gets refused because it looks like a cached
+negative. This is the same property hestia found in `shipd` and Clara
+filed as **FLEET-2** — a fleet-wide question (safe coalescing vs. unsafe
+negative-caching), not something to solve per-consumer. If this matters
+for your deployment's threat model, check FLEET-2's resolution before
+inventing a local fix.
+
 ## Reverse proxy / TLS / process supervision
 
 Out of scope for this milestone entirely (`GOAL.md` Context: "systemd,
