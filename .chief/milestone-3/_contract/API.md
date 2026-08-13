@@ -11,7 +11,7 @@ supersedes milestone-2's own `_contract/API.md` on everything about
 | Surface | Package | Spec file | Consumer | Auth |
 | --- | --- | --- | --- | --- |
 | Public API | `internal/transport/publicapi` | `openapi.yaml` | agents/skills | `Authorization: Bearer <credential>` (I1–I2, I5–I10, I13–I14) |
-| BFF (JSON) | `internal/transport/bff` | `bff-openapi.yaml` (new, repo root, alongside `openapi.yaml`) | the SPA, in มายด์'s browser | session cookie (I1, I3, I5, I11–I12) |
+| BFF (JSON) | `internal/transport/bff` | `bff-openapi.yaml` (new, repo root, alongside `openapi.yaml`) | the SPA, in the owner's browser | session cookie (I1, I3, I5, I11–I12) |
 
 **Why a second file rather than a second path group in the existing
 one** (milestone-3 `_goal/GOAL.md`'s Decisions table has Clara's full
@@ -56,7 +56,7 @@ a redirect, client-side, not the BFF).
 Session-check endpoint backing the SPA's `AuthGate`-equivalent hook.
 
 ```jsonc
-{ "handle": "มายด์", "role": "owner", "active": true }
+{ "handle": "owner", "role": "owner", "active": true }
 ```
 
 Same shape as the public API's `GET /api/v1/me` deliberately — one
