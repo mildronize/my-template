@@ -42,8 +42,11 @@ A resource that exists but belongs to a different owner returns
 `not_found`, the same response as one that never existed. Never
 `forbidden` — that would confirm the row exists.
 
-*Scope, per domain (milestone-4 correction — wording unchanged, reach is
-not universal):* holds for the identity/API-key domain exactly as
+*Scope, per domain (milestone-4 correction — generalised from the
+original `A todo (or API key)` wording to `A resource`, since this
+invariant is `scope: per-domain-module` and naming specific resources in
+its general statement was always slightly off; reach narrowed per domain
+below):* holds for the identity/API-key domain exactly as
 written — an agent's own key-listing stays scoped to itself; a wrong-id
 request there is still `not_found`, never `forbidden`. **Does not apply
 to the todo domain from milestone-4 onward**: todos are a shared
