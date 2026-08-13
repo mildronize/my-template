@@ -16,13 +16,30 @@ decide *where* it looks for an invariant's `TestI<N>_...` test:
 
 - `scope: global` — greps the whole repo for the test, same as before this
   tag existed.
-- `scope: per-domain-module` — requires the test **inside every domain
-  module's own package** (`domainModuleNames()`, updated in milestone-2 to
-  enumerate `internal/domain/*` — see `_rules/_standard/ARCHITECTURE.md` —
-  not `internal/*` as milestone-1's version did, since domain modules moved
-  under `internal/domain/` this milestone). Closes the hole where one
-  domain module's test satisfied the check for every other module forever
-  (milestone-1 task-7's finding).
+- `scope: per-domain-module` — requires the test **inside every package
+  I3/I4's ownership-scoping and single-seam-identity-read properties
+  actually apply to** (`perDomainModuleScopePackages()`,
+  `internal/invariants_test.go` — a small, explicit, hand-maintained list,
+  today `internal/domain/todo` and `internal/identity`; asserted a
+  superset of `domainModuleNames()` so a new domain module never goes
+  silently unchecked). Closes the hole where one domain module's test
+  satisfied the check for every other module forever (milestone-1
+  task-7's finding). **Reserved for I3/I4 only** since milestone-4's
+  scope-tags fix-round — see `domain:<name>` below for every other
+  single-place invariant.
+- `scope: domain:<name>` — requires the test **inside the one specific
+  package `<name>` resolves to** (`domainScopePackageNames()`,
+  `internal/invariants_test.go` — an explicit name→path mapping, e.g.
+  `domain:todo` → `internal/domain/todo`, `domain:identity` →
+  `internal/identity`; not derived from a naming convention, since
+  `internal/identity` deliberately isn't under `internal/domain/` per
+  `_rules/_standard/ARCHITECTURE.md`'s milestone-2 decision). Added by
+  milestone-4's scope-tags fix-round: `per-domain-module` used to also
+  carry I15-I19 and I21, each of which belongs to exactly one specific
+  place, not a coverage sweep across every domain module — that only
+  "worked" because `domainModuleNames()` had exactly one member (`todo`)
+  at the time. An unrecognized `<name>` makes the check abort loudly, not
+  silently pass.
 
 **I1 — Actor identity never comes from the request.** `scope: global`
 No body field, query param, or header naming an actor is ever read for
@@ -149,7 +166,7 @@ description). Without this, I13's "no grace period" design is only true in
 theory — recovery from rotation must be one command, not a copy-paste from
 a terminal scrollback.
 
-**I15 — One write path (todo domain).** `scope: per-domain-module`
+**I15 — One write path (todo domain).** `scope: domain:todo`
 *(New, milestone-4.)* Only the todo domain's service module writes to
 `todos` or `todo_events`; no handler, script, or other module touches
 those tables directly. Mirrors my-task's *intent* (its own I4), but
@@ -186,7 +203,7 @@ failure mid-write leaves neither the event row nor the `todos` state
 change) and the new table-specific reference check above, itself gated
 on finding a non-trivial number of functions to check.
 
-**I16 — `created` is never client-specifiable.** `scope: per-domain-module`
+**I16 — `created` is never client-specifiable.** `scope: domain:todo`
 *(New, milestone-4.)* No request body, on either `publicapi` or `bff`,
 may set `type: "created"` directly — a `created` event only ever happens
 as a side effect of `POST /todos` itself. Mirrors my-task's
@@ -201,7 +218,7 @@ identity, applied here to event type instead. **Verified by test**: a
 `POST` with `type: "created"` is rejected (400), not silently accepted or
 silently ignored.
 
-**I17 — `todo_events` is append-only, for everyone.** `scope: per-domain-module`
+**I17 — `todo_events` is append-only, for everyone.** `scope: domain:todo`
 *(New, milestone-4.)* No `UPDATE`, no `DELETE`, no exceptions for the
 owner. Corrections are new events. Mirrors my-task's I3 exactly, including
 its enforcement shape and its explicit limit: application-level only (no
@@ -216,7 +233,7 @@ same distinction my-task's own I3 test draws: the test asserts state
 changes always add a row, not merely that "no update method exists on the
 repo."
 
-**I18 — Only the owner may move a todo to `closed`.** `scope: per-domain-module`
+**I18 — Only the owner may move a todo to `closed`.** `scope: domain:todo`
 *(New, milestone-4.)* Any agent may comment, assign, change fields, or
 change status to anything except `closed`, on any shared todo. Only a
 session-authenticated owner may set `status: closed`. Mirrors my-task's
@@ -250,7 +267,7 @@ non-closed action succeed in the same test — a permission layer that
 rejects everything would pass a reject-only assertion just as well as a
 correct one.
 
-**I19 — Writes are idempotent when the client request id is reused (todo domain).** `scope: per-domain-module`
+**I19 — Writes are idempotent when the client request id is reused (todo domain).** `scope: domain:todo`
 *(New, milestone-4.)* A repeat `POST` carrying the same `clientRequestId`
 returns the original event, unchanged, and creates nothing — checked
 inside the same transaction as the write itself, before dispatch. Mirrors
@@ -274,7 +291,7 @@ so there is exactly one place this can be gotten wrong. **Verified by
 test**: a body containing raw HTML tags renders as literal text/escaped
 elements in the rendered output, not as unescaped markup.
 
-**I21 — The owner's key-listing spans every agent's keys; an agent's own key-listing stays self-scoped.** `scope: per-domain-module`
+**I21 — The owner's key-listing spans every agent's keys; an agent's own key-listing stays self-scoped.** `scope: domain:identity`
 *(New, milestone-4. Correction to milestone-2/3's `bff` key-listing,
 which scoped to the session owner's own `user_id` — a set that can never
 be non-empty, since `cmd/issue-key` never issues to `role='owner'` and I2
