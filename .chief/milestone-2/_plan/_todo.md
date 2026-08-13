@@ -119,7 +119,7 @@ before this milestone started.
       "Owner provisioning" note, no JIT) and nothing speculative beyond
       what the contract mandates.
       **Owns: Done-when 13.**
-- [ ] task-8: Companion `<service>-api` skill doc — scaffolded from
+- [x] task-8: Companion `<service>-api` skill doc — scaffolded from
       `my-task-api`'s shape (base URL, auth, invariant rules, endpoint
       table + worked examples, `references/` split for endpoints vs
       errors). Must carry, as identifiable sections not buried in prose:
