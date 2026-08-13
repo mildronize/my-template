@@ -23,11 +23,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/mildronize/my-template/internal/api"
+	"github.com/mildronize/my-template/internal/bffapi"
 	"github.com/mildronize/my-template/internal/domain/todo"
 	"github.com/mildronize/my-template/internal/identity"
 	"github.com/mildronize/my-template/internal/platform"
@@ -107,7 +109,12 @@ func buildHandler(ctx context.Context, cfg *platform.Config, db *sql.DB, logger 
 
 	// --- bff ------------------------------------------------------------
 	bffRouter := platform.NewRouter(logger)
-	if err := wireBFF(ctx, bffRouter, cfg, repo, todoSvc, logger); err != nil {
+	// identitySvc (built once by wireIdentity, above) is shared with bff's
+	// own new /api/bff/keys endpoints (milestone-3/task-2) — one
+	// *identity.Service instance, not two independently-constructed ones,
+	// the same shared-service-layer reasoning todoSvc's own single
+	// instance already follows across both engines.
+	if err := wireBFF(ctx, bffRouter, cfg, repo, todoSvc, identitySvc, logger); err != nil {
 		return nil, fmt.Errorf("wiring bff: %w", err)
 	}
 
@@ -211,10 +218,25 @@ func wirePublicAPI(apiV1 *gin.RouterGroup, todoSvc *todo.Service, identitySvc *i
 	return nil
 }
 
+// bffServer composes every internal/bffapi ServerInterface piece into the
+// one type internal/bffapi.RegisterHandlers needs — the bff-surface mirror
+// of apiServer, above. bff.MeServer contributes GetMe, *bff.KeysServer
+// contributes ListKeys/RevokeKey, *bff.TodoServer contributes the todo
+// CRUD methods. No method names collide, so plain embedding is
+// sufficient, same reasoning as apiServer.
+type bffServer struct {
+	bff.MeServer
+	*bff.KeysServer
+	*bff.TodoServer
+}
+
+var _ bffapi.ServerInterface = bffServer{}
+
 // wireBFF builds internal/transport/bff's session signer and its
 // owner-login flow's id-token verifier, then registers GET /login and
 // GET /callback on router (task-4.md, _contract/API.md's BFF section),
-// plus the embedded SPA (cmd/server/spa.go) as router's NoRoute handler
+// the new /api/bff JSON surface (milestone-3/task-2, below), plus the
+// embedded SPA (cmd/server/spa.go) as router's NoRoute handler
 // (milestone-3/task-1) — completing task-1's Done-when 3 (platform's
 // middleware wired into both engines): router here already carries
 // platform.NewRouter's RequestID/RequestLogging/Recovery, applied by
@@ -242,10 +264,12 @@ func wirePublicAPI(apiV1 *gin.RouterGroup, todoSvc *todo.Service, identitySvc *i
 // own router directly, independent of this function — see that package's
 // bff_testutil_test.go's newTestRouter) — it's just not wired into the
 // live binary's routing table from this call site anymore. todoSvc is
-// still accepted here (unused by this function now) so task-3 has an
-// obvious place to reintroduce a todos-backed route at this layer if the
-// SPA ever needs one.
-func wireBFF(ctx context.Context, router *gin.Engine, cfg *platform.Config, repo *identity.Repo, todoSvc *todo.Service, logger *slog.Logger) error {
+// still accepted here (now used by the /api/bff JSON surface below,
+// milestone-3/task-2 — the same instance wirePublicAPI's own TodoServer
+// uses, per ARCHITECTURE.md's shared-service-layer rule) so an obvious
+// place already existed for task-2 to wire a todos-backed route at this
+// layer, exactly as this comment predicted it would.
+func wireBFF(ctx context.Context, router *gin.Engine, cfg *platform.Config, repo *identity.Repo, todoSvc *todo.Service, identitySvc *identity.Service, logger *slog.Logger) error {
 	secret := []byte(cfg.SessionSecret)
 	if len(secret) == 0 {
 		secret = make([]byte, 32)
@@ -283,11 +307,68 @@ func wireBFF(ctx context.Context, router *gin.Engine, cfg *platform.Config, repo
 	router.GET("/login", bff.NewLoginHandler(cfg, signer, logger))
 	router.GET("/callback", bff.NewCallbackHandler(cfg, signer, idVerifier, repo, logger))
 
+	// --- /api/bff: milestone-3/task-2's new session-authenticated JSON
+	// surface (bff-openapi.yaml, internal/bffapi) -----------------------
+	//
+	// This is the point BFF writes are enabled — the I2/I12 boundary,
+	// condensed from _contract/API.md's "The I2/I12 boundary" section
+	// (see also internal/transport/bff/middleware.go's RequireSession doc
+	// comment, the other point this same reasoning is pinned to): I2 (a
+	// Bearer credential never resolves to role='owner') and I12 (a BFF
+	// session never resolves to role='agent') are two halves of one
+	// design. An owner has no Bearer credential to present at all, so a
+	// BFF session — gated here by bff.RequireJSONSession — is the *only*
+	// path by which POST/PATCH/DELETE /api/bff/todos and DELETE
+	// /api/bff/keys/{id} ever run; an agent has no session to present, so
+	// it can never reach these routes regardless. This group is
+	// deliberately the only place in this service that registers an
+	// owner-authenticated write route — wirePublicAPI (above) registers
+	// none, and per the boundary reasoning above, never should.
+	//
+	// Middleware order mirrors wireIdentity/wirePublicAPI's own: I1's
+	// RejectActorFields (reused directly from internal/transport/
+	// publicapi — a pure request-shape guard with no publicapi-specific
+	// state) runs before RequireJSONSession's own DB lookup, so a shape
+	// violation never spends a session-resolution query; the bff-openapi.yaml
+	// request validator runs last, after authentication, same as
+	// wirePublicAPI's own validator placement.
+	bffValidator, err := bffapi.RequestValidator()
+	if err != nil {
+		return fmt.Errorf("building bff-openapi request validator: %w", err)
+	}
+	apiBFF := router.Group("/api/bff")
+	apiBFF.Use(publicapi.RejectActorFields(), bff.RequireJSONSession(signer, repo, logger), bffValidator)
+	bffapi.RegisterHandlers(apiBFF, bffServer{
+		MeServer:   bff.MeServer{},
+		KeysServer: bff.NewKeysServer(identitySvc),
+		TodoServer: bff.NewTodoServer(todoSvc),
+	})
+
 	spaHandler, err := newSPAHandler()
 	if err != nil {
 		return fmt.Errorf("building embedded SPA handler: %w", err)
 	}
-	router.NoRoute(gin.WrapH(spaHandler))
+	// NoRoute is router-wide (any path this gin.Engine has no explicit
+	// route for), not scoped to "/" — without the /api/bff/ prefix check
+	// below, an unmapped path under /api/bff/ (e.g. a typo'd endpoint, or
+	// milestone-3/task-2's own negative check target,
+	// POST /api/bff/keys) would fall through to the SPA fallback and
+	// answer 200 text/html instead of a real 404, undermining Done-when
+	// 5's negative check the moment it's observed against this live
+	// router rather than internal/transport/bff's own isolated test
+	// router (which never registers a NoRoute handler at all, so it 404s
+	// correctly without needing this carve-out). Every other unmatched
+	// path (e.g. "/settings", react-router's own client-side routes)
+	// still falls through to the SPA exactly as milestone-3/task-1 built
+	// it.
+	router.NoRoute(func(c *gin.Context) {
+		if strings.HasPrefix(c.Request.URL.Path, "/api/bff/") {
+			c.AbortWithStatusJSON(http.StatusNotFound, publicapi.NewErrorEnvelope(
+				"not_found", "no such route", ""))
+			return
+		}
+		gin.WrapH(spaHandler)(c)
+	})
 
 	return nil
 }

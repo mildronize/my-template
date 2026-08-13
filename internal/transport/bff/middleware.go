@@ -89,6 +89,24 @@ func renderLoginError(c *gin.Context, logger *slog.Logger, reason string) {
 // I12 check, in case a session cookie somehow carried an agent's users.id)
 // all redirect to /login — never a 401 JSON body, this surface serves
 // HTML (_contract/API.md's BFF conventions).
+//
+// The I2/I12 boundary (why owner writes exist on bff and never on
+// publicapi), condensed from milestone-3's _contract/API.md: I2 (a Bearer
+// credential never resolves to role='owner') and I12 (checked here — a
+// BFF session never resolves to role='agent') are two halves of one
+// design, not independent rules that happen to coexist. An owner has no
+// Bearer credential to present at all (I2 forecloses it structurally), so
+// a BFF session is the *only* way an owner ever authenticates; an agent
+// has no session to present, so a Bearer credential is the only way an
+// agent ever authenticates. The two proof-of-identity mechanisms are
+// disjoint by construction — which is why the write endpoints
+// RequireJSONSession gates (json_middleware.go, milestone-3/task-2) exist
+// only on this package and can never be added to internal/transport/
+// publicapi "for consistency": doing so would mean either issuing owners
+// a Bearer credential (breaching I2) or teaching publicapi a session
+// concept it has no reason to grow. See _contract/API.md's "The I2/I12
+// boundary" section for the full reasoning; this is a pointer, not a
+// restatement.
 func RequireSession(signer *Signer, users identity.UserRepo, logger *slog.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		cookie, err := c.Cookie(sessionCookieName)
