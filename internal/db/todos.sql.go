@@ -7,95 +7,88 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"time"
 )
 
 const createTodo = `-- name: CreateTodo :one
-INSERT INTO todos (id, owner_id, title, done, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?)
-RETURNING id, owner_id, title, done, created_at, updated_at
+INSERT INTO todos (id, created_by, title, status, assignee_id, priority, due_date, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+RETURNING id, created_by, title, status, assignee_id, priority, due_date, created_at, updated_at
 `
 
 type CreateTodoParams struct {
-	ID        string    `json:"id"`
-	OwnerID   string    `json:"owner_id"`
-	Title     string    `json:"title"`
-	Done      bool      `json:"done"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID         string         `json:"id"`
+	CreatedBy  string         `json:"created_by"`
+	Title      string         `json:"title"`
+	Status     string         `json:"status"`
+	AssigneeID sql.NullString `json:"assignee_id"`
+	Priority   sql.NullString `json:"priority"`
+	DueDate    sql.NullTime   `json:"due_date"`
+	CreatedAt  time.Time      `json:"created_at"`
+	UpdatedAt  time.Time      `json:"updated_at"`
 }
 
 func (q *Queries) CreateTodo(ctx context.Context, arg CreateTodoParams) (Todo, error) {
 	row := q.db.QueryRowContext(ctx, createTodo,
 		arg.ID,
-		arg.OwnerID,
+		arg.CreatedBy,
 		arg.Title,
-		arg.Done,
+		arg.Status,
+		arg.AssigneeID,
+		arg.Priority,
+		arg.DueDate,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 	)
 	var i Todo
 	err := row.Scan(
 		&i.ID,
-		&i.OwnerID,
+		&i.CreatedBy,
 		&i.Title,
-		&i.Done,
+		&i.Status,
+		&i.AssigneeID,
+		&i.Priority,
+		&i.DueDate,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
 	return i, err
 }
 
-const deleteTodoByIDAndOwner = `-- name: DeleteTodoByIDAndOwner :execrows
-DELETE FROM todos
-WHERE id = ? AND owner_id = ?
+const getTodoByID = `-- name: GetTodoByID :one
+SELECT id, created_by, title, status, assignee_id, priority, due_date, created_at, updated_at FROM todos
+WHERE id = ?
 `
 
-type DeleteTodoByIDAndOwnerParams struct {
-	ID      string `json:"id"`
-	OwnerID string `json:"owner_id"`
-}
-
-func (q *Queries) DeleteTodoByIDAndOwner(ctx context.Context, arg DeleteTodoByIDAndOwnerParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteTodoByIDAndOwner, arg.ID, arg.OwnerID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const getTodoByIDAndOwner = `-- name: GetTodoByIDAndOwner :one
-SELECT id, owner_id, title, done, created_at, updated_at FROM todos
-WHERE id = ? AND owner_id = ?
-`
-
-type GetTodoByIDAndOwnerParams struct {
-	ID      string `json:"id"`
-	OwnerID string `json:"owner_id"`
-}
-
-func (q *Queries) GetTodoByIDAndOwner(ctx context.Context, arg GetTodoByIDAndOwnerParams) (Todo, error) {
-	row := q.db.QueryRowContext(ctx, getTodoByIDAndOwner, arg.ID, arg.OwnerID)
+// milestone-4: no owner scoping - any authenticated actor may read any
+// todo (Ownership model decision, GOAL.md).
+func (q *Queries) GetTodoByID(ctx context.Context, id string) (Todo, error) {
+	row := q.db.QueryRowContext(ctx, getTodoByID, id)
 	var i Todo
 	err := row.Scan(
 		&i.ID,
-		&i.OwnerID,
+		&i.CreatedBy,
 		&i.Title,
-		&i.Done,
+		&i.Status,
+		&i.AssigneeID,
+		&i.Priority,
+		&i.DueDate,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
 	return i, err
 }
 
-const listTodosByOwner = `-- name: ListTodosByOwner :many
-SELECT id, owner_id, title, done, created_at, updated_at FROM todos
-WHERE owner_id = ?
+const listTodos = `-- name: ListTodos :many
+SELECT id, created_by, title, status, assignee_id, priority, due_date, created_at, updated_at FROM todos
 ORDER BY created_at DESC
 `
 
-func (q *Queries) ListTodosByOwner(ctx context.Context, ownerID string) ([]Todo, error) {
-	rows, err := q.db.QueryContext(ctx, listTodosByOwner, ownerID)
+// milestone-4: no owner filter - todos are a shared collection (I3 no
+// longer applies to this domain). Reads every row.
+func (q *Queries) ListTodos(ctx context.Context) ([]Todo, error) {
+	rows, err := q.db.QueryContext(ctx, listTodos)
 	if err != nil {
 		return nil, err
 	}
@@ -105,9 +98,12 @@ func (q *Queries) ListTodosByOwner(ctx context.Context, ownerID string) ([]Todo,
 		var i Todo
 		if err := rows.Scan(
 			&i.ID,
-			&i.OwnerID,
+			&i.CreatedBy,
 			&i.Title,
-			&i.Done,
+			&i.Status,
+			&i.AssigneeID,
+			&i.Priority,
+			&i.DueDate,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -124,35 +120,150 @@ func (q *Queries) ListTodosByOwner(ctx context.Context, ownerID string) ([]Todo,
 	return items, nil
 }
 
-const updateTodoByIDAndOwner = `-- name: UpdateTodoByIDAndOwner :one
+const updateTodoAssignee = `-- name: UpdateTodoAssignee :one
 UPDATE todos
-SET title = ?, done = ?, updated_at = ?
-WHERE id = ? AND owner_id = ?
-RETURNING id, owner_id, title, done, created_at, updated_at
+SET assignee_id = ?, updated_at = ?
+WHERE id = ?
+RETURNING id, created_by, title, status, assignee_id, priority, due_date, created_at, updated_at
 `
 
-type UpdateTodoByIDAndOwnerParams struct {
-	Title     string    `json:"title"`
-	Done      bool      `json:"done"`
-	UpdatedAt time.Time `json:"updated_at"`
-	ID        string    `json:"id"`
-	OwnerID   string    `json:"owner_id"`
+type UpdateTodoAssigneeParams struct {
+	AssigneeID sql.NullString `json:"assignee_id"`
+	UpdatedAt  time.Time      `json:"updated_at"`
+	ID         string         `json:"id"`
 }
 
-func (q *Queries) UpdateTodoByIDAndOwner(ctx context.Context, arg UpdateTodoByIDAndOwnerParams) (Todo, error) {
-	row := q.db.QueryRowContext(ctx, updateTodoByIDAndOwner,
-		arg.Title,
-		arg.Done,
-		arg.UpdatedAt,
-		arg.ID,
-		arg.OwnerID,
-	)
+func (q *Queries) UpdateTodoAssignee(ctx context.Context, arg UpdateTodoAssigneeParams) (Todo, error) {
+	row := q.db.QueryRowContext(ctx, updateTodoAssignee, arg.AssigneeID, arg.UpdatedAt, arg.ID)
 	var i Todo
 	err := row.Scan(
 		&i.ID,
-		&i.OwnerID,
+		&i.CreatedBy,
 		&i.Title,
-		&i.Done,
+		&i.Status,
+		&i.AssigneeID,
+		&i.Priority,
+		&i.DueDate,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateTodoDueDate = `-- name: UpdateTodoDueDate :one
+UPDATE todos
+SET due_date = ?, updated_at = ?
+WHERE id = ?
+RETURNING id, created_by, title, status, assignee_id, priority, due_date, created_at, updated_at
+`
+
+type UpdateTodoDueDateParams struct {
+	DueDate   sql.NullTime `json:"due_date"`
+	UpdatedAt time.Time    `json:"updated_at"`
+	ID        string       `json:"id"`
+}
+
+func (q *Queries) UpdateTodoDueDate(ctx context.Context, arg UpdateTodoDueDateParams) (Todo, error) {
+	row := q.db.QueryRowContext(ctx, updateTodoDueDate, arg.DueDate, arg.UpdatedAt, arg.ID)
+	var i Todo
+	err := row.Scan(
+		&i.ID,
+		&i.CreatedBy,
+		&i.Title,
+		&i.Status,
+		&i.AssigneeID,
+		&i.Priority,
+		&i.DueDate,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateTodoPriority = `-- name: UpdateTodoPriority :one
+UPDATE todos
+SET priority = ?, updated_at = ?
+WHERE id = ?
+RETURNING id, created_by, title, status, assignee_id, priority, due_date, created_at, updated_at
+`
+
+type UpdateTodoPriorityParams struct {
+	Priority  sql.NullString `json:"priority"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	ID        string         `json:"id"`
+}
+
+func (q *Queries) UpdateTodoPriority(ctx context.Context, arg UpdateTodoPriorityParams) (Todo, error) {
+	row := q.db.QueryRowContext(ctx, updateTodoPriority, arg.Priority, arg.UpdatedAt, arg.ID)
+	var i Todo
+	err := row.Scan(
+		&i.ID,
+		&i.CreatedBy,
+		&i.Title,
+		&i.Status,
+		&i.AssigneeID,
+		&i.Priority,
+		&i.DueDate,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateTodoStatus = `-- name: UpdateTodoStatus :one
+UPDATE todos
+SET status = ?, updated_at = ?
+WHERE id = ?
+RETURNING id, created_by, title, status, assignee_id, priority, due_date, created_at, updated_at
+`
+
+type UpdateTodoStatusParams struct {
+	Status    string    `json:"status"`
+	UpdatedAt time.Time `json:"updated_at"`
+	ID        string    `json:"id"`
+}
+
+func (q *Queries) UpdateTodoStatus(ctx context.Context, arg UpdateTodoStatusParams) (Todo, error) {
+	row := q.db.QueryRowContext(ctx, updateTodoStatus, arg.Status, arg.UpdatedAt, arg.ID)
+	var i Todo
+	err := row.Scan(
+		&i.ID,
+		&i.CreatedBy,
+		&i.Title,
+		&i.Status,
+		&i.AssigneeID,
+		&i.Priority,
+		&i.DueDate,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateTodoTitle = `-- name: UpdateTodoTitle :one
+UPDATE todos
+SET title = ?, updated_at = ?
+WHERE id = ?
+RETURNING id, created_by, title, status, assignee_id, priority, due_date, created_at, updated_at
+`
+
+type UpdateTodoTitleParams struct {
+	Title     string    `json:"title"`
+	UpdatedAt time.Time `json:"updated_at"`
+	ID        string    `json:"id"`
+}
+
+func (q *Queries) UpdateTodoTitle(ctx context.Context, arg UpdateTodoTitleParams) (Todo, error) {
+	row := q.db.QueryRowContext(ctx, updateTodoTitle, arg.Title, arg.UpdatedAt, arg.ID)
+	var i Todo
+	err := row.Scan(
+		&i.ID,
+		&i.CreatedBy,
+		&i.Title,
+		&i.Status,
+		&i.AssigneeID,
+		&i.Priority,
+		&i.DueDate,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)

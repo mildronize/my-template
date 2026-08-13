@@ -13,18 +13,55 @@ type Querier interface {
 	CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (ApiKey, error)
 	CreateTodo(ctx context.Context, arg CreateTodoParams) (Todo, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
-	DeleteTodoByIDAndOwner(ctx context.Context, arg DeleteTodoByIDAndOwnerParams) (int64, error)
 	GetAPIKeyByHash(ctx context.Context, keyHash string) (ApiKey, error)
-	GetTodoByIDAndOwner(ctx context.Context, arg GetTodoByIDAndOwnerParams) (Todo, error)
+	// milestone-4: no owner scoping - any authenticated actor may read any
+	// todo (Ownership model decision, GOAL.md).
+	GetTodoByID(ctx context.Context, id string) (Todo, error)
+	// The idempotency lookup (I19): checked at the top of the write path,
+	// inside the same transaction as the insert it would otherwise perform.
+	// A hit means "return this row unchanged, write nothing."
+	GetTodoEventByClientRequestID(ctx context.Context, clientRequestID string) (TodoEvent, error)
+	// COALESCE to 0 so a todo with no events yet still returns a usable
+	// value (the caller adds 1 unconditionally) instead of NULL/sql.ErrNoRows
+	// forcing a special first-event case.
+	GetTodoEventMaxSeqByTodoID(ctx context.Context, todoID string) (int64, error)
 	// handle is COLLATE NOCASE at the schema level (see migration), so this
 	// comparison is case-insensitive without needing an explicit COLLATE here.
 	GetUserByHandle(ctx context.Context, handle string) (User, error)
 	GetUserByID(ctx context.Context, id string) (User, error)
 	GetUserBySSOSubject(ctx context.Context, ssoSubject sql.NullString) (User, error)
+	// Every query in this file is named with a "TodoEvent" prefix on
+	// purpose, not just for readability: INVARIANTS.md I15 extends
+	// internal/architecture_test.go with a check that only
+	// internal/domain/todo's own repo file references the generated
+	// *TodoEvent*-named query functions - the name is part of the contract
+	// that check matches against, not incidental.
+	// The single write path (I15) computes seq as
+	// GetTodoEventMaxSeqByTodoID's result + 1 in the same transaction as this
+	// insert, and checks GetTodoEventByClientRequestID first (I19). This
+	// query only ever appends, never mutates (I17: append-only, no
+	// exceptions).
+	InsertTodoEvent(ctx context.Context, arg InsertTodoEventParams) (TodoEvent, error)
 	ListAPIKeysByOwner(ctx context.Context, userID string) ([]ApiKey, error)
-	ListTodosByOwner(ctx context.Context, ownerID string) ([]Todo, error)
+	// The per-todo timeline (`_contract/API.md`'s milestone-4 section):
+	// oldest-first, unlike the cross-todo feed below.
+	ListTodoEventsByTodoID(ctx context.Context, todoID string) ([]TodoEvent, error)
+	// The cross-todo activity feed (`GET /api/bff/activity`,
+	// `_contract/API.md`): every event across every todo, newest first,
+	// joined to todos (title) and users (actor handle/role, so the caller can
+	// mark human vs agent). Cursor-paginated on (created_at, id): the first
+	// page passes both cursor columns as NULL; every later page passes the
+	// previous page's last row's created_at/id.
+	ListTodoEventsFeed(ctx context.Context, arg ListTodoEventsFeedParams) ([]ListTodoEventsFeedRow, error)
+	// milestone-4: no owner filter - todos are a shared collection (I3 no
+	// longer applies to this domain). Reads every row.
+	ListTodos(ctx context.Context) ([]Todo, error)
 	RevokeAPIKey(ctx context.Context, arg RevokeAPIKeyParams) (ApiKey, error)
-	UpdateTodoByIDAndOwner(ctx context.Context, arg UpdateTodoByIDAndOwnerParams) (Todo, error)
+	UpdateTodoAssignee(ctx context.Context, arg UpdateTodoAssigneeParams) (Todo, error)
+	UpdateTodoDueDate(ctx context.Context, arg UpdateTodoDueDateParams) (Todo, error)
+	UpdateTodoPriority(ctx context.Context, arg UpdateTodoPriorityParams) (Todo, error)
+	UpdateTodoStatus(ctx context.Context, arg UpdateTodoStatusParams) (Todo, error)
+	UpdateTodoTitle(ctx context.Context, arg UpdateTodoTitleParams) (Todo, error)
 }
 
 var _ Querier = (*Queries)(nil)
