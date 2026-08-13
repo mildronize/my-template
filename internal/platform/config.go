@@ -61,6 +61,17 @@ type Config struct {
 	// logs a warning that existing sessions won't survive a restart. Set
 	// this explicitly for any real deployment (docs/DEPLOY-REQUIREMENTS.md).
 	SessionSecret string `env:"SESSION_SECRET"`
+
+	// SeedOwnerSSOSubject is the owner's known Hydra `sub` claim,
+	// cmd/seed's sole input (DATA_MODEL.md's "Owner provisioning" note —
+	// the owner row is seeded once from a known subject, never
+	// JIT-created). Deliberately not required here at config-parse time,
+	// the same way SSOClientID/SSOClientSecret above are optional at this
+	// layer — cmd/seed is the only consumer, and it is the one that
+	// enforces this is set, with a clear error, rather than LoadConfig
+	// failing every other command (cmd/server, cmd/issue-key, cmd/smoke)
+	// over a var they never read.
+	SeedOwnerSSOSubject string `env:"SEED_OWNER_SSO_SUBJECT"`
 }
 
 // LoadConfig loads a .env file if one exists in the working directory
