@@ -30,7 +30,7 @@ func TestAuthenticatedViewRendersOwnersOwnTodos(t *testing.T) {
 	idp := newFakeIDP(t, "test-client")
 	cfg := idp.testConfig()
 	signer := NewSigner([]byte(cfg.SessionSecret))
-	router := newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, todoSvc)
+	router := newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, todoSvc, nil)
 
 	sessionValue, err := signer.NewSessionCookie(owner.ID)
 	require.NoError(t, err)
@@ -62,7 +62,7 @@ func TestAuthenticatedViewOnlyShowsOwnersOwnTodos(t *testing.T) {
 	idp := newFakeIDP(t, "test-client")
 	cfg := idp.testConfig()
 	signer := NewSigner([]byte(cfg.SessionSecret))
-	router := newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, todoSvc)
+	router := newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, todoSvc, nil)
 
 	sessionValue, err := signer.NewSessionCookie(owner.ID)
 	require.NoError(t, err)
@@ -95,7 +95,7 @@ func TestI12_BFFSessionNeverResolvesToAgent_ViewMiddleware(t *testing.T) {
 	idp := newFakeIDP(t, "test-client")
 	cfg := idp.testConfig()
 	signer := NewSigner([]byte(cfg.SessionSecret))
-	router := newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, todoSvc)
+	router := newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, todoSvc, nil)
 
 	sessionValue, err := signer.NewSessionCookie(agent.ID)
 	require.NoError(t, err)
@@ -121,7 +121,7 @@ func TestViewMiddleware_MissingSessionRedirectsToLogin(t *testing.T) {
 	idp := newFakeIDP(t, "test-client")
 	cfg := idp.testConfig()
 	signer := NewSigner([]byte(cfg.SessionSecret))
-	router := newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, todoSvc)
+	router := newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, todoSvc, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()

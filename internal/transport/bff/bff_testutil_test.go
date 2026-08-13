@@ -1,10 +1,12 @@
 package bff
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -24,9 +26,11 @@ import (
 	"github.com/pressly/goose/v3"
 	"github.com/stretchr/testify/require"
 
+	"github.com/mildronize/my-template/internal/bffapi"
 	"github.com/mildronize/my-template/internal/domain/todo"
 	"github.com/mildronize/my-template/internal/identity"
 	"github.com/mildronize/my-template/internal/platform"
+	"github.com/mildronize/my-template/internal/transport/publicapi"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" database/sql driver for these tests
 )
@@ -228,17 +232,86 @@ func newIDVerifier(t *testing.T, f *fakeIDP) identity.JWTVerifier {
 	return v
 }
 
-// newTestRouter wires internal/transport/bff's three routes directly
-// (bypassing cmd/server/main.go's wireBFF, which lives in package main and
-// isn't importable from here) onto a bare gin.Engine — these tests exist
-// to prove this package's own handlers, not main.go's composition, which
+// newTestRouter wires internal/transport/bff's routes directly (bypassing
+// cmd/server/main.go's wireBFF, which lives in package main and isn't
+// importable from here) onto a bare gin.Engine — these tests exist to
+// prove this package's own handlers, not main.go's composition, which
 // Done-when 3's own test (cmd/server/main_test.go) covers separately.
-func newTestRouter(cfg *platform.Config, signer *Signer, idVerifier identity.JWTVerifier, repo *identity.Repo, todoSvc *todo.Service) *gin.Engine {
+//
+// identitySvc (milestone-3/task-2, new) backs the /api/bff group's
+// KeysServer (ListKeys/RevokeKey) the same way todoSvc backs its
+// TodoServer — nil is an acceptable value for any test that only
+// exercises the todo or me endpoints, since KeysServer.Service is never
+// dereferenced unless a keys route is actually hit.
+func newTestRouter(cfg *platform.Config, signer *Signer, idVerifier identity.JWTVerifier, repo *identity.Repo, todoSvc *todo.Service, identitySvc *identity.Service) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	logger := testLogger()
 	r.GET("/login", NewLoginHandler(cfg, signer, logger))
 	r.GET("/callback", NewCallbackHandler(cfg, signer, idVerifier, repo, logger))
 	r.GET("/", RequireSession(signer, repo, logger), NewViewHandler(todoSvc))
+
+	// /api/bff mirrors cmd/server/main.go's wireBFF composition exactly
+	// (RejectActorFields -> RequireJSONSession -> bff-openapi.yaml's
+	// request validator -> the composed ServerInterface) so these tests
+	// exercise the real middleware chain, not a simplified stand-in.
+	bffValidator, err := bffapi.RequestValidator()
+	if err != nil {
+		panic(fmt.Sprintf("bff_testutil_test.go: building bff-openapi request validator: %v", err))
+	}
+	apiBFF := r.Group("/api/bff")
+	apiBFF.Use(publicapi.RejectActorFields(), RequireJSONSession(signer, repo, logger), bffValidator)
+	bffapi.RegisterHandlers(apiBFF, testBFFServer{
+		MeServer:   MeServer{},
+		KeysServer: NewKeysServer(identitySvc),
+		TodoServer: NewTodoServer(todoSvc),
+	})
+
 	return r
+}
+
+// testBFFServer mirrors cmd/server/main.go's own unexported bffServer
+// composite (that type lives in package main and isn't importable from
+// here) — same embedding, same reasoning: no method names collide across
+// MeServer/KeysServer/TodoServer, so plain embedding satisfies
+// bffapi.ServerInterface with no hand-written delegation.
+type testBFFServer struct {
+	MeServer
+	*KeysServer
+	*TodoServer
+}
+
+var _ bffapi.ServerInterface = testBFFServer{}
+
+// doBFFJSONRequest issues an HTTP request against the /api/bff JSON
+// surface, presenting sessionValue (if non-empty) as this package's own
+// signed session cookie (session.go's sessionCookieName) — the BFF
+// surface's own auth mechanism, distinct from internal/transport/
+// publicapi's doJSONRequest (which presents an Authorization: Bearer
+// header instead), mirroring that helper's shape for everything else
+// (JSON body encoding, response recording).
+func doBFFJSONRequest(t *testing.T, router *gin.Engine, method, path, sessionValue string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	var buf bytes.Buffer
+	if body != nil {
+		require.NoError(t, json.NewEncoder(&buf).Encode(body))
+	}
+	req := httptest.NewRequest(method, path, &buf)
+	req.Header.Set("Content-Type", "application/json")
+	if sessionValue != "" {
+		req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: sessionValue})
+	}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	return rec
+}
+
+// decodeBFFError decodes a bffapi.Error-shaped response body — generic
+// across every domain on this surface, mirrors internal/transport/
+// publicapi's own decodeError.
+func decodeBFFError(t *testing.T, rec *httptest.ResponseRecorder) bffapi.Error {
+	t.Helper()
+	var got bffapi.Error
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	return got
 }

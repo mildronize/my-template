@@ -24,7 +24,7 @@ func TestI11_LoginRedirectAlwaysIncludesPKCEChallenge(t *testing.T) {
 	idp := newFakeIDP(t, "test-client")
 	cfg := idp.testConfig()
 	signer := NewSigner([]byte(cfg.SessionSecret))
-	router := newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, nil)
+	router := newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/login", nil)
 	rec := httptest.NewRecorder()
@@ -66,7 +66,7 @@ func TestLogin_MissingConfigShowsErrorNotACrash(t *testing.T) {
 	cfg := idp.testConfig()
 	cfg.SSOClientID = "" // simulate scripts/register.sh's Step 1 not having run yet
 	signer := NewSigner([]byte(cfg.SessionSecret))
-	router := newTestRouter(cfg, signer, nil, repo, nil)
+	router := newTestRouter(cfg, signer, nil, repo, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/login", nil)
 	rec := httptest.NewRecorder()

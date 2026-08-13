@@ -33,7 +33,7 @@ func TestI11_CallbackNeverExchangesWithoutStateCookie(t *testing.T) {
 		idp := newFakeIDP(t, "test-client")
 		cfg := idp.testConfig()
 		signer := NewSigner([]byte(cfg.SessionSecret))
-		router := newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, nil)
+		router := newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, nil, nil)
 
 		req := callbackRequest("some-state", "some-code", "", false)
 		rec := httptest.NewRecorder()
@@ -50,7 +50,7 @@ func TestI11_CallbackNeverExchangesWithoutStateCookie(t *testing.T) {
 		idp := newFakeIDP(t, "test-client")
 		cfg := idp.testConfig()
 		signer := NewSigner([]byte(cfg.SessionSecret))
-		router := newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, nil)
+		router := newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, nil, nil)
 
 		valid, err := signer.NewStateCookie("real-state", "real-verifier")
 		require.NoError(t, err)
@@ -71,7 +71,7 @@ func TestI11_CallbackNeverExchangesWithoutStateCookie(t *testing.T) {
 		idp := newFakeIDP(t, "test-client")
 		cfg := idp.testConfig()
 		signer := NewSigner([]byte(cfg.SessionSecret))
-		router := newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, nil)
+		router := newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, nil, nil)
 
 		valid, err := signer.NewStateCookie("real-state", "real-verifier")
 		require.NoError(t, err)
@@ -112,7 +112,7 @@ func TestI12_BFFSessionNeverResolvesToAgent_Callback(t *testing.T) {
 	idp.setSub(agent.SSOSubject)
 	cfg := idp.testConfig()
 	signer := NewSigner([]byte(cfg.SessionSecret))
-	router := newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, nil)
+	router := newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, nil, nil)
 
 	valid, err := signer.NewStateCookie("real-state", "real-verifier")
 	require.NoError(t, err)
@@ -138,7 +138,7 @@ func TestCallback_UnrecognizedSubIsAnErrorPageNeverAJITRow(t *testing.T) {
 	idp.setSub("sub-that-was-never-seeded")
 	cfg := idp.testConfig()
 	signer := NewSigner([]byte(cfg.SessionSecret))
-	router := newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, nil)
+	router := newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, nil, nil)
 
 	valid, err := signer.NewStateCookie("real-state", "real-verifier")
 	require.NoError(t, err)
@@ -169,7 +169,7 @@ func TestCallback_SuccessfulOwnerLoginSetsSessionAndRedirects(t *testing.T) {
 	idp.setSub(owner.SSOSubject)
 	cfg := idp.testConfig()
 	signer := NewSigner([]byte(cfg.SessionSecret))
-	router := newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, nil)
+	router := newTestRouter(cfg, signer, newIDVerifier(t, idp), repo, nil, nil)
 
 	valid, err := signer.NewStateCookie("real-state", "real-verifier")
 	require.NoError(t, err)
