@@ -17,7 +17,7 @@ tools:
 #
 # The internal/db cleanup step below runs first: sqlc emits one .sql.go
 # file per db/queries/*.sql file, so deleting a query file (e.g. on fork,
-# removing db/queries/todos.sql per docs/GETTING-STARTED.md Step 4)
+# removing db/queries/todos.sql per docs/GETTING-STARTED.md Step 5)
 # leaves its old internal/db/todos.sql.go orphaned — sqlc has no reason
 # to touch or remove a file it's not generating anymore, and an orphaned
 # file referencing a dropped table breaks the build until removed by

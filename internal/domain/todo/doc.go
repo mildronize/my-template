@@ -12,6 +12,6 @@
 // not as step one. Study it first (that's what reading this file is),
 // then copy it into your new module and get it wired in alongside the
 // original; deleting internal/domain/todo is the second-to-last step, not
-// the first. See docs/GETTING-STARTED.md Step 4, which spells out why and
+// the first. See docs/GETTING-STARTED.md Step 5, which spells out why and
 // in what order.
 package todo

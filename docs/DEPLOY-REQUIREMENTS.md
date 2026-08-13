@@ -63,7 +63,7 @@ that needs one, against the running deployment's own database:
 docker compose exec app /app/issue-key <handle>
 ```
 
-(`app` is `docker-compose.yml`'s service key in this template — Step 2 of
+(`app` is `docker-compose.yml`'s service key in this template — Step 3 of
 `docs/GETTING-STARTED.md` lets a fork rename it, so substitute the fork's
 actual service key if it's not `app`.)
 
@@ -73,6 +73,62 @@ key prints to stdout **exactly once** and is never stored anywhere
 recoverable (I8) — copy it immediately. Losing it means rotating (run the
 command again for the same handle) or revoking
 (`DELETE /api/v1/keys/:id`), not retrieving.
+
+## Owner-login Hydra client registration (`scripts/register.sh`)
+
+Needed **unconditionally**, unlike the JWT-Bearer client registration
+below — `internal/transport/bff`'s owner-login flow (`GET /login`,
+`GET /callback`, `authorization_code` + PKCE per `sso-consumer-
+contract.md` §2) has no working path without a registered client, and
+that's true even for a local-only deployment that never touches a real
+domain. This is a **different** Hydra client than the JWT-Bearer one in
+the section below — that one is for machine/agent identity (§3,
+currently dormant by design); this one is for a human owner proving
+identity through a browser, which is Hydra's ordinary, always-live use
+case. Registering this one is not gated on the JWT-path caution below.
+
+This template ships **no** Hydra client of its own — per contract §6 a
+stable `--id` is `<service>`/`<service>-dev`, derived from a service name
+that doesn't exist until a fork has actually named itself
+(`.chief/milestone-2/_goal/GOAL.md`'s "Client registration" Decisions
+row). `scripts/register.sh` is what a fork runs, once per environment, to
+create its own client. It is a generalized, placeholder-driven adaptation
+of `prod-thw-home`'s `deploy/sso/scripts/register-my-task.sh`, preserving
+every one of that script's safety properties: refuses to overwrite an
+existing client, reads the registration back from Hydra rather than
+trusting the create call's own output, probes the authorize endpoint with
+both a registered and an unregistered redirect URI, and **prints** the
+resulting env values rather than writing them anywhere (a re-run can
+never silently clobber a working config).
+
+**Set before running** (see the script's own header comment for the full
+description of each):
+
+| Var | Meaning |
+| --- | --- |
+| `SERVICE_NAME` | This service's stable name (`docs/GETTING-STARTED.md` Step 3) — becomes `<SERVICE_NAME>-dev` / `<SERVICE_NAME>` per contract §6's stable-id convention. |
+| `SERVICE_PUBLIC_URL` | This service's own public URL **for the environment being registered right now** — becomes both the Hydra client's `audience` and the base of its redirect URI (`${SERVICE_PUBLIC_URL}/callback`). Same value `AUTH_AUDIENCE` (below) must be set to at runtime. Never an opaque name. |
+| `SSO_ISSUER` | The issuer URL to report back — same value this service's own `SSO_ISSUER` config var must be set to. Echoed in the script's printed output only; the script itself never calls it. |
+| `HYDRA_ADMIN_URL` | Hydra's Admin API, reachable from wherever the script runs (e.g. `http://127.0.0.1:4445`). Not defaulted — this template doesn't assume any particular host/fleet. |
+| `HYDRA_PUBLIC_URL` | Hydra's public endpoint, used only by the script's authorize-probe (e.g. `http://127.0.0.1:4444`). |
+| `ENV` | `dev` or `prod` — no default. Run the script once per environment; dev and prod get separate clients with separate audiences. |
+| `CLIENT_SECRET` (optional) | An existing secret, to make a rebuild transparent to this service. Pass via environment, never as an argument. |
+| `HYDRA_IMAGE` (optional) | Defaults to `oryd/hydra:v2.3`. |
+
+```sh
+ENV=dev \
+  SERVICE_NAME=<your-fork's-service-name> \
+  SERVICE_PUBLIC_URL=<this-service's-own-public-url-for-dev> \
+  SSO_ISSUER=<your-idp's-issuer-url> \
+  HYDRA_ADMIN_URL=<hydra-admin-api-url> \
+  HYDRA_PUBLIC_URL=<hydra-public-endpoint-url> \
+  ./scripts/register.sh
+```
+
+The script prints `SSO_ISSUER`/`SSO_CLIENT_ID`/`SSO_CLIENT_SECRET`/
+`AUTH_AUDIENCE` once, on success — paste those into this service's own
+deployment config (`.env`, compose file, systemd unit) yourself. See
+`docs/GETTING-STARTED.md` Step 1.
 
 ## Real Hydra client registration (JWT path)
 

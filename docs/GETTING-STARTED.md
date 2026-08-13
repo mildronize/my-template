@@ -3,35 +3,81 @@
 This is the fork checklist: what a new service built from this template
 must rename, re-register, and replace before it's its own thing rather
 than a copy of `my-template` with a different git remote
-(`.chief/milestone-1/_goal/GOAL.md` Done-when 10). Follow the four labeled
+(`.chief/milestone-1/_goal/GOAL.md` Done-when 10). Follow the five labeled
 steps below in order — each is checked independently, so skipping one
-leaves a specific, identifiable trace (a stale module path, a stale
-service name, an audience that still points at this template, or a
-`internal/todo/` nobody meant to keep). Read "Prerequisites" first, then
-"Running what you forked" once the four steps are done, to actually see
-it work.
+leaves a specific, identifiable trace (a dead login path, a stale module
+path, a stale service name, an audience that still points at this
+template, or a `internal/todo/` nobody meant to keep). Read
+"Prerequisites" first, then "Running what you forked" once the five steps
+are done, to actually see it work.
 
 ## Prerequisites
 
 `bin/` is gitignored (`.gitignore`) — a fresh `git clone` of this
 template, or of a fork made from it, has none of `sqlc`, `goose`, or
 `oapi-codegen` on disk yet, even though `go.mod`/`go.sum` pin their exact
-versions. Run this before anything else, including before Step 1:
+versions. Run this before anything else, including before Step 2:
 
 ```sh
 make tools
 ```
 
 This installs the three pinned tools into `./bin` (`GOBIN=$(CURDIR)/bin`,
-Makefile). Nothing in Step 1–4 below works without it — `make generate`
-(the Makefile target, run more than once during Step 4: once after adding
+Makefile). Nothing in Step 2–5 below works without it — `make generate`
+(the Makefile target, run more than once during Step 5: once after adding
 your new module's migration/queries/openapi content, again after deleting
 `internal/todo`) shells out to `bin/sqlc` and `bin/oapi-codegen` directly,
-and they won't exist otherwise. You need these tools as early as Step 4's
+and they won't exist otherwise. You need these tools as early as Step 5's
 migration-authoring sub-step (`bin/goose create`, see "Writing a new
 migration" below) — well before the deletion sub-step, not just at it.
+`make tools` has nothing to do with Step 1 below (registering a Hydra
+client) — that step doesn't touch Go tooling at all.
 
-## Step 1: Rename the Go module path
+## Step 1: Register a Hydra client for owner login
+
+**Run this first, before any of the rename steps below — including if
+you're only running this template locally and never plan to deploy it.**
+`internal/transport/bff`'s owner-login flow (`GET /login`, `GET
+/callback`, `authorization_code` + PKCE per `sso-consumer-contract.md`
+§2) needs a Hydra OAuth2 client registered before it can complete a
+single login. **There is no lighter local path** — per contract §6, a
+client's stable `--id` is derived from `<service>`/`<service>-dev`, and
+that id doesn't exist until Step 3 below has actually named your fork.
+This template ships **no** Hydra client of its own for exactly that
+reason (`.chief/milestone-2/_goal/GOAL.md`'s "Client registration"
+Decisions row) — one gets created once, by you, with `scripts/
+register.sh`.
+
+```sh
+ENV=dev \
+  SERVICE_NAME=<your-fork's-service-name> \
+  SERVICE_PUBLIC_URL=<this-service's-own-public-url-for-dev> \
+  SSO_ISSUER=<your-idp's-issuer-url> \
+  HYDRA_ADMIN_URL=<hydra-admin-api-url> \
+  HYDRA_PUBLIC_URL=<hydra-public-endpoint-url> \
+  ./scripts/register.sh
+```
+
+See `docs/DEPLOY-REQUIREMENTS.md`'s "Owner-login Hydra client
+registration" section for exactly what each variable means, where its
+value comes from, and what the script does (and refuses to do) — it
+refuses to overwrite an existing client rather than silently recreating
+it, reads the registration back from Hydra rather than trusting the
+create call's own output, probes the authorize endpoint with both a
+registered and an unregistered redirect URI, and **prints** the resulting
+`SSO_ISSUER`/`SSO_CLIENT_ID`/`SSO_CLIENT_SECRET`/`AUTH_AUDIENCE` values
+rather than writing them to any file — paste them into your own
+deployment's config yourself.
+
+Run it again with `ENV=prod` and that environment's own `SERVICE_PUBLIC_URL`
+once you actually deploy — one registration per service per environment,
+never shared (dev and prod must never accept each other's tokens).
+
+If you haven't done Step 3 (renaming the service) yet, `SERVICE_NAME` here
+is still whatever you're about to rename this fork to — decide the name
+now if you haven't, since this step's `CLIENT_ID` bakes it in.
+
+## Step 2: Rename the Go module path
 
 The module path is currently `github.com/mildronize/my-template`
 (`go.mod`'s `module` line). Change it to your new repo's real path, then
@@ -56,16 +102,16 @@ comment** (`modulePath`'s example), not in its logic — editing it
 is harmless but has no functional effect either way, since the test
 itself resolves the module path dynamically at run time (`go list -m`),
 never hardcoded. The same test also doesn't need editing for adding,
-renaming, or removing a domain module (Step 4) — the set of domain
+renaming, or removing a domain module (Step 5) — the set of domain
 modules it checks is likewise resolved dynamically (an `internal/*`
 directory listing that excludes the four infrastructure directories
 `api`/`db`/`dbquery`/`platform` — `dbquery` is a small shared test-helper
 package behind every domain module's I4 check, see its own doc comment),
 not hardcoded.
 
-## Step 2: Rename the service
+## Step 3: Rename the service
 
-Distinct from Step 1 — the module path is Go's internal name for the
+Distinct from Step 2 — the module path is Go's internal name for the
 code, the service name is what it's called everywhere else:
 
 - `openapi.yaml`'s `info.title` (currently `my-template API`).
@@ -93,20 +139,40 @@ code, the service name is what it's called everywhere else:
   below for the count and why), since it's the document that explains the
   domain being replaced. Give it the same pass once you're done, or plan
   to replace it with your own fork's documentation.
+- **The key path (`~/.my-template/keys/`) and the resolver's env var
+  (`MY_TEMPLATE_CREW`)** — both still carry the literal `my-template` name
+  today, the same as everything else on this list, and skipping this line
+  specifically has a worse failure mode than the others: **two forked
+  services that both skip this rename write to the *same* directory and
+  silently overwrite each other's key files.** No error, no collision
+  warning — the second fork to issue or rotate a key just wins, and the
+  first fork's agents either start authenticating as the wrong identity or
+  find their key replaced out from under them. This is only reproducible
+  once someone forks *twice*, so a single-fork smoke test will never catch
+  it — rename both of these explicitly, don't assume the rest of this
+  checklist implies it. (`~/.my-template/bin/key`'s fallback chain is
+  `argument → MY_TEMPLATE_CREW → TYP_CREW_NAME`; rename the middle one to
+  match your fork's own service name.)
 
-## Step 3: Set `AUTH_AUDIENCE` to the new service's own public URL
+## Step 4: Set `AUTH_AUDIENCE` to the new service's own public URL
 
 This is a **deployment-configuration step, not a code edit** —
 `AUTH_AUDIENCE` is a deploy-time environment variable
 (`internal/platform/config.go`'s `Config` struct), read at process
 startup. There is no `.env.example` in this repo and no file with a
 literal audience value in it to go find and change; there's nothing to
-`grep` for the way Step 1 greps for the module path. What you actually do
+`grep` for the way Step 2 greps for the module path. What you actually do
 on fork is set the variable, in whatever your deployment target's
 environment mechanism is (`.env`, a compose file, a systemd unit,
 hestia's deployment scripts — see `docs/DEPLOY-REQUIREMENTS.md`), to your
 new service's own public URL — never an opaque name, and never copied
 from this template's value.
+
+**This is the same value as Step 1's `SERVICE_PUBLIC_URL`.** Whatever URL
+you registered the Hydra client's audience against in Step 1 is what
+`AUTH_AUDIENCE` must be set to at runtime, per environment — a mismatch
+here fails at the token exchange, not at the login screen, so it reads
+like an application bug rather than a registration/config mismatch.
 
 **The essential rule, one per service per environment (`sso-consumer-
 contract.md` §6, "Audience convention"):**
@@ -125,16 +191,18 @@ on a fork made on a different machine or fleet than `thw-home`'s. The
 summary above is everything this step needs; if you're not on this
 fleet, adapt this step to your own SSO/IDP's audience convention instead
 of chasing that path. If you *are* on this fleet, see
-`docs/DEPLOY-REQUIREMENTS.md`'s "Real Hydra client registration" section
-for the full registration requirements (stable `--id`, `jwt`
-access-token-strategy, this same audience convention, and why hestia
-should not register a client for *this* template as-is).
+`docs/DEPLOY-REQUIREMENTS.md`'s "Owner-login Hydra client registration"
+section (Step 1's own registration, run with `scripts/register.sh`) and
+its "Real Hydra client registration (JWT path)" section (a **separate**,
+still-dormant path — stable `--id`, `jwt` access-token-strategy, this
+same audience convention, and why hestia should not register a client
+for *that* path yet).
 
 **Read the JWT-seam note below before deciding this step even applies
 yet** — as of this milestone, the JWT Bearer path this audience feeds
 into is wired-but-dormant, not live.
 
-## Step 4: Locate and replace the todo domain
+## Step 5: Locate and replace the todo domain
 
 The example domain lives entirely in **`internal/todo/`** — one
 directory, per this repo's module-first architecture
@@ -202,7 +270,7 @@ discovering it's missing later:
   repo's convention names every module's adapter type `Server`. One
   module embedded at a time genuinely doesn't need its own composition
   mechanism, as this bullet used to claim outright; two coexisting during
-  Step 4's copy-then-delete window do — see "Two modules, briefly, at
+  Step 5's copy-then-delete window do — see "Two modules, briefly, at
   once" (below the numbered list) for the type-alias workaround this
   actually requires.
 
@@ -378,8 +446,17 @@ with your fork.
 
 ## Running what you forked
 
-Once Steps 1–4 are done (or even before, against the unforked template,
-to see it work at all):
+Once Steps 1–5 are done (or even before, against the unforked template,
+to see it work at all — Steps 2–5 are skippable purely to try the
+unforked template as-is). **Step 1 is different: it's not skippable just
+because the rest of this walkthrough happens to work without it.** The
+numbered checklist below only exercises the API-key path (steps 1–5
+below never touch `bff`), so it'll pass with Step 1 undone — but the
+moment you or anyone else opens `GET /login`, an unregistered client
+means a dead login path, on the unforked template or any fork, local
+deployment included. If owner login is part of what you're validating,
+do Step 1 first regardless of whether this walkthrough alone would have
+caught its absence:
 
 1. `make tools`, if you haven't already (Prerequisites, above).
 2. Start the service, either:
@@ -417,7 +494,7 @@ to see it work at all):
    go run ./cmd/issue-key <handle>
    # or, against a running docker compose service (docker-compose.yml's
    # service key is "app" in this template — use your fork's own key if
-   # you renamed it in Step 2):
+   # you renamed it in Step 3):
    docker compose exec app /app/issue-key <handle>
    ```
 
@@ -468,7 +545,7 @@ shape:
 ## Invariants: two things, not one
 
 I3 and I4 are referenced throughout this document — including the two
-paragraphs right below and Step 4's invariant-deletion sub-step — without
+paragraphs right below and Step 5's invariant-deletion sub-step — without
 ever being explained here; their actual text lives only in
 `.chief/milestone-1/_contract/INVARIANTS.md`, which this document assumes
 you have open. In short, so the choices below can be made informed even if
@@ -541,10 +618,10 @@ body" as a minor asterisk. It's the difference between "a suite that's
 green" and "an API that's actually safe," and only a real test body, read
 by a human, closes it.
 
-**Removal works the same way, in reverse, and it's the direction Step 4
+**Removal works the same way, in reverse, and it's the direction Step 5
 above actually hits.** Your new domain module needs its own
 `TestI3_...`/`TestI4_...` if it copied `internal/todo`'s pattern
-(Step 4 above has you copy `internal/todo` before deleting it, precisely
+(Step 5 above has you copy `internal/todo` before deleting it, precisely
 so this is a rename, not a from-scratch rewrite). `internal/identity`
 keeps its own dedicated `TestI3_...` and `TestI4_...` regardless of what
 you do to `internal/todo` or your new module — per-domain-module scope
@@ -561,7 +638,7 @@ fork —
   test for it in your new module's own package, so the entry stays
   honest.
 - You already copied `internal/todo`'s `TestI3_...`/`TestI4_...` tests
-  into your new module as part of Step 4 (above) and just need to rename
+  into your new module as part of Step 5 (above) and just need to rename
   them to match your new module's naming — re-homing an existing test,
   not writing one from nothing.
 - Your new domain doesn't need that invariant at all — remove the I3/I4
@@ -630,10 +707,10 @@ written here** — an earlier version of this paragraph put a specific
 count in prose twice, and both times the actual number had drifted by the
 next fix round without anyone noticing until the next blind test. Run the
 grep at the end of this section yourself; that output is the only
-trustworthy count, excluding everything a correct Step 4 already deletes
+trustworthy count, excluding everything a correct Step 5 already deletes
 or edits (`internal/todo/` itself, its migration and query file, the two
 generated outputs `internal/db`/`internal/api/openapi.gen.go`,
-`openapi.yaml`'s own `/todos` content per Step 4's now-corrected delete
+`openapi.yaml`'s own `/todos` content per Step 5's now-corrected delete
 list, and `cmd/server/main.go`'s registration) and this repo's unrelated
 `.chief`-planning-framework use of the word "todo" in `_todo.md`,
 `AGENTS.md`, `.agents/`, which has nothing to do with the domain. **This
@@ -658,11 +735,11 @@ This document's own opening line claims "skipping a step leaves a
 specific, identifiable trace"; a leftover `todo` in a comment is a trace
 regardless of whether any step was actually skipped, so it doesn't
 uniquely identify a missed step the way a stale import path does. After
-Steps 1–4, run one more pass — **excluding `.chief/`**, which is kept
+Steps 2–5, run one more pass — **excluding `.chief/`**, which is kept
 deliberately as historical record (see "`.chief/`" below) and would
 otherwise dominate the results with hits that aren't about your fork at
 all, and **including `docs/GETTING-STARTED.md` itself** in what you check
-(Step 2 already lists `docs/DEPLOY-REQUIREMENTS.md` as a rename-pass
+(Step 3 already lists `docs/DEPLOY-REQUIREMENTS.md` as a rename-pass
 target for the same reason — this file collects the most references of
 any single file once you've forked, precisely because it's the file that
 explains the domain being replaced):
