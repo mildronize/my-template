@@ -69,9 +69,37 @@ registered and an unregistered redirect URI, and **prints** the resulting
 rather than writing them to any file — paste them into your own
 deployment's config yourself.
 
+**If an agent is running this script, not a human at a terminal, this
+printed output is a real footgun.** Printing rather than writing to a
+file is correct for a human — they read the terminal once and it scrolls
+away — but an agent's stdout becomes its own conversation context, which
+can't be un-read the way a terminal scrolls away. Most fork setups on
+this fleet will be agent-run. If that's you: once `SSO_CLIENT_SECRET` has
+been copied out to wherever the real deployment config lives, **rotate
+this client's secret** rather than leave the value the script printed
+live in your own context — see `~/gits/prod-thw-home/docs/
+secret-rotation.md`'s "OAuth2 client secrets (Hydra)" section for the
+actual procedure (register a second client and cut over, or `PATCH` the
+existing client's secret in place).
+
 Run it again with `ENV=prod` and that environment's own `SERVICE_PUBLIC_URL`
 once you actually deploy — one registration per service per environment,
 never shared (dev and prod must never accept each other's tokens).
+
+**`http://localhost` for local dev works with zero extra setup — the
+cookie `Secure` attribute follows `AUTH_AUDIENCE`'s own scheme.**
+`internal/transport/bff` sets `Secure` on its login/session cookies only
+when `AUTH_AUDIENCE` (Step 4, the same value as this step's
+`SERVICE_PUBLIC_URL`) starts with `https://`; a plain `http://localhost`
+value gets a non-`Secure` cookie instead. This isn't a manually-flippable
+dev/prod flag someone could ship in the wrong position — it's read from
+the same URL that already has to be correct for the OAuth redirect to
+match at all, so there's no separate setting to get wrong. **Don't read
+this as "cookies over plain http are safe in general"** — it's specifically
+safe here because local dev is expected to use `http://localhost`
+(nothing but your own browser ever sees that traffic), and a real
+deployment's `SERVICE_PUBLIC_URL`/`AUTH_AUDIENCE` will always be
+`https://`, which always gets a `Secure` cookie automatically.
 
 If you haven't done Step 3 (renaming the service) yet, `SERVICE_NAME` here
 is still whatever you're about to rename this fork to — decide the name
@@ -656,6 +684,33 @@ caught its absence:
 5. Use the key: `curl -H "Authorization: Bearer <key>" http://localhost:8080/api/v1/me`
    should return the handle you issued the key for. That's the same
    condition GOAL.md's own Human Acceptance criterion stops at.
+
+### Known limitation: the owner has no supported way to create a todo
+
+If you log in through `GET /login` expecting to see (or create) something,
+there's nothing there yet, and that's expected, not a bug you're hitting
+by accident. The public API rejects an owner's Bearer token by design
+(I2 — a browser session must never carry API-key-equivalent write
+authority), and `internal/transport/bff` is read-only: `GET /login`,
+`GET /callback`, `GET /` (a view), nothing that writes. **There is
+currently no supported path for the owner to create a todo at all.**
+
+To seed something for the owner's view to actually render (a demo, or
+มายด์'s own acceptance check), reach into the database directly —
+`cmd/seed`-style direct DB access, or a manual `INSERT` against
+`DATABASE_PATH`'s SQLite file. This is the expected way to get data in
+front of the owner today, not a workaround for a missing feature you
+should go implement.
+
+**Open design question, deliberately not answered by this milestone:**
+if the owner never holds an API credential (I2) and the BFF never writes,
+who creates the owner's data in a real deployment? The likely answer,
+following my-task's own pattern, is **agents acting on the owner's
+behalf** — an agent holding its own API key performs the write, and the
+owner only ever views. If that's the intended pattern here too, it's
+worth stating explicitly so this read-only surface reads as a deliberate
+design choice rather than an unfinished stub. Whether to build toward
+that (or something else) is left for a future milestone.
 
 ## JWT seam: wired, but dormant by design
 

@@ -194,6 +194,32 @@ Machine-checkable stopping conditions, one task owner each (assigned in
     reference by path — check it directly rather than assuming relocation
     alone didn't break the container build.
 
+## Known limitation: the owner has no supported way to create a todo
+
+Found by Clara standing up a real dev instance for มายด์'s acceptance
+attempt (2026-08-13, task-10): the public API rejects owner Bearer tokens
+by design (I2), and the BFF (`internal/transport/bff`) is read-only —
+`GET /login`, `GET /callback`, `GET /` — no write path exists anywhere
+for the owner. Clara had to `INSERT` directly into the database to give
+มายด์ anything to look at. **This is expected, not a bug** — not adding
+owner-write endpoints this milestone (out of scope, มายด์'s call, not
+asked for) — but it's real enough that a future person standing up a demo
+or acceptance check should be told, not left to discover it by hitting
+the same wall Clara did. Documented in `docs/GETTING-STARTED.md`'s
+"Running what you forked" section: seeding data currently requires
+reaching into the database directly (`cmd/seed`-style direct access, or
+manual SQL).
+
+**Open design question, not answered here:** if the owner never holds an
+API credential (I2) and the BFF never writes, who creates the owner's
+data in a real fork? The likely answer, matching my-task's own actual
+pattern, is agents acting on the owner's behalf — an agent holds the API
+key and performs the write, the owner only ever views. If that's the
+intended shape for this template too, a future milestone should say so
+explicitly, so this read-only surface reads as a deliberate design
+decision rather than an unfinished stub. Not designed or decided here —
+only named, so it isn't lost.
+
 ### Human acceptance — after the loop, not part of it
 
 **มายด์ logs in through the owner-login flow against a real, registered

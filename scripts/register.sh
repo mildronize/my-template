@@ -274,4 +274,15 @@ Hydra never returns a client secret after creation, so this is the only
 time it is printed. If it is lost, the client has to be re-created or
 patched -- restart this service and confirm the owner-login flow still
 works, report the result either way, not only on failure.
+
+If an AGENT is running this script (most fork setups on this fleet are
+agent-run): the SSO_CLIENT_SECRET above is now in that agent's own
+conversation context, which -- unlike a human reading a terminal and
+discarding it -- can never be un-read. Once the value has been copied out
+to wherever the real config lives, rotate this client's secret rather
+than leave the original value live in that context. See
+~/gits/prod-thw-home/docs/secret-rotation.md's "OAuth2 client secrets
+(Hydra)" section for the actual rotation procedure (register a second
+client and cut over, or PATCH the existing client's secret in place --
+never "hydra update", which replaces the whole client record).
 EOF

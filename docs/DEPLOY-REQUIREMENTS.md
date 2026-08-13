@@ -139,6 +139,44 @@ The script prints `SSO_ISSUER`/`SSO_CLIENT_ID`/`SSO_CLIENT_SECRET`/
 deployment config (`.env`, compose file, systemd unit) yourself. See
 `docs/GETTING-STARTED.md` Step 1.
 
+**If an agent ran this script**, `SSO_CLIENT_SECRET` above is now sitting
+in that agent's own conversation context — unlike a human at a terminal,
+an agent can't discard it by scrolling away. Once the printed values have
+been copied into this service's real deployment config, rotate this
+client's secret rather than leave the original value live in that
+context. See `~/gits/prod-thw-home/docs/secret-rotation.md`'s "OAuth2
+client secrets (Hydra)" section for the actual procedure — either
+register a second client and cut over (zero-downtime, temporary duplicate
+client), or `PATCH` the existing client's `client_secret` in place
+(faster, smaller safe window, never `hydra update`, which replaces the
+whole client record).
+
+### Owner-login cookie `Secure` attribute follows `AUTH_AUDIENCE`'s scheme
+
+`internal/transport/bff`'s two cookies (the short-lived `oauth_state`
+cookie `GET /login` sets, and the `session` cookie `GET /callback` sets)
+compute their `Secure` attribute once, at startup, from `AUTH_AUDIENCE`'s
+own URL scheme — `true` for `https://`, `false` for `http://`. This is
+not an independently-settable dev/prod flag; it's derived from the same
+`AUTH_AUDIENCE` value that already has to be correct for the OAuth
+redirect to match at all (see "Environment variables" above), so there is
+no separate setting that could ship in the wrong position.
+
+**Why this exists:** Safari refuses to store a `Secure` cookie over plain
+`http://`, even for `localhost` — Chrome tolerates it (treats
+`http://localhost` as a trustworthy origin), which is why a `Secure: true`
+cookie hardcoded regardless of scheme worked in one browser and silently
+dead-ended the owner-login flow in another (มายด์'s own first login
+attempt, 2026-08-13: no valid `oauth_state` cookie came back on the
+callback, over an SSH-forwarded `http://localhost:8080` in Safari).
+
+**This means `http://localhost` needs zero extra setup for local dev** —
+the non-`Secure` cookie is exactly what a plain-http local origin needs.
+**It does not mean cookies over http are safe in general.** A real
+deployment's `AUTH_AUDIENCE` is always `https://` (see "Audience
+convention" in `docs/GETTING-STARTED.md` Step 4), so a real deployment
+always gets `Secure` cookies automatically, with nothing to configure.
+
 ## Real Hydra client registration (JWT path)
 
 Only needed if a real deployment decides to turn on the JWT Bearer path —

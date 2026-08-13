@@ -199,7 +199,7 @@ before this milestone started.
       **Owns: none new — hardens what already-closed Done-when items
       actually guarantee.** Blind test 6 after this lands.
 
-- [ ] task-10: Fix findings from มายด์'s actual acceptance attempt
+- [x] task-10: Fix findings from มายด์'s actual acceptance attempt
       (2026-08-13) and Clara standing up a real dev instance for it — the
       first time anything, human or agent, tried a real browser login.
       **มายด์'s login failed in the first minute**, and it's the reason
