@@ -1,20 +1,14 @@
 /*
- * TPL-1 milestone-3/task-1 stopgap.
- *
- * my-task's own src/app/layout.tsx (bucket 3, "must rewrite" per
- * .chief/milestone-3/_goal/GOAL.md's inventory table) loads Manrope and
- * Fraunces via next/font/google and exposes them as --font-manrope/
- * --font-fraunces, which src/styles/globals.css (ported verbatim below)
- * references as --font-sans/--font-display. next/font has no Vite
- * equivalent to port — that swap is task-3's job, alongside the rest of
- * the root layout rewrite.
- *
- * Until then, these two variables just fall back to system fonts so
- * globals.css's @theme block resolves to something rather than nothing.
- * Replace this file (or fold real font loading into index.html/main.tsx)
- * when task-3 rewrites the root layout.
+ * TPL-1 milestone-3/task-3: replaces task-1's system-font stopgap now that
+ * the root layout is rewritten for real (index.html + main.tsx, no
+ * next/font). index.html loads the same two families my-task's root
+ * layout.tsx loaded via next/font/google (Manrope, Fraunces) as real
+ * Google Fonts <link> tags -- Vite has no next/font equivalent to port, so
+ * a <link> tag is the plain-web substitute: same result (globals.css's
+ * --font-sans/--font-display resolve to the real typefaces), no bundler
+ * plugin needed.
  */
 :root {
-  --font-manrope: ui-sans-serif, system-ui, sans-serif;
-  --font-fraunces: Georgia, "Times New Roman", serif;
+  --font-manrope: "Manrope", ui-sans-serif, system-ui, sans-serif;
+  --font-fraunces: "Fraunces", Georgia, "Times New Roman", serif;
 }

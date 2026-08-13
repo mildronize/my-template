@@ -4,11 +4,14 @@
 // (whose navigation prop is named `to`, not `href` — the one mechanical
 // consequence of swapping components, not a logic change), and
 // next/navigation's `usePathname` -> react-router's `useLocation().pathname`.
-// NAV_LINKS below still points at my-task's own routes (Activity/Tasks/
-// Projects) — this template doesn't have or need those pages yet, but
-// task-1's instructions for this file are "nothing else changes," so the
-// list itself is untouched; task-3 is expected to update it alongside the
-// real page content it wires up.
+//
+// NAV_LINKS and the logo text below are the one further edit task-1 left
+// for task-3 (its own report: "flagged in docs/GETTING-STARTED.md's new
+// Step 3b as one of the domain-noun spots ... task-3 still needs to
+// revisit") — a content fix, not a logic change: my-task's own
+// Activity/Tasks/Projects routes don't exist in this template (no
+// projects, no activity log, per GOAL.md's out-of-scope note), so the list
+// is trimmed to the one real content route this SPA actually has.
 import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import ThemeToggle from "./ThemeToggle";
@@ -21,9 +24,7 @@ import {
 } from "~/components/ui/popover";
 
 const NAV_LINKS: ReadonlyArray<{ href: string; label: string }> = [
-  { href: "/", label: "Activity" },
-  { href: "/tasks", label: "Tasks" },
-  { href: "/projects", label: "Projects" },
+  { href: "/", label: "Todos" },
 ];
 
 /** Return up to two uppercase initials from a display name. */
@@ -59,7 +60,7 @@ export default function Header() {
         >
           <ListChecks className="size-4" />
           {/* Hide text on mobile, show on md+ */}
-          <span className="hidden lg:inline">My Task</span>
+          <span className="hidden lg:inline">My Template</span>
         </Link>
 
         {/* Desktop nav links */}

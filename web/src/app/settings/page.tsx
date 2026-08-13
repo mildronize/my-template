@@ -2,11 +2,12 @@
 // src/app/(app)/settings/page.tsx) — the settings page shell. Verbatim
 // except: no StatusSettings section (my-task's status/label/priority
 // domain is out of this template's scope per GOAL.md's own out-of-scope
-// note), ApiKeySettings -> ApiKeySettingsPlaceholder (task-3's job, see
-// that file's own comment), and `export const dynamic = "force-dynamic"`
-// dropped — a Next.js App Router route-segment config with no meaning
-// under Vite's plain client-side rendering.
-import { ApiKeySettingsPlaceholder } from "./ApiKeySettingsPlaceholder";
+// note), ApiKeySettings now wired for real (milestone-3/task-3, replacing
+// task-1's ApiKeySettingsPlaceholder — see ApiKeySettings.tsx's own
+// comment), and `export const dynamic = "force-dynamic"` dropped — a
+// Next.js App Router route-segment config with no meaning under Vite's
+// plain client-side rendering.
+import { ApiKeySettings } from "./ApiKeySettings";
 
 export default function SettingsPage() {
   return (
@@ -19,7 +20,7 @@ export default function SettingsPage() {
           Your account is managed by the homelab SSO. Sign-in and password are handled there.
         </p>
       </section>
-      <ApiKeySettingsPlaceholder />
+      <ApiKeySettings />
     </main>
   );
 }
