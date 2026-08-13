@@ -32,14 +32,14 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List the caller's own todos.
-         * @description Returns only the session owner's own todos, created_at descending, unpaginated — same shape and same no-pagination reasoning as `_rules/_contract/API.md`'s `GET /api/v1/todos`.
+         * List every todo.
+         * @description milestone-4: todos are a shared collection (`_rules/_contract/ DATA_MODEL.md`/`GOAL.md`'s Ownership model decision) — I3 no longer applies to this domain, on either surface. Returns every todo, created_at descending, unpaginated — same shape as `_rules/_contract/API.md`'s `GET /api/v1/todos`, not just the session owner's own.
          */
         get: operations["listTodos"];
         put?: never;
         /**
-         * Create a todo owned by the caller.
-         * @description `owner_id` is always the resolved session owner — never accepted from the body (I1, same rule, different auth mechanism). `done` starts false. Calls `internal/domain/todo.Service.CreateTodo` directly — the same service instance and method the public API's handler calls (`_rules/_standard/ARCHITECTURE.md`'s shared-service-layer rule).
+         * Create a todo, attributed to the caller.
+         * @description `createdBy` is always the resolved session owner — never accepted from the body (I1, same rule as the public API, different auth mechanism) — but is attribution only, never access-scoping (GOAL.md). `status` always starts `open`. The `created` event this produces is never client-specifiable as a distinct write (I16) — it only ever happens as this endpoint's own side effect. `clientRequestId` makes this idempotent the same way `POST .../events` is (I19). Calls `internal/domain/todo.Service.CreateTodo` directly — the same service instance and method the public API's handler calls (`_rules/_standard/ARCHITECTURE.md`'s shared-service-layer rule).
          */
         post: operations["createTodo"];
         delete?: never;
@@ -58,24 +58,66 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get one of the caller's own todos.
-         * @description Owner-scoped (I3): another owner's id, or an id that never existed, both return `not_found` — never `forbidden`.
+         * Get a todo by id.
+         * @description milestone-4: every authenticated actor may read every todo (I3 no longer applies to this domain) — an unknown id is `not_found`, there is no "wrong owner" case left to produce it.
          */
         get: operations["getTodo"];
         put?: never;
         post?: never;
-        /**
-         * Delete one of the caller's own todos.
-         * @description Owner-scoped, same 404 rule. Deleting an already-deleted id is also `not_found` (naturally idempotent, same as the public API).
-         */
-        delete: operations["deleteTodo"];
+        delete?: never;
         options?: never;
         head?: never;
         /**
-         * Update one of the caller's own todos.
-         * @description Owner-scoped, same 404 rule as GET.
+         * Rename a todo.
+         * @description milestone-4: the only field this endpoint still writes is `title` — `status`/`assigneeId`/`priority`/`dueDate` changes route through `POST .../events` instead (`status_changed`/ `assigned`/`field_changed`), the single write path (I15/I18) those fields' permission/audit requirements actually need. `done` is gone entirely (replaced by `status`) — sending it is a `validation_error` (`hint: "done"`), not silently accepted and ignored. Internally still funnels through the same single write path as every other mutation (a `field_changed` event), hence `clientRequestId` (I19).
          */
         patch: operations["updateTodo"];
+        trace?: never;
+    };
+    "/todos/{id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * This todo's own timeline.
+         * @description Oldest first — same shape and ordering as `_rules/_contract/ API.md`'s `GET /api/v1/todos/{id}/events`. This todo's own timeline only; the cross-todo feed is `GET /api/bff/activity`, a separate endpoint (milestone-4/task-5).
+         */
+        get: operations["listTodoEvents"];
+        put?: never;
+        /**
+         * Append an event to this todo's timeline (I15's single write path).
+         * @description One body shape per `type` — `commented` (`body`), `status_changed` (`to`), `assigned` (`to`, or `null` to unassign), `field_changed` (`field`, `to`) — `_contract/API.md`. `type: "created"` is rejected (`validation_error`): a `created` event only ever happens as `POST /todos`'s own side effect, never as a direct client-specifiable write (I16) — the same rejection applies to any other value this endpoint doesn't recognise, `created` included, not a special case. **`status: closed` succeeds on this surface** (I18 — this is the owner's own surface; contrast with the public API, where a Bearer-authenticated agent caller is rejected as `unauthorized` for the same write). Idempotent on `clientRequestId` (I19): a repeated id returns the original event and creates nothing.
+         */
+        post: operations["createTodoEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The cross-todo activity feed — every event, across every todo, newest first.
+         * @description `_contract/API.md`'s `GET /api/bff/activity`: a cursor over `todo_events` across every todo, newest first, joined to `todos` (title) and `users` (actor handle/role, so the caller can mark human vs agent). Owner-session only — mirrors my-task's `activity.list` (`~/gits/my-task/src/server/api/routers/ activity.ts`), adapted from tRPC's `{limit, cursor: {createdAtMs, id}}` input shape to this surface's plain-JSON query-string convention: `limit` (default 30, same as my-task's own default; 1-100 inclusive) plus `cursorCreatedAtMs`/`cursorId`, which must be supplied together or not at all (a lone one of the pair is a malformed cursor, `validation_error`). `nextCursor` in the response echoes the exact field names (`cursorCreatedAtMs`/`cursorId` on the way in, `createdAtMs`/`id` on the way out) so a client can round-trip it verbatim into the next page's query string. `nextCursor: null` means exhausted — mirrors `TaskQueryService.listActivity`'s own `hasMore` check (fetch `limit + 1` rows, an extra row present means there's a next page).
+         */
+        get: operations["listActivity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/keys": {
@@ -132,7 +174,19 @@ export interface components {
         Todo: {
             id: string;
             title: string;
-            done: boolean;
+            /**
+             * @description milestone-4: replaces `done`. Fixed enum, not an owner-editable table (GOAL.md).
+             * @enum {string}
+             */
+            status: "open" | "in_progress" | "done" | "closed";
+            /** @description References a user (any role). */
+            assigneeId: string | null;
+            /** @enum {string|null} */
+            priority: "low" | "medium" | "high" | "urgent" | null;
+            /** Format: date-time */
+            dueDate: string | null;
+            /** @description milestone-4: replaces `ownerId` — attribution only, never access-scoping (GOAL.md). */
+            createdBy: string;
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -140,6 +194,65 @@ export interface components {
         };
         TodoList: {
             todos: components["schemas"]["Todo"][];
+        };
+        TodoEvent: {
+            id: string;
+            todoId: string;
+            /** Format: int64 */
+            seq: number;
+            actorId: string;
+            /** @description `created` | `commented` | `status_changed` | `assigned` | `field_changed` — the full read-side vocabulary (DATA_MODEL.md). `created` only ever appears here as a read value, never as something `POST .../events` accepted (I16). */
+            type: string;
+            /** @description JSON, shape depends on `type` — `{from, to}` pairs for `status_changed`/`assigned`, `{field, from, to}` for `field_changed`, `null` for `commented`. */
+            payload?: {
+                [key: string]: unknown;
+            } | null;
+            /** @description The comment text for `type: commented`, `null` otherwise. Rendered client-side through a Markdown-to-React-elements path, never raw HTML (I8's mirror, GOAL.md). */
+            body?: string | null;
+            clientRequestId: string;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        TodoEventList: {
+            events: components["schemas"]["TodoEvent"][];
+        };
+        /** @description Carried so the UI can mark human vs agent (I20's sibling requirement, not itself an invariant — a rendering fact, not a safety one, `_contract/API.md`). */
+        ActivityActor: {
+            handle: string;
+            role: string;
+        };
+        /** @description The todo this event belongs to — enough to link/label it, not the full `Todo` shape. */
+        ActivityTodoRef: {
+            id: string;
+            title: string;
+        };
+        /** @description Round-trips verbatim: the response's `nextCursor` and the request's `cursorCreatedAtMs`/`cursorId` query params name the same two values, mirrors my-task's own `{createdAtMs, id}` cursor object shape adapted to a flat query string. */
+        ActivityCursor: {
+            /** Format: int64 */
+            createdAtMs: number;
+            id: string;
+        };
+        /** @description One `todo_events` row, shaped for the feed — same underlying row `TodoEvent` (this file's own schema) represents on the per-todo timeline, so the two share a rendering component (`_goal/GOAL.md` Done-when 8): same `type`/`payload`/`body` meaning, plus `actor`/`todo` context a single-todo timeline doesn't need to repeat. */
+        ActivityItem: {
+            id: string;
+            /** Format: int64 */
+            seq: number;
+            /** @description Full read-side vocabulary, `created` included (a read value here, never a write one — I16). */
+            type: string;
+            actor: components["schemas"]["ActivityActor"];
+            payload?: {
+                [key: string]: unknown;
+            } | null;
+            /** @description The comment text for `type: commented`, `null` otherwise — same Markdown-to-React-elements rendering rule as `TodoEvent. body` (never raw HTML, I8's mirror). */
+            body?: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            todo: components["schemas"]["ActivityTodoRef"];
+        };
+        ActivityFeed: {
+            items: components["schemas"]["ActivityItem"][];
+            /** @description Null when exhausted. */
+            nextCursor?: components["schemas"]["ActivityCursor"] | null;
         };
         ApiKey: {
             id: string;
@@ -152,12 +265,33 @@ export interface components {
         ApiKeyList: {
             keys: components["schemas"]["ApiKey"][];
         };
+        /** @description `additionalProperties: false` so a stray `done` (milestone-1/2/3's removed field) is a `validation_error`, not silently dropped (`_contract/API.md`). No `status` field, deliberately (mirrors the public API's own `CreateTodoRequest`) — every created todo starts `open` regardless of what a caller asks for. */
         CreateTodoRequest: {
             title: string;
+            assigneeId?: string | null;
+            /** @enum {string|null} */
+            priority?: "low" | "medium" | "high" | "urgent" | null;
+            /** Format: date-time */
+            dueDate?: string | null;
+            /** @description I19's idempotency key, on the `created` event this endpoint's own side effect writes — required, not optional, since `todo_events.client_request_id` is `NOT NULL UNIQUE` at the schema level for every row including `created` ones. */
+            clientRequestId: string;
         };
+        /** @description milestone-4: `title` only — see `updateTodo`'s own description for why `status`/`assigneeId`/`priority`/`dueDate` aren't here. `additionalProperties: false` so a stray `done` is a `validation_error`, not silently dropped. */
         UpdateTodoRequest: {
-            title?: string;
-            done?: boolean;
+            title: string;
+            /** @description I19's idempotency key — this endpoint now funnels through the same single write path (I15) as every other mutation. */
+            clientRequestId: string;
+        };
+        /** @description One shape covers all four client-postable `type` values (`_contract/API.md`) — cross-field validation (e.g. `body` required for `commented`, `to` required for `status_changed`) is the handler's job, not this schema's, mirroring the public API's own `CreateTodoEventRequest`. `type` is deliberately an open string, not an `enum`, so `"created"` and any other unrecognised value reach the handler's own dispatch and are rejected there (I16) — the same path, not a special case for one string. */
+        CreateTodoEventRequest: {
+            type: string;
+            clientRequestId: string;
+            /** @description commented — the comment text. */
+            body?: string;
+            /** @description status_changed — the target status (a `Todo.status` enum value; `closed` succeeds on this surface, I18). assigned — the target assignee's user id, or `null` to unassign. */
+            to?: string | null;
+            /** @description field_changed — which field `to` changes: `title` | `priority` | `dueDate`. */
+            field?: string;
         };
         Error: {
             error: {
@@ -233,7 +367,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The caller's own todos. */
+            /** @description Every todo. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -295,28 +429,6 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
-    deleteTodo: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Deleted. */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            401: components["responses"]["Unauthorized"];
-            404: components["responses"]["NotFound"];
-        };
-    };
     updateTodo: {
         parameters: {
             query?: never;
@@ -344,6 +456,85 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    listTodoEvents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description This todo's timeline, oldest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TodoEventList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createTodoEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateTodoEventRequest"];
+            };
+        };
+        responses: {
+            /** @description The created event. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TodoEvent"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listActivity: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursorCreatedAtMs?: number;
+                cursorId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the cross-todo feed, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityFeed"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
         };
     };
     listKeys: {
