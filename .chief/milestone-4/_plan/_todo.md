@@ -64,20 +64,29 @@ list:
 
 - `TestDoneWhen12_EveryInvariantHasANamedTest` failing, specifically and
   only on I20 (task-7's) and I21 (task-6's) having no test yet.
-- `internal/transport/publicapi/todo_handler.go` not building, until
-  task-3 lands.
 
-**Measured at `5d90d1d`.** A baseline is a measurement, and a measurement
-has a subject — record the commit it was taken against, not just the
-list, since the list can read identical while the *reason* underneath it
-changed (e.g. the pending scope-tag fix-round moves I15-I19/I21 from
-`per-domain-module` to `domain:<name>` — `TestDoneWhen12` will likely
-still fail on `{I20, I21}` afterward, for a different mechanism entirely;
-same names is not the same measurement). **When any change lands that
-could alter *why* the baseline fails, re-measure it fresh against the new
-commit rather than carrying the old list forward — if the set or the
-reason changed, that's a finding to report, not a number to silently
-update.**
+**Re-measured at `d84be82`** (task-4's own report commit), from a genuine
+fresh clone, not the working tree — superseding the `5d90d1d` measurement
+this line has carried since before task-3 landed (the `publicapi` line
+above was already stale once task-3 landed and is dropped here, along
+with the sha). **`internal/transport/bff` no longer belongs on this
+list**: task-4 made the *first point the full
+Go suite is green again* except for the two named `TestDoneWhen12` gaps —
+confirmed independently (Luna, cold clone, own separate mutation attack
+on `TestDoneWhen14`, own reproduction of the reachability check end to
+end) before this line was updated. From here on, **any red Go package at
+all is a real regression**, not an expected gap — the baseline is down to
+exactly the two invariant-coverage lines above.
+
+A baseline is a measurement, and a measurement has a subject — record the
+commit it was taken against, not just the list, since the list can read
+identical while the *reason* underneath it changed (this milestone's own
+scope-tags fix-round is the worked example: `TestDoneWhen12` read
+`{I20, I21}` before and after, for a completely different mechanism).
+**When any change lands that could alter *why* the baseline fails,
+re-measure it fresh against the new commit rather than carrying the old
+list forward — if the set or the reason changed, that's a finding to
+report, not a number to silently update.**
 
 **Any failure outside this exact list is a regression until proven
 otherwise.** The baseline only shrinks as tasks land what it's waiting
@@ -155,7 +164,7 @@ caught a missing invariant test.
       green.** `bff` may still be red until task-4 — expected, not a
       regression.
       **Owns: Done-when 13.**
-- [ ] task-4: BFF surface (`internal/transport/bff`, `bff-openapi.yaml`)
+- [x] task-4: BFF surface (`internal/transport/bff`, `bff-openapi.yaml`)
       — same shape as task-3, session-authenticated: todo endpoints
       updated, `POST/GET /api/bff/todos/:id/events`, **`status: closed`
       succeeds here** (I18 — this is the owner's surface).
