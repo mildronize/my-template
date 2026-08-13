@@ -1,7 +1,9 @@
 // Package identity owns the users and api_keys tables and the
-// actor-resolution middleware (API key -> JWT -> reject). Unlike
-// internal/todo, keep this directory on fork — every service built from
-// this template needs its own identity/auth seam.
+// actor-resolution logic (API key -> JWT -> reject) behind them — see
+// doc.go for why the gin middleware that drives it lives in
+// internal/transport/publicapi instead. Unlike internal/domain/todo, keep
+// this directory on fork — every service built from this template needs
+// its own identity/auth seam.
 package identity
 
 import (

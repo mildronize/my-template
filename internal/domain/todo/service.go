@@ -16,9 +16,10 @@ type Repository interface {
 }
 
 // Service implements the todo CRUD contract from _contract/API.md, scoped
-// to whichever owner the caller (handler.go, via
-// identity.ActorFromContext) already resolved — this package never
-// resolves an actor itself (I4).
+// to whichever owner the caller (internal/transport/publicapi/
+// todo_handler.go, via the actor internal/identity's middleware already
+// resolved) already resolved — this package never resolves an actor
+// itself (I4).
 type Service struct {
 	Repo Repository
 }

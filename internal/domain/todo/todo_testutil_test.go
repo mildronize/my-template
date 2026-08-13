@@ -20,8 +20,10 @@ func repoRootForTests(t *testing.T) string {
 	t.Helper()
 	_, thisFile, _, ok := runtime.Caller(0)
 	require.True(t, ok, "could not determine this test file's own location")
-	// this file lives at <root>/internal/todo/<this file>.go
-	return filepath.Dir(filepath.Dir(filepath.Dir(thisFile)))
+	// this file lives at <root>/internal/domain/todo/<this file>.go —
+	// one directory deeper than milestone-1's internal/todo, since this
+	// package moved under internal/domain/ (ARCHITECTURE.md).
+	return filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(thisFile))))
 }
 
 // newTestDB opens a fresh temp-file SQLite database and applies every
@@ -49,12 +51,14 @@ func newTestDB(t *testing.T) *sql.DB {
 	return conn
 }
 
-// createTestUser is a small helper repo_test.go/handler_test.go both use
-// to get a users row to own todos against, without going through
-// internal/identity (todo's tests shouldn't need to import identity's
-// repo just to seed a fixture — a plain INSERT is simpler and doesn't
-// blur the I4 table-ownership boundary these tests are partly here to
-// demonstrate).
+// createTestUser is a small helper repo_test.go uses to get a users row to
+// own todos against, without going through internal/identity (todo's
+// tests shouldn't need to import identity's repo just to seed a fixture —
+// a plain INSERT is simpler and doesn't blur the I4 table-ownership
+// boundary these tests are partly here to demonstrate). This package's own
+// handler-level tests moved to internal/transport/publicapi/
+// todo_handler_test.go (ARCHITECTURE.md) and have their own equivalent
+// fixture helper there.
 func createTestUser(t *testing.T, conn *sql.DB, id, handle string) {
 	t.Helper()
 	_, err := conn.Exec(

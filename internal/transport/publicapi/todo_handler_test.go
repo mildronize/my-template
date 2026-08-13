@@ -1,4 +1,4 @@
-package todo
+package publicapi
 
 import (
 	"bytes"
@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/mildronize/my-template/internal/api"
+	"github.com/mildronize/my-template/internal/domain/todo"
 	"github.com/mildronize/my-template/internal/identity"
 )
 
@@ -22,16 +23,15 @@ func init() {
 	gin.SetMode(gin.TestMode)
 }
 
-// compositeServer mirrors cmd/server's apiServer — identity.MeServer
-// contributes GetMe, *identity.KeysServer contributes ListKeys/RevokeKey
-// (task-4), *Server (this package's) contributes the todo CRUD methods —
-// so these integration tests exercise the exact same generated-interface/
-// openapi-validated wiring production uses, not a hand-rolled subset of
-// it.
+// compositeServer mirrors cmd/server's apiServer — MeServer contributes
+// GetMe, *KeysServer contributes ListKeys/RevokeKey, *TodoServer
+// contributes the todo CRUD methods — so these integration tests exercise
+// the exact same generated-interface/openapi-validated wiring production
+// uses, not a hand-rolled subset of it.
 type compositeServer struct {
-	identity.MeServer
-	*identity.KeysServer
-	*Server
+	MeServer
+	*KeysServer
+	*TodoServer
 }
 
 // newIntegrationRouter builds a full /api/v1 stack — RejectActorFields,
@@ -45,17 +45,17 @@ func newIntegrationRouter(t *testing.T) (*gin.Engine, *sql.DB) {
 	identityRepo := identity.NewRepo(conn)
 	identitySvc := identity.NewService(identityRepo, identityRepo, nil, nil)
 
-	todoSvc := NewService(NewRepo(conn))
+	todoSvc := todo.NewService(todo.NewRepo(conn))
 
 	validator, err := api.RequestValidator()
 	require.NoError(t, err)
 
 	router := gin.New()
 	group := router.Group("/api/v1")
-	group.Use(identity.RejectActorFields(), identity.RequireActor(identitySvc), validator)
+	group.Use(RejectActorFields(), RequireActor(identitySvc), validator)
 	api.RegisterHandlers(group, compositeServer{
-		KeysServer: identity.NewKeysServer(identitySvc),
-		Server:     NewServer(todoSvc),
+		KeysServer: NewKeysServer(identitySvc),
+		TodoServer: NewTodoServer(todoSvc),
 	})
 
 	return router, conn
@@ -63,7 +63,9 @@ func newIntegrationRouter(t *testing.T) (*gin.Engine, *sql.DB) {
 
 // createAgentWithKey seeds a users row (role=agent) and a live api_keys
 // row for it, returning the user's id and the raw key a test can present
-// as `Authorization: Bearer <rawKey>`.
+// as `Authorization: Bearer <rawKey>`. Shared by every handler test file
+// in this package (todo, keys, middleware) — one definition, not one per
+// file, now that they all live in the same package.
 func createAgentWithKey(t *testing.T, conn *sql.DB, handle string) (userID, rawKey string) {
 	t.Helper()
 	ctx := context.Background()

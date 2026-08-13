@@ -1,7 +1,9 @@
 // Package platform holds the pieces every service built from this
-// template keeps as-is on fork: config, logging, DB wiring, and HTTP
-// server setup. It must never import a domain module (internal/todo,
-// internal/identity) — see .chief/_rules/_standard/ARCHITECTURE.md rule 3.
+// template keeps as-is on fork: config, logging, DB wiring, HTTP server
+// setup, and the cross-cutting gin middleware (middleware.go) shared by
+// every transport engine. It must never import a domain module
+// (internal/domain/*), internal/identity, or an internal/transport/*
+// surface — see .chief/_rules/_standard/ARCHITECTURE.md rule 5.
 package platform
 
 import (

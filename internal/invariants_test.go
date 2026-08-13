@@ -243,7 +243,12 @@ func TestDoneWhen12_EveryInvariantHasANamedTest(t *testing.T) {
 	modules := domainModuleNames(t, root)
 	perModuleNames := make(map[string][]string, len(modules))
 	for _, module := range modules {
-		perModuleNames[module] = collectTestFuncNames(t, filepath.Join(root, "internal", module))
+		// domainModuleNames (internal/architecture_test.go) enumerates
+		// internal/domain/*'s own subdirectories post-restructure — join
+		// against that same path, not internal/<module> (milestone-1's
+		// path, before the domain/transport split moved every domain
+		// module one directory deeper).
+		perModuleNames[module] = collectTestFuncNames(t, filepath.Join(root, "internal", "domain", module))
 	}
 
 	for _, inv := range required {

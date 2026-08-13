@@ -13,11 +13,11 @@ import (
 
 // ErrNotFound is returned by every Repo lookup/mutation when no row
 // matches — both "no such id" and "not this caller's id" collapse to this
-// one sentinel (I3: absence, not permission). service.go and handler.go
-// only ever see this domain-level error, never sql.ErrNoRows, so nothing
-// outside this file needs to know sqlc or database/sql exist
-// (ARCHITECTURE.md rule 2: only repo.go/*_repo.go may import the
-// sqlc-generated package).
+// one sentinel (I3: absence, not permission). service.go (and, one layer
+// further out, internal/transport/publicapi/todo_handler.go) only ever
+// see this domain-level error, never sql.ErrNoRows, so nothing outside
+// this file needs to know sqlc or database/sql exist (ARCHITECTURE.md
+// rule 2: only repo.go/*_repo.go may import the sqlc-generated package).
 var ErrNotFound = errors.New("todo: not found")
 
 // Todo is this package's own representation of a todos row, deliberately

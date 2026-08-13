@@ -1,4 +1,4 @@
-package identity
+package publicapi
 
 import (
 	"bytes"
@@ -8,12 +8,14 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/mildronize/my-template/internal/identity"
 )
 
 // actorContextKey is the gin context key RequireActor stores the
-// resolved User under. handler.go reads it via ActorFromContext — I4:
-// only this middleware ever queries users/api_keys; handlers never do
-// their own lookup.
+// resolved identity.User under. todo_handler.go/me_handler.go/
+// keys_handler.go read it via ActorFromContext — I4: only this middleware
+// ever queries users/api_keys, handlers never do their own lookup.
 const actorContextKey = "identity.actor"
 
 // forbiddenFieldNames mirrors my-task's actor-guard.ts
@@ -123,13 +125,13 @@ func abortActorFieldPresent(c *gin.Context) {
 }
 
 // RequireActor is the actor-resolution middleware (task-2.md): it calls
-// Service.ResolveActor and, on success, stores the resolved User on the
-// gin context for handlers to read via ActorFromContext (I4). On any
-// failure this is the middleware's one and only 401 write — every
-// failure reason ResolveActor logged server-side collapses to the exact
-// same response body here (I5), regardless of which check inside
-// ResolveActor actually failed.
-func RequireActor(svc *Service) gin.HandlerFunc {
+// identity.Service.ResolveActor and, on success, stores the resolved
+// identity.User on the gin context for handlers to read via
+// ActorFromContext (I4). On any failure this is the middleware's one and
+// only 401 write — every failure reason ResolveActor logged server-side
+// collapses to the exact same response body here (I5), regardless of
+// which check inside ResolveActor actually failed.
+func RequireActor(svc *identity.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user, err := svc.ResolveActor(c.Request.Context(), c.GetHeader("Authorization"))
 		if err != nil {
@@ -141,14 +143,14 @@ func RequireActor(svc *Service) gin.HandlerFunc {
 	}
 }
 
-// ActorFromContext returns the User RequireActor resolved for this
-// request. Handlers call this instead of ever querying users/api_keys
-// themselves (I4).
-func ActorFromContext(c *gin.Context) (User, bool) {
+// ActorFromContext returns the identity.User RequireActor resolved for
+// this request. Handlers call this instead of ever querying
+// users/api_keys themselves (I4).
+func ActorFromContext(c *gin.Context) (identity.User, bool) {
 	v, ok := c.Get(actorContextKey)
 	if !ok {
-		return User{}, false
+		return identity.User{}, false
 	}
-	user, ok := v.(User)
+	user, ok := v.(identity.User)
 	return user, ok
 }

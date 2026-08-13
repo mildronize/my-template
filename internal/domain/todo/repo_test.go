@@ -159,7 +159,7 @@ func TestRepo_Create_TitleTooLongRejectedByStorageLayer(t *testing.T) {
 
 // TestI4_TodoRepoOnlyQueriesTodosTable — I4 ("one seam reads identity";
 // applied here as "one repo, one table" for the non-identity side of that
-// boundary): internal/todo's repo must only ever query the todos table,
+// boundary): internal/domain/todo's repo must only ever query the todos table,
 // never a table owned by a different domain module (users/api_keys, or
 // whatever a fork's own other modules own). Checked statically against
 // the sqlc query source each repo.go is generated from (db/queries/*.sql)

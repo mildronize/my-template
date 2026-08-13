@@ -173,15 +173,15 @@ func TestRepo_RevokeAPIKeyScopedToOwner(t *testing.T) {
 // TestI4_IdentityRepoOnlyQueriesUsersAndAPIKeysTables — I4 ("one seam reads
 // identity"; applied here as "one repo, one set of tables" for the
 // identity side of that boundary, mirroring
-// internal/todo/repo_test.go's TestI4_TodoRepoOnlyQueriesTodosTable):
+// internal/domain/todo/repo_test.go's TestI4_TodoRepoOnlyQueriesTodosTable):
 // internal/identity's repo must only ever query users/api_keys, and must
 // never query a table that belongs to a different domain module (todos,
 // or whatever a fork replaces it with). Checked statically against the
 // sqlc query source each repo.go is generated from (db/queries/*.sql),
 // via internal/dbquery — the single shared implementation behind this
-// check and internal/todo's equivalent, so the two can't drift into two
-// different (and, as task-8 found, differently buggy) copies of the same
-// logic. The forbidden-table set is derived dynamically from whatever
+// check and internal/domain/todo's equivalent, so the two can't drift into
+// two different (and, as task-8 found, differently buggy) copies of the
+// same logic. The forbidden-table set is derived dynamically from whatever
 // db/queries/*.sql files exist, never hardcoded — see
 // internal/dbquery's doc comment for the regression this fixes (an
 // earlier version of this test hardcoded "todos" as the only forbidden

@@ -1,4 +1,4 @@
-package identity
+package publicapi
 
 import (
 	"bytes"
@@ -15,32 +15,27 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/mildronize/my-template/internal/api"
+	"github.com/mildronize/my-template/internal/identity"
 )
-
-func init() {
-	gin.SetMode(gin.TestMode)
-}
 
 // newKeysIntegrationRouter builds a full /api/v1 stack — RejectActorFields,
 // RequireActor, then the openapi.yaml request validator — against a real
 // temp-file SQLite database (not a mock), for GET /keys and
 // DELETE /keys/:id integration tests. It mounts KeysServer's two routes
 // directly on the gin group rather than going through the full generated
-// api.RegisterHandlers (which would require this package's tests to also
-// implement internal/todo's ServerInterface methods, pulling a
-// "delete-on-fork" domain module into a "keep-on-fork" one's test
-// dependencies — internal/todo/handler_test.go already covers the
-// composite-registration path end to end). The openapi.yaml request
-// validator matches requests against the spec's own path templates,
-// independent of gin's route table, so this still exercises the same
-// validated-shape guarantee (Done-when 7) the composite wiring gives
-// /todos and /me.
+// api.RegisterHandlers (which would require these keys-only tests to also
+// implement internal/domain/todo's ServerInterface methods —
+// todo_handler_test.go already covers the composite-registration path end
+// to end). The openapi.yaml request validator matches requests against
+// the spec's own path templates, independent of gin's route table, so
+// this still exercises the same validated-shape guarantee (Done-when 7)
+// the composite wiring gives /todos and /me.
 func newKeysIntegrationRouter(t *testing.T) (*gin.Engine, *sql.DB) {
 	t.Helper()
 	conn := newTestDB(t)
 
-	repo := NewRepo(conn)
-	svc := NewService(repo, repo, nil, nil)
+	repo := identity.NewRepo(conn)
+	svc := identity.NewService(repo, repo, nil, nil)
 	keysServer := NewKeysServer(svc)
 
 	validator, err := api.RequestValidator()
@@ -53,27 +48,6 @@ func newKeysIntegrationRouter(t *testing.T) (*gin.Engine, *sql.DB) {
 	group.DELETE("/keys/:id", func(c *gin.Context) { keysServer.RevokeKey(c, c.Param("id")) })
 
 	return router, conn
-}
-
-// createAgentWithKey seeds a users row (role=agent) and a live api_keys
-// row for it, returning the user's id and the raw key a test can present
-// as `Authorization: Bearer <rawKey>` — mirrors
-// internal/todo/handler_test.go's helper of the same name (a different
-// package, so no collision).
-func createAgentWithKey(t *testing.T, conn *sql.DB, handle string) (userID, rawKey string) {
-	t.Helper()
-	ctx := context.Background()
-	repo := NewRepo(conn)
-
-	user, err := repo.CreateUser(ctx, handle, "agent", nil)
-	require.NoError(t, err)
-
-	rawKey = "tpl_" + handle + "0123456789abcdef0123456789abcdef"
-	hash := HashAPIKey(rawKey)
-	_, err = repo.CreateAPIKey(ctx, user.ID, hash, rawKey[:12], time.Now().Add(time.Hour))
-	require.NoError(t, err)
-
-	return user.ID, rawKey
 }
 
 func doKeysRequest(t *testing.T, router *gin.Engine, method, path, rawKey string) *httptest.ResponseRecorder {
@@ -103,8 +77,8 @@ func TestHandler_KeysListAndRevokeRoundTrip(t *testing.T) {
 	// A second live key for the same owner, created directly via the repo
 	// (issuance is CLI-only — API.md — so tests seed keys this way rather
 	// than through an HTTP POST that deliberately doesn't exist).
-	repo := NewRepo(conn)
-	second, err := repo.CreateAPIKey(context.Background(), ownerID, HashAPIKey("tpl_second"), "tpl_secondkey", time.Now().Add(2*time.Hour))
+	repo := identity.NewRepo(conn)
+	second, err := repo.CreateAPIKey(context.Background(), ownerID, identity.HashAPIKey("tpl_second"), "tpl_secondkey", time.Now().Add(2*time.Hour))
 	require.NoError(t, err)
 
 	listRec := doKeysRequest(t, router, http.MethodGet, "/api/v1/keys", rawKey)
@@ -126,17 +100,17 @@ func TestHandler_KeysListAndRevokeRoundTrip(t *testing.T) {
 
 // TestI3_HandlerOwnershipScoping_ReturnsNotFoundNotForbidden_Keys — I3, at
 // the HTTP layer, applied to keys instead of todos (a second resource, not
-// a duplicate of internal/todo/handler_test.go's version of this test): a
-// key belonging to a different owner returns 404 (not_found), the exact
-// same response as an id that never existed. Never 403 — that would
-// confirm the row exists.
+// a duplicate of todo_handler_test.go's version of this test): a key
+// belonging to a different owner returns 404 (not_found), the exact same
+// response as an id that never existed. Never 403 — that would confirm
+// the row exists.
 func TestI3_HandlerOwnershipScoping_ReturnsNotFoundNotForbidden_Keys(t *testing.T) {
 	router, conn := newKeysIntegrationRouter(t)
 	ownerID, ownerKey := createAgentWithKey(t, conn, "owner")
 	_, otherKey := createAgentWithKey(t, conn, "someone-else")
 
-	repo := NewRepo(conn)
-	theirs, err := repo.CreateAPIKey(context.Background(), ownerID, HashAPIKey("tpl_owners-secret"), "tpl_ownerssecr", time.Now().Add(time.Hour))
+	repo := identity.NewRepo(conn)
+	theirs, err := repo.CreateAPIKey(context.Background(), ownerID, identity.HashAPIKey("tpl_owners-secret"), "tpl_ownerssecr", time.Now().Add(time.Hour))
 	require.NoError(t, err)
 
 	unknownID := "00000000-0000-0000-0000-000000000000"
@@ -186,23 +160,24 @@ func TestI3_HandlerOwnershipScoping_ReturnsNotFoundNotForbidden_Keys(t *testing.
 // API.md's `GET /api/v1/keys`: an expired-but-unrevoked key still shows up
 // in the list so the caller can see it needs rotating, while a revoked key
 // never does. This is deliberately about the LIST endpoint's behavior, not
-// a duplicate of task-2's I9 coverage in service_test.go
+// a duplicate of internal/identity/service_test.go's I9 coverage
 // (TestI9_ExpiredAPIKeyFailsAuth / TestI9_RevokedAPIKeyFailsAuth), which
 // proves the opposite-looking fact that the very same expired/revoked
 // key fails *authentication* — two different checks (see
-// Service.ListAPIKeys's doc comment): this test never authenticates with
-// the expired key, it authenticates with a separate live key and lists.
+// identity.Service.ListAPIKeys's doc comment): this test never
+// authenticates with the expired key, it authenticates with a separate
+// live key and lists.
 func TestI9_ListKeys_ExpiredButUnrevokedKeyStillListed_RevokedKeyExcluded(t *testing.T) {
 	router, conn := newKeysIntegrationRouter(t)
 	ownerID, liveKey := createAgentWithKey(t, conn, "owner")
 
-	repo := NewRepo(conn)
+	repo := identity.NewRepo(conn)
 	ctx := context.Background()
 
-	expired, err := repo.CreateAPIKey(ctx, ownerID, HashAPIKey("tpl_expired-not-revoked"), "tpl_expirednot", time.Now().Add(-time.Hour))
+	expired, err := repo.CreateAPIKey(ctx, ownerID, identity.HashAPIKey("tpl_expired-not-revoked"), "tpl_expirednot", time.Now().Add(-time.Hour))
 	require.NoError(t, err)
 
-	toRevoke, err := repo.CreateAPIKey(ctx, ownerID, HashAPIKey("tpl_to-be-revoked"), "tpl_toberevoke", time.Now().Add(time.Hour))
+	toRevoke, err := repo.CreateAPIKey(ctx, ownerID, identity.HashAPIKey("tpl_to-be-revoked"), "tpl_toberevoke", time.Now().Add(time.Hour))
 	require.NoError(t, err)
 	_, err = repo.RevokeAPIKey(ctx, toRevoke.ID, ownerID)
 	require.NoError(t, err)
