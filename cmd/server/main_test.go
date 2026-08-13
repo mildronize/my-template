@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"testing/fstest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -39,7 +40,16 @@ func TestDoneWhen3_MiddlewareWiredIntoBothEngines(t *testing.T) {
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	handler, err := buildHandler(context.Background(), cfg, db, logger)
+	// A synthetic dist filesystem stands in for the real npm-built SPA
+	// embed here -- this test only asserts RequestID's header is present
+	// on the bff engine's 404, never anything about the SPA's actual
+	// content, so it must not depend on `npm run build` having run before
+	// `go test` (see bff_negative_check_test.go's own note on this).
+	distFS := fstest.MapFS{
+		"index.html": &fstest.MapFile{Data: []byte("<html>test fixture</html>")},
+	}
+
+	handler, err := buildHandler(context.Background(), cfg, db, logger, distFS)
 	require.NoError(t, err)
 
 	t.Run("publicapi engine", func(t *testing.T) {

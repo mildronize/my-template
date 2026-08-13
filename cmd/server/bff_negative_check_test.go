@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"testing/fstest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,6 +23,23 @@ import (
 // tests assert on HTTP responses and DB state, not log lines.
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// testDistFS stands in for the real npm-built SPA embed (web.DistFS) that
+// buildHandler otherwise wires into the SPA fallback. A genuinely fresh
+// clone has never run `npm run build`, so web/dist holds only the tracked
+// .gitkeep placeholder -- asserting this file's "non-API path still falls
+// through to the SPA" subtest against the real embed would make that
+// assertion's result depend on out-of-band state nothing guarantees (the
+// exact bug newSPAHandler's own doc comment already warns about, from the
+// other direction). fstest.MapFS is the standard library's way to supply a
+// synthetic filesystem instead, so the SPA fallback is exercised (a real
+// index.html is served for an unmatched path) without any dependency on a
+// prior build step.
+func testDistFS() fstest.MapFS {
+	return fstest.MapFS{
+		"index.html": &fstest.MapFile{Data: []byte("<html>test fixture</html>")},
+	}
 }
 
 // TestBFF_UnmatchedAPIBFFPathAnswers404NotTheSPA guards a real interaction
@@ -44,7 +62,7 @@ func TestBFF_UnmatchedAPIBFFPathAnswers404NotTheSPA(t *testing.T) {
 		DatabasePath:  "unused-in-this-test",
 		SessionSecret: "test-session-secret",
 	}
-	handler, err := buildHandler(context.Background(), cfg, db, discardLogger())
+	handler, err := buildHandler(context.Background(), cfg, db, discardLogger(), testDistFS())
 	require.NoError(t, err)
 
 	for _, tc := range []struct {
@@ -93,7 +111,7 @@ func TestBFF_FullCRUDRoundTrip_ThroughAssembledMainHandler(t *testing.T) {
 		DatabasePath:  "unused-in-this-test",
 		SessionSecret: "test-session-secret-for-main-round-trip",
 	}
-	handler, err := buildHandler(context.Background(), cfg, db, discardLogger())
+	handler, err := buildHandler(context.Background(), cfg, db, discardLogger(), testDistFS())
 	require.NoError(t, err)
 
 	repo := identity.NewRepo(db)

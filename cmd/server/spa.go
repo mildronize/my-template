@@ -9,13 +9,10 @@
 package main
 
 import (
-	"fmt"
 	"io/fs"
 	"net/http"
 	"net/url"
 	"strings"
-
-	"github.com/mildronize/my-template/web"
 )
 
 // newSPAHandler builds the standard single-page-app fallback handler: a
@@ -31,16 +28,19 @@ import (
 // `build` target ordering) — a build that skipped that step still embeds
 // something (the tracked dist/.gitkeep placeholder), so this handler
 // degrades to a 404 on every request rather than failing to start.
-func newSPAHandler() (http.Handler, error) {
-	dist, err := fs.Sub(web.DistFS, "dist")
-	if err != nil {
-		return nil, fmt.Errorf("opening embedded web/dist: %w", err)
-	}
-
-	fileServer := http.FileServer(http.FS(dist))
+//
+// distFS is the already-fs.Sub'd dist filesystem to serve, not the raw
+// embed — main.go's wireBFF passes fs.Sub(web.DistFS, "dist") at the call
+// site, which is the real embedded SPA build in production. This
+// constructor takes an fs.FS rather than reaching into web.DistFS itself
+// so a test can substitute a synthetic filesystem (e.g. fstest.MapFS)
+// without depending on a real `npm run build` having run first — see
+// cmd/server/bff_negative_check_test.go's own note on why that matters.
+func newSPAHandler(distFS fs.FS) (http.Handler, error) {
+	fileServer := http.FileServer(http.FS(distFS))
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isRealFile(dist, r.URL.Path) {
+		if isRealFile(distFS, r.URL.Path) {
 			fileServer.ServeHTTP(w, r)
 			return
 		}

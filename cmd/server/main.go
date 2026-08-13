@@ -19,6 +19,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -35,6 +36,7 @@ import (
 	"github.com/mildronize/my-template/internal/platform"
 	"github.com/mildronize/my-template/internal/transport/bff"
 	"github.com/mildronize/my-template/internal/transport/publicapi"
+	"github.com/mildronize/my-template/web"
 )
 
 func main() {
@@ -66,7 +68,12 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	handler, err := buildHandler(ctx, cfg, db, logger)
+	distFS, err := fs.Sub(web.DistFS, "dist")
+	if err != nil {
+		return fmt.Errorf("opening embedded web/dist: %w", err)
+	}
+
+	handler, err := buildHandler(ctx, cfg, db, logger, distFS)
 	if err != nil {
 		return fmt.Errorf("building HTTP handler: %w", err)
 	}
@@ -92,7 +99,12 @@ func run() error {
 // unmatched route, per gin's own 404-handler-chain behavior, so this is
 // checkable without a single real route on either engine needing to
 // match).
-func buildHandler(ctx context.Context, cfg *platform.Config, db *sql.DB, logger *slog.Logger) (http.Handler, error) {
+// distFS is the SPA's dist filesystem (already fs.Sub'd to "dist") — run()
+// passes fs.Sub(web.DistFS, "dist"), the real Vite-built embed, for
+// production; tests pass a synthetic fs.FS (e.g. fstest.MapFS) so the
+// SPA-fallback assertions don't depend on `npm run build` having actually
+// run before `go test` (cmd/server/bff_negative_check_test.go).
+func buildHandler(ctx context.Context, cfg *platform.Config, db *sql.DB, logger *slog.Logger, distFS fs.FS) (http.Handler, error) {
 	repo := identity.NewRepo(db)
 	todoSvc := todo.NewService(todo.NewRepo(db))
 
@@ -114,7 +126,7 @@ func buildHandler(ctx context.Context, cfg *platform.Config, db *sql.DB, logger 
 	// *identity.Service instance, not two independently-constructed ones,
 	// the same shared-service-layer reasoning todoSvc's own single
 	// instance already follows across both engines.
-	if err := wireBFF(ctx, bffRouter, cfg, repo, todoSvc, identitySvc, logger); err != nil {
+	if err := wireBFF(ctx, bffRouter, cfg, repo, todoSvc, identitySvc, logger, distFS); err != nil {
 		return nil, fmt.Errorf("wiring bff: %w", err)
 	}
 
@@ -269,7 +281,10 @@ var _ bffapi.ServerInterface = bffServer{}
 // uses, per ARCHITECTURE.md's shared-service-layer rule) so an obvious
 // place already existed for task-2 to wire a todos-backed route at this
 // layer, exactly as this comment predicted it would.
-func wireBFF(ctx context.Context, router *gin.Engine, cfg *platform.Config, repo *identity.Repo, todoSvc *todo.Service, identitySvc *identity.Service, logger *slog.Logger) error {
+// distFS is the SPA's already-fs.Sub'd dist filesystem — see buildHandler's
+// own doc comment on why this is a parameter rather than wireBFF reaching
+// into web.DistFS itself.
+func wireBFF(ctx context.Context, router *gin.Engine, cfg *platform.Config, repo *identity.Repo, todoSvc *todo.Service, identitySvc *identity.Service, logger *slog.Logger, distFS fs.FS) error {
 	secret := []byte(cfg.SessionSecret)
 	if len(secret) == 0 {
 		secret = make([]byte, 32)
@@ -344,7 +359,7 @@ func wireBFF(ctx context.Context, router *gin.Engine, cfg *platform.Config, repo
 		TodoServer: bff.NewTodoServer(todoSvc),
 	})
 
-	spaHandler, err := newSPAHandler()
+	spaHandler, err := newSPAHandler(distFS)
 	if err != nil {
 		return fmt.Errorf("building embedded SPA handler: %w", err)
 	}
