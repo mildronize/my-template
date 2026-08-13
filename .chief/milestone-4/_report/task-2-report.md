@@ -439,5 +439,8 @@ yet, which is tasks 3/4's own scope.
 - `3e02ef4` — `test(milestone-4/task-2): Done-when 2-5 - atomicity, append-only, idempotency, permission`
 - `8746e81` — `docs(milestone-4/task-2): task-2 report` (superseded by this file's current content — the near-miss below was found after this commit, fixed in the next one)
 - `f4377af` — `fix(milestone-4/task-2): restore TestI3_/TestI4_ named tests dropped in the repo_test.go rewrite`
+- `8845f61` — `docs(milestone-4/task-2): report - document the I3/I4 near-miss and its fix` (this file's current content)
 
-Pushed through `f4377af`: `eff83f3..f4377af milestone-4/activity-log -> milestone-4/activity-log` (two pushes — `eff83f3..8746e81` first, then `8746e81..f4377af` after the near-miss fix).
+Pushed in three pushes as the work progressed: `eff83f3..8746e81`,
+`8746e81..f4377af` (the near-miss fix), `f4377af..8845f61` (this report's
+own update documenting it) — all to `milestone-4/activity-log`.
