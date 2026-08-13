@@ -143,6 +143,15 @@ code, the service name is what it's called everywhere else:
   below for the count and why), since it's the document that explains the
   domain being replaced. Give it the same pass once you're done, or plan
   to replace it with your own fork's documentation.
+- **`.claude/skills/my-template-api/`** (`SKILL.md` and
+  `references/endpoints.md`/`references/errors.md`) — the agent-facing
+  contract for calling this fork's own `/api/v1`, not just internal prose.
+  Auth, the I-numbered rules, and the error envelope stay as-is (identity,
+  not the example domain); the Endpoints table and every worked `curl`
+  example are `/todos`-shaped and need the same domain swap as
+  `openapi.yaml` itself. An agent (or crew) calling your fork by following
+  this skill instead of reading the real `openapi.yaml` gets 404s against
+  paths that don't exist if this pass is skipped.
 - **The key path (`~/.my-template/keys/`) and the resolver's env var
   (`MY_TEMPLATE_CREW`)** — both still carry the literal `my-template` name
   today, the same as everything else on this list, and skipping this line
@@ -208,8 +217,8 @@ into is wired-but-dormant, not live.
 
 ## Step 5: Locate and replace the todo domain
 
-The example domain is split across **two locations**, not one, per this
-repo's domain/transport architecture
+The example domain's *definition* is split across **two locations**, not
+one, per this repo's domain/transport architecture
 (`.chief/_rules/_standard/ARCHITECTURE.md`, "Why transport is not inside a
 domain module anymore" — this superseded milestone-1's single-directory
 `internal/todo/` shape): business logic and data access live in
@@ -218,12 +227,16 @@ HTTP adapter that exposes them lives separately in
 **`internal/transport/publicapi/todo_handler.go`** (+ its test), alongside
 every other domain's own handler and the identity actor-resolution
 middleware. There is no longer one directory that holds "the todo domain"
-whole. **Study both fully before you delete anything.** Between them
-they're the only worked example this repo has of several patterns nothing
-else documents — deleting either first, then trying to reconstruct those
-patterns from scratch, is what a second blind fork test called *"the
-single worst instruction in the document"* when an earlier version of
-this step led with `rm -rf`.
+whole. **A third file — `internal/transport/bff/view_handler.go` (plus its
+own test files) — depends on the domain directly without living in either
+location above**, so "two locations" describes where the domain is
+*defined*, not everywhere it's *used*; see step 1 and step 8 below for
+what that third file means at delete time. **Study all three fully before
+you delete anything.** The first two are the only worked example this
+repo has of several patterns nothing else documents — deleting either
+first, then trying to reconstruct those patterns from scratch, is what a
+second blind fork test called *"the single worst instruction in the
+document"* when an earlier version of this step led with `rm -rf`.
 
 ### Patterns worth preserving
 
@@ -445,15 +458,50 @@ Do it in this order:
    shared-service-layer indirection the other wiring above uses. Deleting
    `internal/domain/todo` without touching this file is a guaranteed
    `go build ./...` failure (`no required module provides package
-   .../internal/domain/todo`) — loud, not silent, but you still have to
-   decide what to do about it: either update `view_handler.go` (its
-   `NewViewHandler` parameter, `viewData`, and the template) to render
-   your new domain instead, or decide your fork's BFF view is out of
-   scope for now and strip the todo-specific rendering down to something
-   that still compiles (e.g. drop the list, keep just the "signed in as"
-   line). Either way, `cmd/server/main.go`'s `wireBFF` call passes
-   `todoSvc` as an argument — that call site has to match whatever
-   `NewViewHandler` ends up expecting.
+   .../internal/domain/todo`) — loud, not silent.
+
+   **Adapt it to your new domain — that's the default here, not stripping
+   it down to something that merely compiles.** An earlier version of this
+   section offered "update it" and "strip it down to just the signed-in
+   line" as roughly equal options; they aren't, and presenting them as
+   equal is exactly what let a test agent read only the doc and miss the
+   cost. `internal/transport/bff/view_handler_test.go` carries **two**
+   things stripping silently drops: Done-when 9's rendering tests
+   (`TestAuthenticatedViewRendersOwnersOwnTodos`,
+   `TestAuthenticatedViewOnlyShowsOwnersOwnTodos`) and
+   `TestI12_BFFSessionNeverResolvesToAgent_ViewMiddleware` — I12's
+   defense-in-depth proof that a session resolving to an agent role never
+   renders anything, checked directly rather than assumed unreachable.
+   Strip the view down to compile and both are gone with it, and nothing
+   catches that: the invariants check (`internal/invariants_test.go`) only
+   confirms a `TestI12_...`-named test exists *somewhere*, not that this
+   specific one still does, and `go build`/`go test ./...` only fail on
+   code that's still there, never on a test that quietly isn't. Update
+   `view_handler.go` (its `NewViewHandler` parameter, `viewData`, and the
+   template) to render your new domain instead, and carry
+   `view_handler_test.go`'s tests over the same way you'd carry over
+   `internal/domain/todo`'s own tests in step 2 above. Only strip the view
+   down as a deliberate, acknowledged trade — accepting the lost coverage
+   on purpose, not by default because it was offered as the easier of two
+   equal-looking options. Either way, `cmd/server/main.go`'s `wireBFF`
+   call passes `todoSvc` as an argument — that call site has to match
+   whatever `NewViewHandler` ends up expecting.
+
+   **`internal/transport/bff`'s own test files hit the same build-vs-test
+   trap the `compositeServer` warning above describes for
+   `publicapi` — extend that warning to this package too.**
+   `view_handler_test.go` and `bff_testutil_test.go` (`newTestRouter`'s
+   `todoSvc *todo.Service` parameter, `seedTodo`) both import
+   `internal/domain/todo` directly, same as `view_handler.go` itself.
+   `go build ./...` never compiles `_test.go` files at all, so getting
+   `view_handler.go` itself to compile cleanly proves nothing about either
+   of these two — a stale `todo.Service`/`todo.Todo` reference left behind
+   in either one only surfaces once you run `go test ./...` (or
+   `go vet ./...`), exactly the way `compositeServer`'s stale `*TodoServer`
+   embed only surfaced there for `publicapi_testutil_test.go`. Update both
+   test files' own domain references (and rename `seedTodo` if you're
+   keeping that fixture) in the same pass you adapt `view_handler.go`, not
+   after a green `go build ./...` makes it look finished.
 9. **Deal with the invariants this deletes.** `internal/domain/todo/
    repo_test.go` carried the `TestI3_...`/`TestI4_...` tests for
    `_rules/_contract/INVARIANTS.md`'s I3 and I4 (per-domain-module scope —
@@ -463,6 +511,29 @@ Do it in this order:
    `internal/invariants_test.go`'s Done-when-12 check fails the moment you
    run it, naming your new module specifically. Resolve it one of the ways
    "Invariants: two things, not one" describes.
+10. **Update `cmd/smoke/main.go` for your domain — do this even though
+    nothing in Steps 1–9 above or `go build`/`go test ./...` will ever ask
+    you to.** `cmd/smoke` is the only real-HTTP check in this entire repo
+    of I1 (actor-field rejection) and I3 (ownership scoping) — every other
+    I1/I3 test in the suite runs in-process, injecting the actor directly
+    or signing a session cookie itself rather than going over the wire
+    through a real `Authorization: Bearer` header against a genuinely
+    separate running server (`cmd/smoke/main.go`'s own package doc explains
+    why). `cmd/smoke` has no test file of its own and its domain-specific
+    literals are plain strings (`/todos`, `title`, `done`), so a fork that
+    skips this step keeps compiling, keeps running, and keeps printing
+    `16/16 passed` — against a `/todos` path your fork no longer serves,
+    testing nothing. `go build ./...` and `go test ./...` both stay green
+    regardless; nothing else in the suite will tell you this happened.
+    Everything that needs to change is isolated in one place: the
+    `==== EDIT THIS FOR YOUR DOMAIN ====` banner block near the top of
+    `cmd/smoke/main.go` (`resourcePath`, the `resource`/
+    `resourceListResponse` shapes, and the `newCreateBody`/
+    `newCreateBodyWithForbiddenField`/`newUpdateDoneBody` request-body
+    builders) — update that block to your new domain's path and fields,
+    then re-run `make smoke` against a live instance (`go run ./cmd/server
+    &`, then `make smoke`) and confirm it's still 16/16, this time for
+    real.
 
 `internal/identity/` and `internal/platform/` are **not** part of this
 step — keep both as-is on fork (user/API-key identity and

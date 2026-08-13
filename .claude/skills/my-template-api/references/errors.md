@@ -1,5 +1,11 @@
 # `/api/v1` errors
 
+**The envelope, codes, and I-numbered rules below are domain-agnostic —
+`todo`/`key` mentions are just this template's current example resource,
+not a fixed part of the shape.** Update the couple of `todo` mentions
+below for your fork's own domain as part of `docs/GETTING-STARTED.md`
+Step 3's rename checklist.
+
 Every failure that reaches a handler — mapped or not — comes back as this
 envelope (`_rules/_contract/API.md`):
 

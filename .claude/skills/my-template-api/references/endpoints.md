@@ -5,6 +5,12 @@ API.md` — where a fork's actual code and this file might ever disagree,
 `openapi.yaml` is the source of truth, since every request is validated
 against it before a handler runs at all (see "Request validation" below).
 
+**`/todos` below is this template's example domain, not a fixed part of
+the surface** — update this file for your fork's own paths/fields as part
+of `docs/GETTING-STARTED.md` Step 3's rename checklist (`GET /me`, `GET
+/keys`, and `DELETE /keys/:id` stay as-is; they're identity, not the
+example domain).
+
 Every path below is relative to `$BASE_URL`. Every request carries
 `Authorization: Bearer <credential>`. There is no `Idempotency-Key`
 requirement on this surface (see the main `SKILL.md`'s "Rules every
@@ -122,7 +128,8 @@ once, at issuance, and is never stored or re-derivable).
 
 ## `DELETE /keys/:id` → **204**
 
-Sets `revoked_at`. Owner-scoped, same 404 rule as todos (I3). There is
+Sets `revoked_at`. Owner-scoped, same 404 rule as every other owner-scoped
+resource on this surface (I3). There is
 deliberately no `POST /api/v1/keys` and no rotation endpoint — see the
 main `SKILL.md`'s "Endpoints" section for why rotation specifically can't
 be a safe HTTP call.

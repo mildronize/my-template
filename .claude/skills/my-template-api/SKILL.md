@@ -19,6 +19,17 @@ resolver, the fallback chain, how to treat this in a working session — is a
 consumer-side concern and belongs in a different, fork-specific doc, the
 same way `my-task-guide` sits beside `my-task-api` in this fleet.
 
+**Auth, the invariant rules, and the error envelope below are
+domain-agnostic — they describe this template's identity/API-key layer,
+which a fork keeps as-is (`docs/GETTING-STARTED.md`).** The Endpoints
+table and every worked example, though, are this template's actual example
+domain (`/todos`, `title`/`done`) — the same way `docs/GETTING-STARTED.md`
+itself is full of `todo` examples it expects a fork to replace. This skill
+is on `docs/GETTING-STARTED.md` Step 3's rename checklist for exactly that
+reason: update the Endpoints table, `references/endpoints.md`, and every
+`curl` example below for your fork's own paths and fields once Step 5
+replaces the domain — this file does not update itself.
+
 ## Base URL
 
 Every example below expands `$BASE_URL`. Set it to the instance you mean:
