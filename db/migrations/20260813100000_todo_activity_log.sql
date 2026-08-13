@@ -123,6 +123,16 @@ CREATE TABLE todos_old (
 --     state, and of the two available booleans, FALSE — "not yet
 --     done" — is the accurate one; work that is in progress is, by
 --     definition, not done yet.)
+-- The missing ELSE is also deliberate, not an oversight to "complete":
+-- a status outside these four sends NULL into a NOT NULL column and the
+-- rollback aborts loudly. That's the correct failure mode for a value
+-- this mapping doesn't know how to collapse — an unrecognised status
+-- must abort, never be guessed at. A future status enum value (this
+-- domain's own enum growing, per DATA_MODEL.md's own note that this is
+-- a fixed enum only "for now") is exactly the case this protects
+-- against, and it's the one likeliest to actually arrive. Do NOT add
+-- `ELSE FALSE` "for completeness" — that's precisely how this mapping
+-- silently lost 'closed' the first time.
 INSERT INTO todos_old (id, owner_id, title, done, created_at, updated_at)
 SELECT
     id,
