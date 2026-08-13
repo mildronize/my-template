@@ -16,6 +16,24 @@ import { defineConfig } from "vite";
 //     backend (default :8080, overridable via VITE_BFF_PROXY_TARGET) so
 //     `npm run dev`'s live-reloading server can exercise the real BFF
 //     without CORS or a second origin to configure client-side.
+//
+// The "/login" and "/callback" entries below are LOAD-BEARING, not
+// incidental: they are the entire reason the SPA has no "/login" route or
+// login-page component of its own. Go's cmd/server registers real GET
+// /login and GET /callback handlers (the actual PKCE/OAuth redirect to
+// Hydra) that a browser must reach directly — a react-router route can
+// only ever show a static placeholder, never perform that redirect. In
+// dev mode, this proxy list is what forwards a browser hitting /login or
+// /callback to those real Go handlers instead of Vite's dev server; in
+// production, cmd/server's own routing (an explicit handler beating the
+// SPA's NoRoute fallback) does the equivalent job. If either entry is
+// ever removed from this list, dev mode stops forwarding that path to Go
+// — the SPA's catch-all route would then try to serve it instead, and
+// since there is no real login/callback UI behind that route, the result
+// is a silently broken dev-mode navigation with nothing real behind it.
+// Do not remove "/login" or "/callback" from this proxy list without
+// first adding a real SPA-side implementation of whatever they were
+// covering.
 export default defineConfig(({ mode }) => {
   const proxyTarget = process.env.VITE_BFF_PROXY_TARGET ?? "http://localhost:8080";
 
