@@ -26,6 +26,17 @@ info:
     gives: a raw key can't be returned safely over an HTTP response, so
     issuance and rotation stay CLI-only regardless of which surface is
     asking (`_contract/API.md`, `milestone-3/_goal/GOAL.md` Done-when 5).
+
+    milestone-4 (`.chief/milestone-4/_contract/API.md`'s `bff` section):
+    the todo endpoints below carry the new shared-collection shape (no
+    more `done`; `status`/`assigneeId`/`priority`/`dueDate` instead), gain
+    `POST`/`GET /todos/{id}/events` (I15's single write path, exposed on
+    this surface too), and lose `DELETE /todos/{id}` entirely (mirrors
+    `openapi.yaml`'s own removal, GOAL.md's "DELETE removed" decision).
+    `status: closed` succeeds here — this is the owner's own surface
+    (I18) — unlike the public API, where an agent caller is rejected.
+    `/keys` below is unchanged by milestone-4/task-4; its semantics are
+    replaced by a later task (I21).
 servers:
   - url: /api/bff
 paths:
@@ -49,14 +60,17 @@ paths:
   /todos:
     get:
       operationId: listTodos
-      summary: List the caller's own todos.
+      summary: List every todo.
       description: >
-        Returns only the session owner's own todos, created_at
-        descending, unpaginated — same shape and same no-pagination
-        reasoning as `_rules/_contract/API.md`'s `GET /api/v1/todos`.
+        milestone-4: todos are a shared collection (`_rules/_contract/
+        DATA_MODEL.md`/`GOAL.md`'s Ownership model decision) — I3 no
+        longer applies to this domain, on either surface. Returns every
+        todo, created_at descending, unpaginated — same shape as
+        `_rules/_contract/API.md`'s `GET /api/v1/todos`, not just the
+        session owner's own.
       responses:
         "200":
-          description: The caller's own todos.
+          description: Every todo.
           content:
             application/json:
               schema:
@@ -65,14 +79,19 @@ paths:
           $ref: "#/components/responses/Unauthorized"
     post:
       operationId: createTodo
-      summary: Create a todo owned by the caller.
+      summary: Create a todo, attributed to the caller.
       description: >
-        `owner_id` is always the resolved session owner — never accepted
-        from the body (I1, same rule, different auth mechanism). `done`
-        starts false. Calls `internal/domain/todo.Service.CreateTodo`
-        directly — the same service instance and method the public API's
-        handler calls (`_rules/_standard/ARCHITECTURE.md`'s
-        shared-service-layer rule).
+        `createdBy` is always the resolved session owner — never accepted
+        from the body (I1, same rule as the public API, different auth
+        mechanism) — but is attribution only, never access-scoping
+        (GOAL.md). `status` always starts `open`. The `created` event
+        this produces is never client-specifiable as a distinct write
+        (I16) — it only ever happens as this endpoint's own side effect.
+        `clientRequestId` makes this idempotent the same way
+        `POST .../events` is (I19). Calls
+        `internal/domain/todo.Service.CreateTodo` directly — the same
+        service instance and method the public API's handler calls
+        (`_rules/_standard/ARCHITECTURE.md`'s shared-service-layer rule).
       requestBody:
         required: true
         content:
@@ -99,10 +118,11 @@ paths:
           type: string
     get:
       operationId: getTodo
-      summary: Get one of the caller's own todos.
+      summary: Get a todo by id.
       description: >
-        Owner-scoped (I3): another owner's id, or an id that never
-        existed, both return `not_found` — never `forbidden`.
+        milestone-4: every authenticated actor may read every todo (I3 no
+        longer applies to this domain) — an unknown id is `not_found`,
+        there is no "wrong owner" case left to produce it.
       responses:
         "200":
           description: The todo.
@@ -116,8 +136,18 @@ paths:
           $ref: "#/components/responses/NotFound"
     patch:
       operationId: updateTodo
-      summary: Update one of the caller's own todos.
-      description: Owner-scoped, same 404 rule as GET.
+      summary: Rename a todo.
+      description: >
+        milestone-4: the only field this endpoint still writes is
+        `title` — `status`/`assigneeId`/`priority`/`dueDate` changes
+        route through `POST .../events` instead (`status_changed`/
+        `assigned`/`field_changed`), the single write path (I15/I18)
+        those fields' permission/audit requirements actually need.
+        `done` is gone entirely (replaced by `status`) — sending it is a
+        `validation_error` (`hint: "done"`), not silently accepted and
+        ignored. Internally still funnels through the same single write
+        path as every other mutation (a `field_changed` event), hence
+        `clientRequestId` (I19).
       requestBody:
         required: true
         content:
@@ -137,15 +167,64 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
-    delete:
-      operationId: deleteTodo
-      summary: Delete one of the caller's own todos.
+  /todos/{id}/events:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: listTodoEvents
+      summary: This todo's own timeline.
       description: >
-        Owner-scoped, same 404 rule. Deleting an already-deleted id is
-        also `not_found` (naturally idempotent, same as the public API).
+        Oldest first — same shape and ordering as `_rules/_contract/
+        API.md`'s `GET /api/v1/todos/{id}/events`. This todo's own
+        timeline only; the cross-todo feed is `GET /api/bff/activity`,
+        a separate endpoint (milestone-4/task-5).
       responses:
-        "204":
-          description: Deleted.
+        "200":
+          description: This todo's timeline, oldest first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TodoEventList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: createTodoEvent
+      summary: Append an event to this todo's timeline (I15's single write path).
+      description: >
+        One body shape per `type` — `commented` (`body`),
+        `status_changed` (`to`), `assigned` (`to`, or `null` to
+        unassign), `field_changed` (`field`, `to`) — `_contract/API.md`.
+        `type: "created"` is rejected (`validation_error`): a `created`
+        event only ever happens as `POST /todos`'s own side effect,
+        never as a direct client-specifiable write (I16) — the same
+        rejection applies to any other value this endpoint doesn't
+        recognise, `created` included, not a special case.
+        **`status: closed` succeeds on this surface** (I18 — this is the
+        owner's own surface; contrast with the public API, where a
+        Bearer-authenticated agent caller is rejected as `unauthorized`
+        for the same write). Idempotent on `clientRequestId` (I19): a
+        repeated id returns the original event and creates nothing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTodoEventRequest"
+      responses:
+        "201":
+          description: The created event.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TodoEvent"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
@@ -204,14 +283,46 @@ components:
           type: boolean
     Todo:
       type: object
-      required: [id, title, done, createdAt, updatedAt]
+      required:
+        [
+          id,
+          title,
+          status,
+          assigneeId,
+          priority,
+          dueDate,
+          createdBy,
+          createdAt,
+          updatedAt,
+        ]
       properties:
         id:
           type: string
         title:
           type: string
-        done:
-          type: boolean
+        status:
+          type: string
+          description: >
+            milestone-4: replaces `done`. Fixed enum, not an
+            owner-editable table (GOAL.md).
+          enum: [open, in_progress, done, closed]
+        assigneeId:
+          type: string
+          nullable: true
+          description: References a user (any role).
+        priority:
+          type: string
+          nullable: true
+          enum: [low, medium, high, urgent]
+        dueDate:
+          type: string
+          format: date-time
+          nullable: true
+        createdBy:
+          type: string
+          description: >
+            milestone-4: replaces `ownerId` — attribution only, never
+            access-scoping (GOAL.md).
         createdAt:
           type: string
           format: date-time
@@ -226,6 +337,54 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Todo"
+    TodoEvent:
+      type: object
+      required: [id, todoId, seq, actorId, type, clientRequestId, createdAt]
+      properties:
+        id:
+          type: string
+        todoId:
+          type: string
+        seq:
+          type: integer
+          format: int64
+        actorId:
+          type: string
+        type:
+          type: string
+          description: >
+            `created` | `commented` | `status_changed` | `assigned` |
+            `field_changed` — the full read-side vocabulary
+            (DATA_MODEL.md). `created` only ever appears here as a read
+            value, never as something `POST .../events` accepted (I16).
+        payload:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: >
+            JSON, shape depends on `type` — `{from, to}` pairs for
+            `status_changed`/`assigned`, `{field, from, to}` for
+            `field_changed`, `null` for `commented`.
+        body:
+          type: string
+          nullable: true
+          description: >
+            The comment text for `type: commented`, `null` otherwise.
+            Rendered client-side through a Markdown-to-React-elements
+            path, never raw HTML (I8's mirror, GOAL.md).
+        clientRequestId:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    TodoEventList:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/TodoEvent"
     ApiKey:
       type: object
       required: [id, prefix, createdAt, expiresAt]
@@ -250,21 +409,91 @@ components:
             $ref: "#/components/schemas/ApiKey"
     CreateTodoRequest:
       type: object
-      required: [title]
+      additionalProperties: false
+      description: >
+        `additionalProperties: false` so a stray `done` (milestone-1/2/3's
+        removed field) is a `validation_error`, not silently dropped
+        (`_contract/API.md`). No `status` field, deliberately (mirrors
+        the public API's own `CreateTodoRequest`) — every created todo
+        starts `open` regardless of what a caller asks for.
+      required: [title, clientRequestId]
       properties:
         title:
           type: string
           minLength: 1
           maxLength: 200
+        assigneeId:
+          type: string
+          nullable: true
+        priority:
+          type: string
+          nullable: true
+          enum: [low, medium, high, urgent]
+        dueDate:
+          type: string
+          format: date-time
+          nullable: true
+        clientRequestId:
+          type: string
+          minLength: 1
+          description: >
+            I19's idempotency key, on the `created` event this endpoint's
+            own side effect writes — required, not optional, since
+            `todo_events.client_request_id` is `NOT NULL UNIQUE` at the
+            schema level for every row including `created` ones.
     UpdateTodoRequest:
       type: object
+      additionalProperties: false
+      description: >
+        milestone-4: `title` only — see `updateTodo`'s own description
+        for why `status`/`assigneeId`/`priority`/`dueDate` aren't here.
+        `additionalProperties: false` so a stray `done` is a
+        `validation_error`, not silently dropped.
+      required: [title, clientRequestId]
       properties:
         title:
           type: string
           minLength: 1
           maxLength: 200
-        done:
-          type: boolean
+        clientRequestId:
+          type: string
+          minLength: 1
+          description: >
+            I19's idempotency key — this endpoint now funnels through
+            the same single write path (I15) as every other mutation.
+    CreateTodoEventRequest:
+      type: object
+      description: >
+        One shape covers all four client-postable `type` values
+        (`_contract/API.md`) — cross-field validation (e.g. `body`
+        required for `commented`, `to` required for `status_changed`) is
+        the handler's job, not this schema's, mirroring the public API's
+        own `CreateTodoEventRequest`. `type` is deliberately an open
+        string, not an `enum`, so `"created"` and any other unrecognised
+        value reach the handler's own dispatch and are rejected there
+        (I16) — the same path, not a special case for one string.
+      required: [type, clientRequestId]
+      properties:
+        type:
+          type: string
+        clientRequestId:
+          type: string
+          minLength: 1
+        body:
+          type: string
+          description: commented — the comment text.
+        to:
+          type: string
+          nullable: true
+          description: >
+            status_changed — the target status (a `Todo.status` enum
+            value; `closed` succeeds on this surface, I18). assigned —
+            the target assignee's user id, or `null` to unassign.
+        field:
+          type: string
+          description: >
+            field_changed — which field `to` changes: `title` |
+            `priority` | `dueDate`.
     Error:
       type: object
       required: [error]
