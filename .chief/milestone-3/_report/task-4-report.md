@@ -163,3 +163,117 @@ done
 - `RequireSession`'s removal and the other fix-round items task-3's
   report already flagged as resolved; nothing new found here that
   affects them.
+
+## Fix-round note (post-verification, 2026-08-13)
+
+A verification pass found that `web/` landing at the module root this
+milestone (this task's own `make test` change, plus the parallel `/login`
+route work) opened a real exposure: `web/node_modules/flatted` ships its
+own `.go` file
+(`web/node_modules/flatted/golang/pkg/flatted/flatted.go`), and nothing
+in the module's package resolution treats `node_modules` specially —
+unlike `testdata/` or a `.`/`_`-prefixed directory, which Go's tooling
+does skip. Every tool that resolves packages from `./...` picked it up:
+`go build`, `go vet`, and `go test` all genuinely compiled/analyzed/ran
+it (confirmed with a **clean build cache**, `go clean -cache`, not
+cached output — this task's own report above shows it too, right there
+in the `go test ./...` output quoted a few sections up:
+`?   .../web/node_modules/flatted/golang/pkg/flatted	[no test files]`,
+unremarked-on at the time). `fmt-check`'s `gofmt -l .` is a separate,
+raw filesystem walk (not `go list`-based), so it has its own independent
+exposure — 0 unformatted files under `node_modules` today, which is
+incidental, not a guarantee.
+
+**This is a milestone-3 regression, not a pre-existing gap.** It did not
+exist before `web/` landed at the repo root this milestone. Harmless
+today only because no npm-shipped `.go` file currently fails to
+compile/vet/format/list — the moment one does, `go build`/`go vet`/
+`gofmt` fail for a reason that has nothing to do with this template's
+own code, naming a path deep inside `node_modules` a forker has no
+chance of quickly recognizing as "not my problem." It's also an
+unintended supply-chain surface: `npm install` could introduce code that
+affects the Go build.
+
+Fixed on `milestone-2/close-parity-gap`, two commits:
+
+- **`Makefile`:** added `GO_PKGS` (`go list ./... | grep -v
+  '/node_modules/'`), used in `vet`/`test` instead of `./...`, with a
+  comment explaining why (so a future edit doesn't "simplify" it back).
+  `fmt-check` doesn't go through `go list` at all, so `GO_PKGS` has no
+  effect on it — switched it to `gofmt -l $(git ls-files '*.go')`
+  instead, which also means it only ever checks files this project
+  actually tracks.
+- **A third, independent mechanism found while checking for one**
+  (per this fix-round's own instruction to verify no other tool walks
+  `./...` or the filesystem from the module root):
+  `internal/architecture_test.go`'s `goListPackages` helper shells out to
+  its own `go list -json ./...` to build the import graph rules 3–5
+  check. Verified experimentally that a `.go` file under `node_modules`
+  with an import Go can't resolve (a realistic shape for a bundled npm
+  Go utility — more realistic than a raw syntax error, which `go list`
+  turns out *not* to catch, since it only parses as far as the import
+  block) makes that raw invocation exit non-zero, and
+  `require.NoError(t, err, ...)` then fails all three import-graph tests
+  for a reason unrelated to this repo's own architecture. Fixed by
+  switching to `go list -e -json ./...` (tolerates per-package errors
+  instead of aborting the whole command) and filtering
+  `/node_modules/` paths out of the decoded result before the rules ever
+  see them.
+- **A regression in the first commit, caught by the fresh-clone
+  reintroduce-and-remove verification, not by inspection:** `go build
+  ./...` silently skips a package with no non-test Go files when the
+  package set comes from `./...` pattern expansion, but `internal/`
+  itself (holds only `architecture_test.go`/`invariants_test.go`, no
+  non-test source) errors with `no non-test Go files in ...` once
+  `GO_PKGS` materializes the set into an explicit list of import paths —
+  `go build` treats each one as a directly-named target rather than a
+  pattern match. `go vet`/`go test` don't have this quirk (both want
+  test files present). Fixed with a second, narrower variable,
+  `GO_BUILD_PKGS` (`GO_PKGS` plus a `{{if .GoFiles}}` filter), used only
+  in `build`.
+
+**Verified**, all from genuinely fresh clones (`npm ci` run so
+`node_modules` — and `flatted.go` — actually exist, not just inspecting
+the Makefile):
+
+- Before the fix: `go list ./... | grep node_modules` showed the
+  `flatted` path; `go build`/`go vet`/`go test` with a clean build cache
+  (`go clean -cache` first) all touched
+  `web/node_modules/flatted/golang/pkg/flatted/flatted.go` (confirmed via
+  `go build/vet -x`, and `go test`'s own package list); `gofmt -l .`
+  walks into `node_modules` — proved by dropping a deliberately
+  unformatted throwaway `.go` file there (`gofmt -l .` reported it),
+  removed after.
+- After the fix, in a fresh clone with `npm ci` run: `make build`,
+  `make vet`, `make test`, `make fmt-check` all clean.
+  Reintroduce-and-remove proof, same fresh clone: dropped a
+  syntactically-broken `.go` file into
+  `web/node_modules/flatted/golang/pkg/flatted/` (confirmed first that it
+  really would break a plain, unfixed `go build ./...` — it does) and
+  confirmed `go build $(GO_BUILD_PKGS)`, `make vet`, and `go test
+  $(GO_PKGS)` (run directly post-`npm ci`, since `web-build`/`web-test`'s
+  own `npm ci` step resets `node_modules` from `package-lock.json` on
+  every run and would otherwise silently wipe a hand-placed throwaway
+  file before the Go step ever saw it) all still succeeded; separately
+  dropped a `.go` file with an unresolvable import and confirmed all
+  three `TestArchitecture_*` rule-3/4/5 tests still pass; confirmed
+  `make fmt-check` doesn't report either throwaway file (untracked, so
+  `git ls-files` never walks them). Removed both throwaway files after
+  and re-ran all four targets clean.
+- `docker compose up` (built and ran the image directly, remapped to
+  `18080:8080` to dodge an unrelated already-bound `8080` in this
+  sandbox — same workaround task-3's report used): `GET /healthz` → 200.
+
+Commits pushed (branch `milestone-2/close-parity-gap`):
+
+- `0184391` — `fix(milestone-3/task-4): exclude web/node_modules from Go tooling`
+- `77f9861` — `fix(milestone-3/task-4): fix make build regression from GO_PKGS`
+
+**Lesson for future milestones:** any newly-added Go tooling — a
+Makefile target, a test that shells out to `go` itself, anything that
+resolves packages or walks files starting from the module root — needs
+to be checked against "does this walk from the module root" the moment
+`web/` (or any other npm-managed tree) lives inside that root; `./...`
+and a raw filesystem walk are two different exposures with two different
+fixes, and a helper test calling `go list` on its own is a third that's
+easy to miss because it doesn't look like a build step.
