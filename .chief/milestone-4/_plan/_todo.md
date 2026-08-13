@@ -347,7 +347,7 @@ caught a missing invariant test.
       is where the JS suite's own state begins meaning something — expect
       it red or absent before this task, not evaluated before it.**
       **Owns: Done-when 8, 9, 10.**
-- [ ] task-8: Companion `<service>-api` skill doc — DELETE no longer
+- [x] task-8: Companion `<service>-api` skill doc — DELETE no longer
       named anywhere (presence/absence check against the doc's actual
       text, not assumed from the code change alone); the new event
       endpoints documented (body shapes per `type`, mirroring how the
