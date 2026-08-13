@@ -1,0 +1,218 @@
+# Milestone 4: activity log, like my-task actually does it
+
+TPL-2 (https://my-task.thadaw.com/tasks/TPL-2). มายด์'s words, verbatim:
+
+> Support Activity Log like my-task
+>
+> make sure
+> - agent has api key, and can revoke on settings page
+> - todo has more fields for support Activity Log
+> - activity log page
+
+Clara directed this one, not built it. The process this milestone followed
+deliberately repeats TPL-1's late-learned discipline from the start rather
+than re-learning it: a source-read survey before any plan (`_report/` —
+see below), every question that would *narrow* "like my-task" by removing
+something the source actually has routed to มายด์ specifically rather than
+settled between Luna and Clara, and the grill itself citing file/line
+against the real my-task repo, not a description of it.
+
+## Objective
+
+Give my-task's actual activity-log behavior to my-template's todo domain:
+todos become a shared collection every agent and the owner act on
+together, carry the fields needed for that activity to mean something
+(status, assignee, priority, due date), and every change to any of it is
+visible two ways — a cross-todo feed and a per-todo timeline sharing one
+row-rendering component, exactly as my-task's `/` and `/tasks/[ref]` share
+`TimelineEventRow` — with every row legibly marked human or agent.
+
+## Context — the survey, and how the grill's three narrowing questions got resolved
+
+Full survey (schema, enforcement mechanism, write path, API surface, page
+structure — all cited file:line against my-task's actual source, plus
+my-template's current state verified the same way) is in
+`.chief/milestone-4/_report/tpl2-survey.md`. Three findings from it that
+shape this goal directly:
+
+1. **Bullet 1 was already partially built and silently broken.** The
+   settings page (`web/src/app/settings/ApiKeySettings.tsx`) already
+   lists and revokes keys, but `internal/transport/bff/keys_handler.go`'s
+   `ListKeys` scopes to the session owner's own `user_id` — and
+   `cmd/issue-key` only ever issues to `role='agent'` users. No agent key
+   can ever match; the page has shown an empty list in every real
+   deployment so far. This is the exact bug my-task's own
+   `api-key-settings.tsx` documents having fixed for itself ("filters on
+   the logged-in user... showed the owner an empty list while nineteen
+   agents held working keys").
+2. **The gap none of the three bullets named**: my-template's todos are
+   private-per-actor (`owner_id` is always the resolved creator); my-task's
+   tasks are a shared collection. A cross-actor activity log is only
+   meaningful once the thing it's logging is shared — this is the actual
+   size of the ticket, not a detail inside it.
+3. **A test already in the codebase would have hidden a version of bug
+   1 forever.** `internal/transport/bff/keys_handler_test.go`'s
+   `newBFFRouterForTwoOwnersWithKeys` seeds keys directly onto
+   `role='owner'` fixtures via `repo.CreateAPIKey`, bypassing
+   `cmd/issue-key` — the only path that ever produces a real agent key.
+   The isolation assertion built on it is real and green, and tests a
+   state production cannot reach. Every new test this milestone writes is
+   held to one question: **would this still be green if the thing it
+   guards were absent entirely?** Fixtures that need an agent go through
+   `cmd/issue-key`'s actual path, not a direct insert with a role that
+   happens to be convenient.
+
+**On "like my-task" as an instruction, after two milestones of getting it
+wrong in both directions**: milestone-2 reopened because "like my-task"
+was read too narrowly (a stack list read as scope removal). Milestone-3's
+own grill caught a second, smaller instance of the same shape before it
+shipped (Vite-vs-Next read as a frontend-code removal). This milestone's
+grill produced three genuine candidates for a *third* instance — each
+question below is one the grill flagged as "matching my-task exactly
+would mean removing/restricting something my-template currently has, or
+declining to add something my-task actually has" — and every one of them
+went to มายด์ rather than being settled between Luna and Clara, on the
+explicit reasoning that removals must come from มายด์'s own words, never
+derived.
+
+## Decisions
+
+| Decision | Answer | Owner |
+| --- | --- | --- |
+| Ownership model | Todos become a shared collection: any authenticated actor (agent via Bearer, owner via session) can see and act on any todo. `todos.owner_id`'s current meaning ("always the resolved creator, and the sole access-scoping key") is retired for this domain — see the I3-scope note below. A `created_by` column replaces it for audit/attribution only, never for access control | มายด์ (ruling 1, TPL-2 grill) |
+| Fields added | `status` (fixed enum: `open` / `in_progress` / `done` / `closed` — replaces the `done` boolean, not alongside it), `assignee_id` (nullable, references `users`, any role), `priority` (nullable, my-task's convention: `low`/`medium`/`high`/`urgent`), `due_date` (nullable timestamp) | มายด์ (ruling 2) |
+| No manageable-statuses table | Fixed enum, not an owner-editable `statuses` table like my-task's (with I11's delete-with-destination logic). Not a natural reading of "todo has more fields" — a manageable-statuses feature is materially bigger than field tracking, and nothing in มายด์'s ask implies wanting to rename/reorder statuses | Luna's recommendation, มายด์ took it (ruling 2) |
+| Comments — in scope | `commented` event type, `body` field (plain text write, Markdown-rendered read, per my-task's I8 pattern below). Luna recommended out (reasoning from มายด์'s literal three bullets, which don't mention comments); Clara overrode on the ground that my-task's log is substantially `type: commented` — "it is how an agent says anything at all, and a log that only records field changes never carries what anyone wanted to say." A judgment call, not a fact — recorded as one | Clara (ruling 3, มายด์ took her lean) |
+| Comment rendering safety | Body text only, rendered client-side through a Markdown-to-React-elements path — never `dangerouslySetInnerHTML`, never a raw-HTML string reaching the DOM. Mirrors my-task's I8 exactly: *"the log is a cross-agent injection channel"* is the stated reason, not decoration | Mirrors my-task's I8 (`~/gits/my-task/.chief/milestone-1/_contract/INVARIANTS.md` — "No raw HTML, ever") |
+| DELETE removed | `DELETE /api/v1/todos/:id` and `DELETE /api/bff/todos/:id` are both retired. Finishing a todo means moving it to `status: closed`, mirroring my-task's I12 exactly. Luna flagged this as a real tension rather than deciding it — my-task's own I12 text (quoted precisely, scope clause included: *"There is no hard delete **in this milestone**, for any role"*) is a milestone-1 decision, not an unconditional law, though its stated reason (*"deletion destroys the timeline, which is the reason the system exists"*) carries no such caveat. มายด์ ruled on both halves together | มายด์ (ruling 1, TPL-2 grill) |
+| Permission model | Mirrors my-task's `can()` (`~/gits/my-task/src/lib/policy.ts`) exactly, **including** the agent-restricted move-to-closed: any agent may comment/assign/change fields/change status on any shared todo; **only the owner may move a todo to `closed`**. Luna recommended dropping that restriction (nothing in มายด์'s ask implied needing owner sign-off on any status value); Clara did not take it — her reasoning: adding fidelity to the named source is safe, dropping it is a removal, and `closed` now exists in the enum specifically so the restriction has somewhere to bind | Clara (ruling 4) — role-based (not per-todo-identity-based), same shape as my-task's `can()`: owner passes unconditionally, agents get a permission table |
+| Owner-facing key visibility | A genuinely new query: the settings page lists **every** agent's non-revoked keys (not the session owner's own — which structurally can never be non-empty), and the owner may revoke any of them. Still **no key issuance from the UI** — that option was on the table and มายด์ did not take it; TPL-1's CLI-only issuance stands unchanged | มายด์ (ruling 4 of the survey's questions) |
+| Idempotency added | `clientRequestId` (unique constraint) on `todo_events`, lookup at the top of the write path, inside the same transaction — mirrors my-task's I5 exactly. `.chief/_rules/_contract/API.md`'s existing Conventions text names this precise case: *"No Idempotency-Key requirement... re-add it if a fork adds one [an event log]."* This is that fork | Clara (decided directly, not มายด์'s to rule on) |
+| Append-only enforcement | Application-level only, matching my-task's I3/I4 exactly — module-import boundary (only the todo domain/service module may import the new events table's generated types) plus a test that asserts state changes always add a row (not just "no update method exists"). **No DB trigger or CHECK constraint.** Going further than the named source without being asked is explicitly out — if evidence surfaces during the build that convention-only enforcement is insufficient here, that's a question back to Clara/มายด์, not something to unilaterally strengthen | Clara (decided directly) |
+| Test-fixture discipline | Every new test that needs an agent identity goes through `cmd/issue-key`'s real path, not a direct repo insert with a convenient role. Every new test is checked against "would this still be green if the thing it guards were absent entirely?" before being trusted — the standing lesson from `keys_handler_test.go`'s existing gap, not fixed by this milestone (that gap predates it and isn't this milestone's to fix unless it becomes load-bearing for new work) | Clara |
+| Branch | New branch off `main` (not a continuation of `milestone-2/close-parity-gap` — that branch's PR is merged; PR #3 is open, separate, and unrelated to this ticket) | Luna (ruling 5, uncontested) |
+
+### I3's scope, corrected for the todo domain
+
+`.chief/_rules/_contract/INVARIANTS.md`'s I3 (*"Ownership scoping is
+absence, not permission"*, `scope: per-domain-module`) is **unchanged in
+wording** but its application changes: it continues to hold for the
+identity/api-keys domain exactly as before (an agent's own key-listing via
+Bearer stays scoped to itself; a wrong-id request there is still 404, not
+403). It **no longer applies to the todo domain** — there is no "another
+owner's row" concept once todos are shared; every actor can see every
+todo, so there is nothing for a 404-not-403 rule to protect there anymore.
+This is a real, deliberate narrowing of I3's *reach*, not a reversal of
+what it says — stated explicitly here so nobody reads the promoted
+contract's still-general wording and assumes todos are still owner-scoped.
+
+## Scope
+
+### In scope
+
+- Schema: `todo_events` table (id, todo_id, seq, actor_id, type, payload,
+  body, client_request_id, created_at — mirrors `task_events`'
+  columns/indexes); `todos` gains `status` (replaces `done`),
+  `assignee_id`, `priority`, `due_date`, `created_by` (replaces the
+  access-scoping meaning of `owner_id` — exact column-level migration
+  shape is the plan's to specify, not this goal's)
+- Permission layer mirroring my-task's `can()` shape — role-based, a
+  small allow-table, owner unconditional, agents restricted only from
+  `status: closed`
+- Single write path (mirrors `TaskService.append()`): idempotency check →
+  dispatch by event type → domain-specific side effect → insert, one
+  transaction
+- BFF and public API surfaces for: creating/reading todo events (comment,
+  status change, assignment, field change — mirrors my-task's REST
+  shape, one event type not directly creatable by API: none excluded
+  here unless the plan finds a `created`/equivalent-only-as-side-effect
+  case, matching my-task's own `created`/`moved` exclusions)
+- Cross-todo activity feed (owner-session, tRPC-shaped-equivalent on the
+  BFF's JSON surface) — the new home-page-equivalent view
+- Per-todo timeline, sharing one row-rendering component with the feed
+- Per-todo detail page in the SPA (doesn't exist yet — created by this
+  milestone as a consequence of the timeline requirement)
+- New owner-facing "every agent's keys" query + settings-page wiring
+- `DELETE /api/v1/todos/:id` and `DELETE /api/bff/todos/:id` removed;
+  **the companion `<service>-api` skill doc (TPL-1 item 9) updated to
+  stop naming DELETE** — its own task, not a cleanup line item, since an
+  agent-facing doc that still says "call DELETE" makes the removal
+  undone for the only readers who act on it
+- `clientRequestId` idempotency on the new write path
+- Comment body rendering: Markdown → React elements, never raw HTML
+
+### Out of scope
+
+Key issuance from the UI (still CLI-only, `cmd/issue-key`) · a
+manageable/owner-editable statuses table (fixed enum instead) · projects
+or labels (still not part of this domain — todos stay a flat collection,
+just a shared one) · CI workflow yaml (already ruled out, TPL-1) ·
+identity-domain changes beyond the new owner-facing key-listing query (I2,
+I9, I12-I14 etc. unchanged)
+
+## Done when
+
+Machine-checkable stopping conditions, one task owner each (assigned in
+`_plan/_todo.md`). **These are not the milestone's real finish line** —
+see Human Acceptance below, which is explicit about that.
+
+1. `todo_events` exists with the columns/indexes above; a migration moves
+   `todos` from `done` (boolean) to `status` (enum) and adds
+   `assignee_id`/`priority`/`due_date`/`created_by`, with `owner_id`'s
+   old access-scoping role retired.
+2. The single write path (mirrors `TaskService.append()`) exists: a test
+   proves a failure mid-write leaves neither the event row nor the
+   `todos` state change (the same transactional-atomicity property
+   my-task's I4 test checks).
+3. `todo_events` is append-only: a test proves state changes always add a
+   row (not merely "no update method exists on the repo" — the same
+   distinction my-task's own I3 test draws).
+4. Idempotency: a test proves a repeated `clientRequestId` returns the
+   original event and creates nothing.
+5. Permission layer: a test proves an agent attempting `status: closed`
+   is rejected, and the owner attempting the same succeeds. A second test
+   proves every other action type (comment, assign, field-change,
+   non-closed status-change) succeeds for both roles.
+6. `DELETE /api/v1/todos/:id` and `DELETE /api/bff/todos/:id` genuinely
+   404/405 (not silently 200) — a negative check, same shape as
+   milestone-3's key-issuance negative check. The companion skill doc no
+   longer names DELETE anywhere (a presence/absence check against the
+   doc's actual text, not assumed from the code change alone).
+7. Owner-facing key query: a test proves it returns keys belonging to
+   **agent**-role users, seeded through `cmd/issue-key`'s real path (not
+   a direct repo insert on an owner-role fixture — the exact trap
+   `keys_handler_test.go`'s existing test fell into). A second test
+   proves an agent's own Bearer-authenticated key listing stays
+   self-scoped (I3, unchanged for this domain).
+8. Cross-todo feed and per-todo timeline both render through the same
+   row component — a test (Vitest, mirrors milestone-3's Done-when-7
+   negative-control shape) proves a given event renders identically
+   (same summary text, same provenance mark) regardless of which page's
+   query fed it.
+9. Comment bodies: a test proves a body containing raw HTML tags renders
+   as literal text/escaped elements, never as unescaped markup — the
+   concrete version of "never `dangerouslySetInnerHTML`."
+10. Provenance: a test proves an owner-authored event and an agent-authored
+    event render distinguishably (not just that a role field exists on
+    the response — that the UI actually branches on it, mirroring
+    milestone-2's Done-when-9 lesson about testing the property that
+    matters, not a proxy for it).
+
+## Human acceptance — the real finish line, not a supplement to Done-when
+
+Clara's framing, carried forward exactly: **this is a walkthrough มายด์
+performs himself through the web owner login, not a criteria table.**
+Anything only a test suite can exercise does not count toward it — same
+standing constraint as every milestone before this one. He logs in and,
+in one session:
+
+1. Sees every agent's key in Settings and revokes one.
+2. Sees todos agents created, not just his own.
+3. Sees a todo with status/assignee/priority/due date and changes one.
+4. Opens the feed and sees who did what, with human vs agent
+   distinguishable on every row.
+5. Opens one todo and sees that same history reading identically (same
+   row-rendering component as the feed).
+
+Nothing merges to `main` without his own validation, same standing rule
+as every milestone before this one.
