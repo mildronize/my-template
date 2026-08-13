@@ -14,7 +14,7 @@ import (
 // unknown or not-this-caller's key id — same "not_found, never forbidden"
 // shape I3 gives todos (todo_handler.go's notFoundError), applied here to
 // keys.
-var notFoundBody = newErrorEnvelope("not_found", "no such key", "")
+var notFoundBody = NewErrorEnvelope("not_found", "no such key", "")
 
 // KeysServer adapts identity.Service to internal/api's generated
 // ServerInterface's keys-shaped subset (ListKeys, RevokeKey) —

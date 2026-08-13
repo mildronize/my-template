@@ -35,7 +35,7 @@ import (
 // newAPIError builds an internal/api.Error-shaped response body — the
 // generated type the openapi-validated handlers (todo_handler.go and any
 // domain handler modeled on it) write directly, as opposed to this file's
-// own hand-rolled errorEnvelope. Shared here (task-9, Blocker B/C) so a
+// own hand-rolled ErrorEnvelope. Shared here (task-9, Blocker B/C) so a
 // fork copying a domain handler file into this package never redeclares
 // it — it previously lived inside todo_handler.go, a file Step 8 of
 // docs/GETTING-STARTED.md deletes on fork, and which a same-package copy
@@ -84,8 +84,20 @@ var forbiddenFieldNames = map[string]struct{}{
 
 const forbiddenActorHeader = "X-Actor"
 
-// errorEnvelope matches _contract/API.md's error shape.
-type errorEnvelope struct {
+// ErrorEnvelope matches _contract/API.md's error shape. Exported
+// (milestone-3/task-2) so internal/transport/bff can reuse this exact
+// type/constructor for its own hand-written error responses instead of
+// redefining an equivalent shape in a second place — _contract/API.md's
+// BFF section is explicit that bff-openapi.yaml "reuses publicapi's
+// envelope," not a second envelope kept in sync by hand. Both surfaces'
+// generated-interface glue (this package's own todo_handler.go/
+// keys_handler.go's use of internal/api.Error for openapi-shaped
+// responses, and internal/bffapi's own Error for its validator) already
+// coexist with this hand-rolled type today, producing the identical JSON
+// shape via a different Go type for the same reason — this export doesn't
+// change that pattern, it just makes the hand-written half of it
+// available to a second transport package.
+type ErrorEnvelope struct {
 	Error struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
@@ -93,8 +105,10 @@ type errorEnvelope struct {
 	} `json:"error"`
 }
 
-func newErrorEnvelope(code, message, hint string) errorEnvelope {
-	var e errorEnvelope
+// NewErrorEnvelope builds an ErrorEnvelope. Exported alongside
+// ErrorEnvelope itself, for the same reason.
+func NewErrorEnvelope(code, message, hint string) ErrorEnvelope {
+	var e ErrorEnvelope
 	e.Error.Code = code
 	e.Error.Message = message
 	e.Error.Hint = hint
@@ -104,7 +118,7 @@ func newErrorEnvelope(code, message, hint string) errorEnvelope {
 // unauthorizedBody is the one 401 response body RequireActor ever writes
 // (I5) — a package-level value, not reconstructed per call, so there is
 // no risk of it drifting between call sites as the middleware evolves.
-var unauthorizedBody = newErrorEnvelope("unauthorized", "authentication required", "")
+var unauthorizedBody = NewErrorEnvelope("unauthorized", "authentication required", "")
 
 // RejectActorFields is I1's standalone request-shape guard (task-2.md —
 // deliberately a separate middleware, not folded into actor resolution:
@@ -171,7 +185,7 @@ func hasForbiddenBodyField(c *gin.Context) bool {
 }
 
 func abortActorFieldPresent(c *gin.Context) {
-	c.AbortWithStatusJSON(http.StatusBadRequest, newErrorEnvelope(
+	c.AbortWithStatusJSON(http.StatusBadRequest, NewErrorEnvelope(
 		"actor_field_present",
 		"request may not declare an actor — identity comes only from the resolved credential",
 		"",
