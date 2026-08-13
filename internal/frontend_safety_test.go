@@ -43,14 +43,28 @@ import (
 // positive (task-7's report). Block comments are stripped first — a
 // line-comment strip alone would leave a multi-line /* ... */ block's own
 // interior text unstripped past its first line.
+//
+// jsLineCommentRe requires the `//` to NOT be immediately preceded by `:`
+// — a one-character guard against the actual false negative this fix
+// introduced on its own first pass: an unguarded `//[^\n]*` treats a URL
+// scheme (`"https://..."`) as a comment start, silently truncating the
+// rest of that line — including a real dangerouslySetInnerHTML usage
+// later on the same line — from the scan entirely. Go's RE2 has no
+// lookbehind, so the guard is emulated by capturing whatever precedes
+// `//` (or matching start-of-string) and keeping it in the replacement:
+// `//` right after `:` simply fails to match at that position and is
+// left untouched, exactly like a genuine `://` is left untouched.
+// Deliberately not a general "handle every form" parser — the same
+// restraint the SQL scanner's own fix used — this closes the one
+// realistic case (a URL) named directly, nothing broader.
 var (
 	jsBlockCommentRe = regexp.MustCompile(`(?s)/\*.*?\*/`)
-	jsLineCommentRe  = regexp.MustCompile(`//[^\n]*`)
+	jsLineCommentRe  = regexp.MustCompile(`(^|[^:])//[^\n]*`)
 )
 
 func stripJSComments(content string) string {
 	content = jsBlockCommentRe.ReplaceAllString(content, "")
-	content = jsLineCommentRe.ReplaceAllString(content, "")
+	content = jsLineCommentRe.ReplaceAllString(content, "$1")
 	return content
 }
 
@@ -123,6 +137,33 @@ func TestStripJSComments_StillCatchesRealUsageOutsideAComment(t *testing.T) {
 	assert.Contains(t, got, dangerouslySetInnerHTMLIdentifier,
 		"real code outside any comment must survive stripping — this is the positive control proving "+
 			"the strip doesn't just hide everything")
+}
+
+// --- URL false-negative regression (found the same day, in this fix's
+// own first version — an unguarded `//[^\n]*` treats a URL scheme
+// ("https://...") as a comment start, silently truncating everything
+// after it on that line, including a real usage) ---
+
+func TestStripJSComments_URLOnItsOwnDoesNotTruncateTheRestOfTheLine(t *testing.T) {
+	// The exact failure shape: a URL earlier on the same line as a real
+	// usage used to make the real usage invisible.
+	content := `const href = "https://example.com"; const el = <div dangerouslySetInnerHTML={{ __html: body }} />;`
+	got := stripJSComments(content)
+	assert.Containsf(t, got, dangerouslySetInnerHTMLIdentifier,
+		"a URL earlier on the line must not truncate a real usage later on the same line — got %q", got)
+	assert.Contains(t, got, "https://example.com", "the URL itself is not a comment and must survive stripping")
+}
+
+func TestStripJSComments_URLThenAGenuineTrailingCommentBothHandledCorrectly(t *testing.T) {
+	// Proves the `:` guard doesn't just disable line-comment stripping
+	// wholesale to dodge the URL case — a real trailing `//` comment
+	// after a URL on the same line must still be stripped.
+	content := "const href = \"https://example.com\"; // mentions dangerouslySetInnerHTML in a real trailing comment\nconst x = 1;"
+	got := stripJSComments(content)
+	assert.NotContainsf(t, got, dangerouslySetInnerHTMLIdentifier,
+		"the genuine trailing comment must still be stripped — got %q", got)
+	assert.Contains(t, got, "https://example.com", "the URL itself must survive")
+	assert.Contains(t, got, "const x = 1;")
 }
 
 // meetsI20Floor is this check's own floor rule, the same shape as I15's
