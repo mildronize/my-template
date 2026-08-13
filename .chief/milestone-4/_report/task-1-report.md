@@ -198,3 +198,112 @@ CREATE UNIQUE INDEX todo_events_client_request_id_idx ON todo_events (client_req
 ## Commit pushed (branch `milestone-4/activity-log`)
 
 - `d0f7a9c` — `feat(milestone-4/task-1): todos gain status/assignee/priority/due_date/created_by, new todo_events table`
+
+## Fix-round note — Down mapping silently unfinished closed todos on rollback
+
+Clara found a real defect in the `+goose Down` mapping in this same
+migration file during review, verified and reported after this task's
+original report above was written.
+
+**The defect**: Down mapped `status` back to the old `done` boolean as
+`CASE WHEN status = 'done' THEN TRUE ELSE FALSE END`. The Up side
+correctly maps two `done` states to four `status` values
+(`open`/`in_progress`/`done`/`closed`); the reverse has to collapse
+those four back into two, and the `ELSE` branch collapsed
+`status = 'closed'` into `done = FALSE`. Per `INVARIANTS.md` I18,
+`closed` is a terminal, owner-only state, and per I12/มายด์'s ruling
+this milestone, it is the direct replacement for the `DELETE` this
+milestone removes — finishing work means moving to `closed`, not
+deleting the row. Rolling back this migration on a fork with real
+closed todos would silently turn every one of them back into an
+*unfinished* (`done = FALSE`) todo, and — because Down's first
+statement is `DROP TABLE todo_events` — there would be nothing left
+afterward to reconstruct the true prior state from. Same shape of bug
+as the original defect the Up mapping was attacked for: an unexamined
+`ELSE` doing something no one decided on purpose.
+
+**The fix** (`db/migrations/20260813100000_todo_activity_log.sql`,
+`+goose Down`) — every one of the four status values named explicitly,
+none left to an `ELSE`:
+
+```sql
+CASE
+    WHEN status = 'done'        THEN TRUE
+    WHEN status = 'closed'      THEN TRUE
+    WHEN status = 'open'        THEN FALSE
+    WHEN status = 'in_progress' THEN FALSE
+END
+```
+
+`done`/`closed` both collapse to `TRUE` (both are finished states);
+`open`/`in_progress` both collapse to `FALSE`, with `in_progress ->
+FALSE` justified in an inline SQL comment as a deliberate call ("work
+that is in progress is, by definition, not done yet"), not a default
+that happened to fall out. A second comment now sits directly above
+`DROP TABLE todo_events` stating plainly that this is irrecoverable
+data loss — a fork meets that fact at the point of the decision
+(reading the migration), not after running it.
+
+**New test** —
+`internal/platform/migrate_todo_activity_log_test.go`,
+`TestTodoActivityLogMigration_DownCollapsesFourStatusesToBoolean`:
+migrates up through this migration (`postActivityLogMigrationVersion`),
+seeds one `todos` row in each of the four post-migration `status`
+values with a real `created_by`, rolls back via `goose.DownTo(conn,
+migrationsDir, preActivityLogMigrationVersion)`, and asserts the exact
+resulting `done` boolean per prior status. Also asserts `created_by`/
+`status` no longer exist as columns and `todo_events` no longer exists
+after Down. Passing in isolation alongside the original Up test:
+
+```
+=== RUN   TestTodoActivityLogMigration_PreservesExistingRows
+--- PASS: TestTodoActivityLogMigration_PreservesExistingRows (0.01s)
+=== RUN   TestTodoActivityLogMigration_DownCollapsesFourStatusesToBoolean
+--- PASS: TestTodoActivityLogMigration_DownCollapsesFourStatusesToBoolean (0.01s)
+PASS
+ok  	github.com/mildronize/my-template/internal/platform	0.023s
+```
+
+**Attack-and-revert**, same standard as the original Up-side attack in
+this task: temporarily mutated the fixed migration's `closed` line
+from `THEN TRUE` back to `THEN FALSE` (the original bug's exact
+behavior), re-ran the new Down test.
+
+- Confirmed the mutation was a real semantic change, not a syntax
+  break: goose logged the Down migration applying successfully
+  (`OK   20260813100000_todo_activity_log.sql (1.77ms)`) — the mutated
+  SQL is valid and runs, it just computes the wrong value.
+- The new test failed on exactly the `closed` row's assertion and
+  nowhere else:
+  ```
+  migrate_todo_activity_log_test.go:217:
+      Error:      Should be true
+      Test:       TestTodoActivityLogMigration_DownCollapsesFourStatusesToBoolean
+      Messages:   status='closed' must roll back to done=TRUE — 'closed' is a
+                  terminal, finished state (I18/I12), not a deleted or
+                  unfinished one, and Down also drops todo_events, so there
+                  is no history left to reconstruct the true prior state
+                  from if this collapses wrong
+  --- FAIL: TestTodoActivityLogMigration_DownCollapsesFourStatusesToBoolean (0.01s)
+  ```
+  The `open`, `in_progress`, and `done` row assertions all still
+  passed — the failure isolates to precisely the mutated line.
+- Reverted the mutation (`THEN FALSE` -> `THEN TRUE`); `diff` against
+  the pre-mutation file showed the reverted file byte-identical to the
+  fixed version. Re-ran both tests: both green again (output above).
+
+**Scope check**: `git status --porcelain` before commit showed exactly
+two modified files — `db/migrations/20260813100000_todo_activity_log.sql`
+and `internal/platform/migrate_todo_activity_log_test.go` — nothing
+under `internal/domain/todo/`, `internal/transport/`, or
+`internal/architecture_test.go` touched, per task-2's concurrent claim
+on that territory. `go build ./...` still fails with the same single
+pre-existing root cause as before this fix (`internal/domain/todo/
+repo.go` referencing columns/queries task-2 hasn't updated yet) —
+unrelated to and unaffected by this change; `internal/platform` itself
+builds and tests clean.
+
+**Commit pushed** (branch `milestone-4/activity-log`, rebased onto
+`origin` first — no concurrent commits landed in between):
+
+- `ab61cd1` — `fix(milestone-4/task-1): Down mapping silently unfinished closed todos on rollback`
