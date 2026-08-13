@@ -522,6 +522,28 @@ gained `AssigneeHandle *string` in both files; no other struct changed.
     milestone's contract doesn't have; named as a follow-up rather than
     built speculatively. (Gap 3)
 
-## Commits (branch `milestone-4/activity-log`)
+## A concurrent push landed on this branch mid-task
 
-Three commits, one per gap, prefix `fix(milestone-4/handle-exposure):`.
+While this fix-round was in progress, two commits I did not make appeared
+on this branch's local HEAD: `960f741` ("guard the URL false-negative the
+comment-strip fix introduced") and `a467782` ("document the
+protocol-relative-URL residual, stop hardening the heuristic"), both
+timestamped `2026-08-13T17:3x` — before this fix-round's own commit. Both
+touch exactly one file: `internal/frontend_safety_test.go`
+(`git diff-tree --no-commit-id --name-only -r 960f741 a467782`) — I20's
+Go-side static-check heuristic, unrelated to anything in this fix-round's
+own scope (identity/todo domain, transport handlers, openapi specs,
+frontend). No file overlap with anything I touched, no conflict on
+`git push` (a clean fast-forward), and every Go/JS suite run after they
+appeared was still fully green. Named here for the same reason task-7's
+report named a similar concurrent landing on this branch: worth knowing
+about, not something to quietly absorb without a record.
+
+## Commit (branch `milestone-4/activity-log`)
+
+One commit, `916cafb` — see "Discipline confirmed" above for why this
+fix-round is one commit rather than three despite spanning three gaps
+(shared sqlc/oapi-codegen aggregator output makes a clean per-gap split
+impractical without re-running codegen three times against
+temporarily-reverted SQL/YAML state). Pushed cleanly on top of the
+concurrent commits above.
