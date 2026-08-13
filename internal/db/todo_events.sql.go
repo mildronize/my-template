@@ -161,12 +161,12 @@ FROM todo_events
 JOIN todos ON todos.id = todo_events.todo_id
 JOIN users ON users.id = todo_events.actor_id
 WHERE (
-    ?2 IS NULL
-    OR todo_events.created_at < ?2
-    OR (todo_events.created_at = ?2 AND todo_events.id < ?3)
+    ?1 IS NULL
+    OR todo_events.created_at < ?1
+    OR (todo_events.created_at = ?1 AND todo_events.id < ?2)
 )
 ORDER BY todo_events.created_at DESC, todo_events.id DESC
-LIMIT ?
+LIMIT ?3
 `
 
 type ListTodoEventsFeedParams struct {
@@ -176,12 +176,20 @@ type ListTodoEventsFeedParams struct {
 }
 
 type ListTodoEventsFeedRow struct {
-	TodoEvent   TodoEvent `json:"todo_event"`
-	TodoIDRef   string    `json:"todo_id_ref"`
-	TodoTitle   string    `json:"todo_title"`
-	ActorUserID string    `json:"actor_user_id"`
-	ActorHandle string    `json:"actor_handle"`
-	ActorRole   string    `json:"actor_role"`
+	ID              string         `json:"id"`
+	TodoID          string         `json:"todo_id"`
+	Seq             int64          `json:"seq"`
+	ActorID         string         `json:"actor_id"`
+	Type            string         `json:"type"`
+	Payload         sql.NullString `json:"payload"`
+	Body            sql.NullString `json:"body"`
+	ClientRequestID string         `json:"client_request_id"`
+	CreatedAt       time.Time      `json:"created_at"`
+	TodoIDRef       string         `json:"todo_id_ref"`
+	TodoTitle       string         `json:"todo_title"`
+	ActorUserID     string         `json:"actor_user_id"`
+	ActorHandle     string         `json:"actor_handle"`
+	ActorRole       string         `json:"actor_role"`
 }
 
 // The cross-todo activity feed (`GET /api/bff/activity`,
@@ -190,6 +198,27 @@ type ListTodoEventsFeedRow struct {
 // mark human vs agent). Cursor-paginated on (created_at, id): the first
 // page passes both cursor columns as NULL; every later page passes the
 // previous page's last row's created_at/id.
+//
+// Explicit column list (not sqlc.embed) and sqlc.arg(limit) (not a bare
+// anonymous placeholder) on purpose, not just style: sqlc.embed was
+// observed to reserve a phantom numbered-placeholder slot ahead of the
+// first sqlc.narg below, which pushed every later placeholder's number
+// one higher than the generated Go function's own argument order
+// accounts for. modernc.org/sqlite binds database/sql's positional args
+// strictly by call order to the SQL text's own numbered placeholders, not
+// by re-deriving numbers from how many args were passed - so a query
+// whose numbering starts one higher than expected silently drops the
+// first bound arg onto an unused slot and leaves the highest-numbered
+// placeholder (LIMIT) with nothing bound to it at all ("missing argument
+// with index N"), rather than erroring at generate time. Keeping every
+// placeholder inside sqlc's own numbering (no bare anonymous placeholder)
+// and avoiding sqlc.embed here keeps the numbering contiguous from the
+// start, matching ListTodoEventsFeedParams field order exactly.
+// (Also: plain ASCII hyphens only in this comment block, never an em
+// dash, immediately above a SELECT line - task-1's own report already
+// found that an em dash there corrupts sqlc v1.31.1's star-expansion byte
+// offsets; this query hit a variant of the same corruption during task-2
+// until this comment's em dashes were replaced.)
 func (q *Queries) ListTodoEventsFeed(ctx context.Context, arg ListTodoEventsFeedParams) ([]ListTodoEventsFeedRow, error) {
 	rows, err := q.db.QueryContext(ctx, listTodoEventsFeed, arg.CursorCreatedAt, arg.CursorID, arg.Limit)
 	if err != nil {
@@ -200,15 +229,15 @@ func (q *Queries) ListTodoEventsFeed(ctx context.Context, arg ListTodoEventsFeed
 	for rows.Next() {
 		var i ListTodoEventsFeedRow
 		if err := rows.Scan(
-			&i.TodoEvent.ID,
-			&i.TodoEvent.TodoID,
-			&i.TodoEvent.Seq,
-			&i.TodoEvent.ActorID,
-			&i.TodoEvent.Type,
-			&i.TodoEvent.Payload,
-			&i.TodoEvent.Body,
-			&i.TodoEvent.ClientRequestID,
-			&i.TodoEvent.CreatedAt,
+			&i.ID,
+			&i.TodoID,
+			&i.Seq,
+			&i.ActorID,
+			&i.Type,
+			&i.Payload,
+			&i.Body,
+			&i.ClientRequestID,
+			&i.CreatedAt,
 			&i.TodoIDRef,
 			&i.TodoTitle,
 			&i.ActorUserID,

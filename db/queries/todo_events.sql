@@ -43,8 +43,29 @@ ORDER BY seq ASC;
 -- mark human vs agent). Cursor-paginated on (created_at, id): the first
 -- page passes both cursor columns as NULL; every later page passes the
 -- previous page's last row's created_at/id.
+--
+-- Explicit column list (not sqlc.embed) and sqlc.arg(limit) (not a bare
+-- anonymous placeholder) on purpose, not just style: sqlc.embed was
+-- observed to reserve a phantom numbered-placeholder slot ahead of the
+-- first sqlc.narg below, which pushed every later placeholder's number
+-- one higher than the generated Go function's own argument order
+-- accounts for. modernc.org/sqlite binds database/sql's positional args
+-- strictly by call order to the SQL text's own numbered placeholders, not
+-- by re-deriving numbers from how many args were passed - so a query
+-- whose numbering starts one higher than expected silently drops the
+-- first bound arg onto an unused slot and leaves the highest-numbered
+-- placeholder (LIMIT) with nothing bound to it at all ("missing argument
+-- with index N"), rather than erroring at generate time. Keeping every
+-- placeholder inside sqlc's own numbering (no bare anonymous placeholder)
+-- and avoiding sqlc.embed here keeps the numbering contiguous from the
+-- start, matching ListTodoEventsFeedParams field order exactly.
+-- (Also: plain ASCII hyphens only in this comment block, never an em
+-- dash, immediately above a SELECT line - task-1's own report already
+-- found that an em dash there corrupts sqlc v1.31.1's star-expansion byte
+-- offsets; this query hit a variant of the same corruption during task-2
+-- until this comment's em dashes were replaced.)
 SELECT
-    sqlc.embed(todo_events),
+    todo_events.id, todo_events.todo_id, todo_events.seq, todo_events.actor_id, todo_events.type, todo_events.payload, todo_events.body, todo_events.client_request_id, todo_events.created_at,
     todos.id AS todo_id_ref,
     todos.title AS todo_title,
     users.id AS actor_user_id,
@@ -59,4 +80,4 @@ WHERE (
     OR (todo_events.created_at = sqlc.narg(cursor_created_at) AND todo_events.id < sqlc.narg(cursor_id))
 )
 ORDER BY todo_events.created_at DESC, todo_events.id DESC
-LIMIT ?;
+LIMIT sqlc.arg(limit);
