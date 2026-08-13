@@ -53,14 +53,18 @@ func NewJWTVerifier(ctx context.Context, issuer, audience string) (JWTVerifier, 
 // issuer/audience and returns its `sub` claim. iss/aud/exp are all
 // validated (task-2.md); RS256 is pinned via rs256KeyProvider below,
 // never read from the token's own header.
+//
+// Key lookup (inside rs256KeyProvider.FetchKeys, invoked by jwt.Parse
+// below) forces exactly one Cache.Refresh()+retry on a kid miss (I7's
+// milestone-2 correction) rather than trusting whatever jwk.Cache happens
+// to have on hand — jwk.Cache only refetches on its own schedule, never
+// lazily on a miss, so without this a real key rotation would reject
+// every token until the next scheduled refresh (up to 15 minutes,
+// silently). rs256KeyProvider holds the cache+URL (not a pre-fetched
+// jwk.Set) specifically so it can perform that bounded refresh itself.
 func (v *jwxVerifier) Verify(ctx context.Context, token string) (string, error) {
-	keySet, err := v.cache.Lookup(ctx, v.jwksURL)
-	if err != nil {
-		return "", fmt.Errorf("looking up cached JWKS: %w", err)
-	}
-
 	parsed, err := jwt.Parse([]byte(token),
-		jwt.WithKeyProvider(rs256KeyProvider{set: keySet}),
+		jwt.WithKeyProvider(rs256KeyProvider{cache: v.cache, jwksURL: v.jwksURL}),
 		jwt.WithValidate(true),
 		jwt.WithIssuer(v.issuer),
 		jwt.WithAudience(v.audience),
@@ -76,33 +80,74 @@ func (v *jwxVerifier) Verify(ctx context.Context, token string) (string, error) 
 	return sub, nil
 }
 
-// rs256KeyProvider selects a verification key from a jwk.Set by the
-// token's `kid` header (falling back to the sole key when the set has
-// exactly one and the token has none), and always pins jwa.RS256 as the
-// algorithm to verify with (I6) — regardless of what the token's own
-// `alg` header or the JWK's own `alg` field claims. This is what defends
-// against algorithm-confusion attacks: an attacker cannot get this
-// verifier to attempt anything other than RS256, no matter what the
+// rs256KeyProvider selects a verification key from the issuer's cached
+// JWKS by the token's `kid` header (falling back to the sole key when the
+// set has exactly one and the token has none), and always pins jwa.RS256
+// as the algorithm to verify with (I6) — regardless of what the token's
+// own `alg` header or the JWK's own `alg` field claims. This is what
+// defends against algorithm-confusion attacks: an attacker cannot get
+// this verifier to attempt anything other than RS256, no matter what the
 // token's header says.
+//
+// It holds the cache + jwksURL rather than a single pre-fetched jwk.Set
+// so that FetchKeys can force one bounded refresh on a lookup miss (I7).
 type rs256KeyProvider struct {
-	set jwk.Set
+	cache   *jwk.Cache
+	jwksURL string
 }
 
-func (p rs256KeyProvider) FetchKeys(_ context.Context, sink jws.KeySink, sig *jws.Signature, _ *jws.Message) error {
-	var key jwk.Key
-	if kid, ok := sig.ProtectedHeaders().KeyID(); ok && kid != "" {
-		k, found := p.set.LookupKeyID(kid)
-		if !found {
-			return fmt.Errorf("no JWKS key found for kid=%q", kid)
+// FetchKeys looks the signature's kid up against whatever JWKS is
+// currently cached. If that lookup fails — kid not found, or no kid with
+// more than one candidate key — it forces exactly one
+// Cache.Refresh(ctx, jwksURL) and retries the same lookup once against
+// the refreshed set, then gives up. This is deliberately bounded to one
+// refresh per call: a caller sending a request with a random, never-valid
+// kid gets exactly one extra issuer hit, not an unbounded chain of them —
+// jwt.Parse invokes FetchKeys at most once per signature, so "one refresh
+// per FetchKeys call" is "one refresh per Verify call" for the compact
+// (single-signature) JWTs this verifier handles.
+func (p rs256KeyProvider) FetchKeys(ctx context.Context, sink jws.KeySink, sig *jws.Signature, _ *jws.Message) error {
+	set, err := p.cache.Lookup(ctx, p.jwksURL)
+	if err != nil {
+		return fmt.Errorf("looking up cached JWKS: %w", err)
+	}
+
+	kid, hasKid := sig.ProtectedHeaders().KeyID()
+
+	key, lookupErr := lookupRS256Key(set, kid, hasKid)
+	if lookupErr != nil {
+		// Whatever's cached doesn't have this key — force exactly one
+		// refresh (never a loop) and retry against the result, since the
+		// miss may simply mean the issuer rotated keys since the cache
+		// was last populated (I7).
+		refreshed, refreshErr := p.cache.Refresh(ctx, p.jwksURL)
+		if refreshErr != nil {
+			return fmt.Errorf("%w (forced JWKS refresh also failed: %v)", lookupErr, refreshErr)
 		}
-		key = k
-	} else if p.set.Len() == 1 {
-		k, _ := p.set.Key(0)
-		key = k
-	} else {
-		return errors.New("token has no kid and JWKS does not have exactly one key")
+		key, lookupErr = lookupRS256Key(refreshed, kid, hasKid)
+		if lookupErr != nil {
+			return lookupErr
+		}
 	}
 
 	sink.Key(jwa.RS256(), key)
 	return nil
+}
+
+// lookupRS256Key finds the candidate verification key within set for a
+// signature that declared kid (hasKid distinguishes "no kid header" from
+// "empty kid header", both of which fall back to the single-key case).
+func lookupRS256Key(set jwk.Set, kid string, hasKid bool) (jwk.Key, error) {
+	if hasKid && kid != "" {
+		k, found := set.LookupKeyID(kid)
+		if !found {
+			return nil, fmt.Errorf("no JWKS key found for kid=%q", kid)
+		}
+		return k, nil
+	}
+	if set.Len() == 1 {
+		k, _ := set.Key(0)
+		return k, nil
+	}
+	return nil, errors.New("token has no kid and JWKS does not have exactly one key")
 }

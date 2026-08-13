@@ -177,6 +177,29 @@ service would be forgeable today. Re-check that note (and
 `docs/GETTING-STARTED.md`'s JWT-seam paragraph) for whether that's still
 true before registering anything.
 
+### Key rotation: no restart needed after an SSO rebuild (I7)
+
+`sso-consumer-contract.md` §7.4 says to "expect a restart after an SSO
+rebuild, and say so in the runbook" — **that expectation is superseded
+for this service specifically**, as of milestone-2. Do not schedule a
+restart for this service when Hydra's signing key rotates.
+
+`internal/identity/jwt.go`'s JWKS lookup (`rs256KeyProvider.FetchKeys`)
+forces exactly one `jwk.Cache.Refresh()` + retry whenever a token's `kid`
+isn't found in whatever this service currently has cached, before
+failing. In practice: the first request bearing a token signed by a
+freshly-rotated Hydra key still verifies correctly — it costs one extra
+JWKS fetch against the issuer, not an outage. This closes the gap that
+motivated §7.4's contract-wide advice in the first place (`jwk.Cache`
+only refetches on its own schedule, up to 15 minutes, never lazily on a
+miss) — see `_rules/_contract/INVARIANTS.md`'s I7 for the full reasoning,
+including why the retry is bounded to exactly one attempt (a forged/
+random `kid` cannot force repeated Hydra calls).
+
+If this service ever stops using `jwk.Cache` this way, or the retry is
+removed, §7.4's original restart expectation applies again — until then,
+it does not.
+
 ## Reverse proxy / TLS / process supervision
 
 Out of scope for this milestone entirely (`GOAL.md` Context: "systemd,

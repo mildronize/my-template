@@ -175,6 +175,78 @@ func TestI7_JWKSCachedNotPinnedToOneKey(t *testing.T) {
 	assert.Error(t, err, "a rotated-out key must stop verifying — a verifier that pinned it would wrongly still accept this")
 }
 
+// TestI7_KidMissTriggersOneRefreshThenSucceeds — I7's milestone-2
+// correction: a token signed with a kid that isn't in the currently-
+// cached JWKS, but *is* present after one forced refresh (simulating "key
+// rotated at the issuer since this verifier's cache was last filled"),
+// must still verify — via exactly one Cache.Refresh()+retry, not by
+// waiting out jwk.Cache's own schedule.
+func TestI7_KidMissTriggersOneRefreshThenSucceeds(t *testing.T) {
+	_, jwksA := newRSAKeyAndJWKS(t, "key-a")
+
+	var current atomic.Value
+	current.Store(jwksA)
+	var fetches atomic.Int64
+	srv := newJWKSServer(t, &current, &fetches)
+
+	ctx := context.Background()
+	verifier, err := NewJWTVerifier(ctx, srv.URL, "https://service.example")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), fetches.Load(), "NewJWTVerifier fetches once at startup")
+
+	// Rotate the issuer's JWKS to a brand-new key *after* the verifier's
+	// cache was already populated with key-a — the cache has no reason to
+	// know about key-b yet, since jwk.Cache only refetches on its own
+	// schedule (up to 15 minutes), never lazily.
+	privB, jwksB := newRSAKeyAndJWKS(t, "key-b")
+	current.Store(jwksB)
+
+	tokenB := signRS256Token(t, privB, "key-b", srv.URL, "https://service.example", "sso|agent-b", time.Now().Add(time.Hour))
+
+	sub, err := verifier.Verify(ctx, string(tokenB))
+	require.NoError(t, err, "a kid absent from the cached set, but present after one refresh, must still verify")
+	assert.Equal(t, "sso|agent-b", sub)
+
+	// One fetch at startup + exactly one forced refresh for the miss.
+	assert.Equal(t, int64(2), fetches.Load(), "a kid miss must force exactly one refresh, not zero and not a loop")
+}
+
+// TestI7_UnknownKidFailsWithBoundedRefresh — I7's DoS-prevention property:
+// a kid that's genuinely never valid (present in neither the cached set
+// nor after a refresh) must fail verification, and — this is the part
+// that actually bounds the retry — the JWKS endpoint must receive at most
+// 2 fetch requests total for this one verification attempt (the initial
+// cache-fill at startup, plus one forced refresh), never an unbounded
+// number. An attacker sending random kids must not be able to force
+// repeated issuer calls per attempt.
+func TestI7_UnknownKidFailsWithBoundedRefresh(t *testing.T) {
+	priv, jwksA := newRSAKeyAndJWKS(t, "key-a")
+
+	var current atomic.Value
+	current.Store(jwksA)
+	var fetches atomic.Int64
+	srv := newJWKSServer(t, &current, &fetches)
+
+	ctx := context.Background()
+	verifier, err := NewJWTVerifier(ctx, srv.URL, "https://service.example")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), fetches.Load(), "NewJWTVerifier fetches once at startup")
+
+	// Signed with a real key, but declaring a kid that was never issued by
+	// this JWKS server, before or after any refresh — a random/bad kid, not
+	// a rotation-timing issue.
+	badToken := signRS256Token(t, priv, "never-a-real-kid", srv.URL, "https://service.example", "sso|agent-a", time.Now().Add(time.Hour))
+
+	_, err = verifier.Verify(ctx, string(badToken))
+	assert.Error(t, err, "a kid that's never found, even after a refresh, must fail verification")
+
+	// The key assertion: the fake server saw at most 2 requests total for
+	// this one verification attempt (1 startup fetch + 1 forced refresh),
+	// not one per lookup attempt or an unbounded chain.
+	assert.LessOrEqual(t, fetches.Load(), int64(2), "a bad kid must not be able to force more than one extra issuer call")
+	assert.Equal(t, int64(2), fetches.Load(), "exactly one forced refresh is expected for a single miss")
+}
+
 func TestJWTVerifier_WrongIssuerRejected(t *testing.T) {
 	priv, jwksJSON := newRSAKeyAndJWKS(t, "key-1")
 	var current atomic.Value
