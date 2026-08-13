@@ -67,6 +67,18 @@ list:
 - `internal/transport/publicapi/todo_handler.go` not building, until
   task-3 lands.
 
+**Measured at `5d90d1d`.** A baseline is a measurement, and a measurement
+has a subject — record the commit it was taken against, not just the
+list, since the list can read identical while the *reason* underneath it
+changed (e.g. the pending scope-tag fix-round moves I15-I19/I21 from
+`per-domain-module` to `domain:<name>` — `TestDoneWhen12` will likely
+still fail on `{I20, I21}` afterward, for a different mechanism entirely;
+same names is not the same measurement). **When any change lands that
+could alter *why* the baseline fails, re-measure it fresh against the new
+commit rather than carrying the old list forward — if the set or the
+reason changed, that's a finding to report, not a number to silently
+update.**
+
 **Any failure outside this exact list is a regression until proven
 otherwise.** The baseline only shrinks as tasks land what it's waiting
 on — it never grows silently; if a task finds it genuinely needs to grow
