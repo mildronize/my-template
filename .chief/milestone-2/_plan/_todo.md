@@ -113,7 +113,7 @@ before this milestone started.
       finally exercises `resolveActor`-equivalent → key lookup →
       database for real — every existing test injects the actor directly.
       **Owns: Done-when 12.**
-- [ ] task-7: Seed script — idempotent (check-then-insert per natural
+- [x] task-7: Seed script — idempotent (check-then-insert per natural
       key, not blind upsert), creates the owner row (`SEED_OWNER_
       SSO_SUBJECT` from config — see `_rules/_contract/DATA_MODEL.md`'s
       "Owner provisioning" note, no JIT) and nothing speculative beyond
