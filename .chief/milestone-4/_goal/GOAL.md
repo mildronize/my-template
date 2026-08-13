@@ -81,6 +81,8 @@ derived.
 | --- | --- | --- |
 | Ownership model | Todos become a shared collection: any authenticated actor (agent via Bearer, owner via session) can see and act on any todo. `todos.owner_id`'s current meaning ("always the resolved creator, and the sole access-scoping key") is retired for this domain — see the I3-scope note below. A `created_by` column replaces it for audit/attribution only, never for access control | มายด์ (ruling 1, TPL-2 grill) |
 | Fields added | `status` (fixed enum: `open` / `in_progress` / `done` / `closed` — replaces the `done` boolean, not alongside it), `assignee_id` (nullable, references `users`, any role), `priority` (nullable, my-task's convention: `low`/`medium`/`high`/`urgent`), `due_date` (nullable timestamp) | มายด์ (ruling 2) |
+| `done` → `status` migration mapping, on existing rows | `done = true` → `status = 'done'` (**not** `'closed'`); `done = false` → `status = 'open'`. `done`/`closed` are not interchangeable once `closed` is permission-gated (owner-only, per the Permission model row below) — mapping every already-finished todo straight to `closed` would retroactively strip every agent's ability to reopen or adjust work it could freely touch yesterday, the moment a fork upgrades, with no one having decided that on purpose. `'done'` mirrors my-task's own two-tier distinction (its `completed` status group is agent-reachable; only `closed` is not) and preserves each existing row's actual capability profile as closely as the new vocabulary allows. Verified against a database with pre-existing rows in both `done` states, not only an empty one — Clara's finding: a migration tested only on an empty DB has tested that it parses, nothing about what it does to a fork's actual data | Clara (found the gap), Luna (the mapping choice + reasoning) |
+| `owner_id` → `created_by` is a real data-visibility change on upgrade, stated as one | Every existing row's `owner_id` currently means "the only actor who may see this." After the migration, `created_by` means "who made it," and every row becomes visible to every actor — a deliberate, correct consequence of the Ownership model ruling above, but a genuine behavior change for any fork with existing data, not an internal rename. Stated here so it's a decision on record, not something a fork discovers by noticing its old todos are suddenly visible to agents that couldn't see them before | Clara |
 | No manageable-statuses table | Fixed enum, not an owner-editable `statuses` table like my-task's (with I11's delete-with-destination logic). Not a natural reading of "todo has more fields" — a manageable-statuses feature is materially bigger than field tracking, and nothing in มายด์'s ask implies wanting to rename/reorder statuses | Luna's recommendation, มายด์ took it (ruling 2) |
 | Comments — in scope | `commented` event type, `body` field (plain text write, Markdown-rendered read, per my-task's I8 pattern below). Luna recommended out (reasoning from มายด์'s literal three bullets, which don't mention comments); Clara overrode on the ground that my-task's log is substantially `type: commented` — "it is how an agent says anything at all, and a log that only records field changes never carries what anyone wanted to say." A judgment call, not a fact — recorded as one | Clara (ruling 3, มายด์ took her lean) |
 | Comment rendering safety | Body text only, rendered client-side through a Markdown-to-React-elements path — never `dangerouslySetInnerHTML`, never a raw-HTML string reaching the DOM. Mirrors my-task's I8 exactly: *"the log is a cross-agent injection channel"* is the stated reason, not decoration | Mirrors my-task's I8 (`~/gits/my-task/.chief/milestone-1/_contract/INVARIANTS.md` — "No raw HTML, ever") |
@@ -162,7 +164,12 @@ see Human Acceptance below, which is explicit about that.
 1. `todo_events` exists with the columns/indexes above; a migration moves
    `todos` from `done` (boolean) to `status` (enum) and adds
    `assignee_id`/`priority`/`due_date`/`created_by`, with `owner_id`'s
-   old access-scoping role retired.
+   old access-scoping role retired. **Verified against a database seeded
+   with pre-existing rows in both `done` states before the migration
+   runs, not only an empty one**: a test asserts `done = true` rows land
+   on `status = 'done'` and `done = false` rows land on `status = 'open'`
+   — the exact mapping the Decisions table states, checked against real
+   rows, not just that the migration executes without error.
 2. The single write path (mirrors `TaskService.append()`) exists: a test
    proves a failure mid-write leaves neither the event row nor the
    `todos` state change (the same transactional-atomicity property
@@ -172,10 +179,14 @@ see Human Acceptance below, which is explicit about that.
    distinction my-task's own I3 test draws).
 4. Idempotency: a test proves a repeated `clientRequestId` returns the
    original event and creates nothing.
-5. Permission layer: a test proves an agent attempting `status: closed`
-   is rejected, and the owner attempting the same succeeds. A second test
-   proves every other action type (comment, assign, field-change,
-   non-closed status-change) succeeds for both roles.
+5. Permission layer, paired so the check can fail for the right reason:
+   **the same agent, against the same todo**, has a `status: closed`
+   attempt rejected AND a non-closed status change (or comment/assign/
+   field-change) succeed, in the same test. A permission layer that
+   rejects everything would pass a reject-only assertion just as well as
+   a correct one — the positive half is what proves the rejection is
+   about `closed` specifically, not about the agent generally. The
+   owner's `status: closed` attempt succeeds, tested separately.
 6. `DELETE /api/v1/todos/:id` and `DELETE /api/bff/todos/:id` genuinely
    404/405 (not silently 200) — a negative check, same shape as
    milestone-3's key-issuance negative check. The companion skill doc no
