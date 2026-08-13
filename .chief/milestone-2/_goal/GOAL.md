@@ -118,8 +118,67 @@ settled · a second, crew-facing "how to use your key" skill (my-task's
 
 ## Done when
 
-To be finalized after Phase 2 (contracts) — placeholder structure, filled
-in once the contract for the two-surface split and the owner-login flow is
-written. Will follow milestone-1's pattern: one stopping condition per
-requirement above, each owned by exactly one task, no implicit
-"full suite passing" catch-alls.
+Machine-checkable stopping conditions, one task owner each (assigned in
+`_plan/_todo.md`, not left as an implicit "full suite passing" catch-all):
+
+1. `internal/architecture_test.go` rewritten for the 5-rule layout (domain
+   never imports transport, only repo.go imports sqlc, no sibling-domain
+   imports, transport never imported by domain/identity, platform imports
+   nothing above it) and passes — verified the same way every prior
+   guardrail change in this repo has been: a scratch-clone violation
+   actually caught, not just green.
+2. Every milestone-1 test still passes after the code move (no regression
+   from relocation alone).
+3. `platform/middleware.go`'s recovery/logging/request-ID wired into both
+   `publicapi` and `bff` engines — a test confirms both, not just one.
+4. `register-<service>.sh` exists as a placeholder template with every
+   variable `GETTING-STARTED.md` documents; `GETTING-STARTED.md`'s Step 1
+   is running it, not optional-by-omission.
+5. `GETTING-STARTED.md`'s rename checklist has an explicit line for the
+   key path + env var (the fork-collision Clara found) — structural
+   presence check, same shape as milestone-1's task-9 fix.
+6. I7's fix: a test using a fake JWKS endpoint proves a `kid` miss forces
+   exactly one `Cache.Refresh()` + retry (not zero, not a loop) before
+   failing.
+7. I11: a test proves the owner-login flow cannot construct an auth URL or
+   complete a token exchange without a PKCE verifier/challenge pair — not
+   just that the library supports one.
+8. I12: a test proves a `bff` session resolving to `role='agent'` is
+   rejected identically to a missing session.
+9. I13: a test proves `rotate` issues the new key before disabling the
+   old one(s) — ordering, not just eventual consistency.
+10. I14: a test proves the ported resolver refuses a present-but-empty
+    argument (the exact guard from `~/.my-task/bin/key`), and that
+    `issue`/`rotate` leave a working key file + resolver behind.
+11. An e2e smoke script runs real HTTP against a live instance with a real
+    minted key — auth negatives (no credential, spoofed actor field),
+    real CRUD round-trip — the credential-resolution path actually
+    exercised end to end, not just unit-injected.
+12. Seed script is idempotent — running it twice leaves exactly one owner
+    row, checked directly, not assumed from "it uses check-then-insert."
+13. `<service>-api` skill doc exists with the sections `_goal/GOAL.md`'s
+    Decisions table names (base URL, auth, invariant rules, endpoint
+    table + examples, `references/` split), plus both required warnings
+    (indistinguishable-401, `0600`-is-a-rule) present as identifiable
+    sections, not buried in prose.
+14. `internal/invariants_test.go`'s promoted-contract-is-sole-authority
+    fix (already landed during planning, see commit `4eac2c0`) still
+    passes with the full I1–I14 set once every task above has landed its
+    tests.
+
+### Human acceptance — after the loop, not part of it
+
+**มายด์ logs in through the owner-login flow against a real, registered
+Hydra client, on a real deployment.** This is explicitly his own
+validation path for the template ("this is my test... to look at UI and
+validate logic"), not a formality — and it can't be a stopping condition
+for the same reason milestone-1's original JWT human-acceptance criterion
+couldn't: no unattended loop can complete a real interactive login,
+and — per this milestone's client-registration decision — no fork has a
+registered Hydra client until `register-<service>.sh` is run once by a
+human against a real issuer. Done-when 7's PKCE test and Done-when 12's
+seed-script check are the machine-checkable half; whether the flow
+actually works against live Hydra (including whatever `sso-uat.thadaw.com`
+surfaces, if that's the issuer used — see `_goal/GOAL.md` Context for why
+that specific path is untested fleet-wide) is checked once, by a human,
+afterward.
