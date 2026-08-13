@@ -234,24 +234,23 @@ would still ship a mis-named frontend:
 - **`web/package.json`'s `name`** (currently `my-template-web`) — the
   same kind of rename as `openapi.yaml`'s `info.title` above, just for
   the frontend's own manifest.
-- **The API base URL, if you ever hardcode one.** Today nothing in `web/`
+- **The API base URL, if you ever hardcode one.** Nothing in `web/`
   hardcodes a base URL to rename: `vite.config.ts`'s dev-time proxy
   (`server.proxy`, see "Running `web/` against a live Go backend" below)
-  and the built SPA's own `fetch` calls (task-3 adds these — none exist
-  yet in task-1's placeholder pages) all go through same-origin relative
-  paths (`/api/...`), which need no per-fork edit. If your fork ever adds
-  an absolute base URL (a separately-hosted API, a CDN-served SPA talking
-  to a different origin than it's served from), that's the value to
-  rename here — check the codebase for one before assuming there's
-  nothing to do, since this list can't promise to stay accurate as task-3
-  and later work land.
+  and the built SPA's own `fetch` calls (`web/src/lib/{auth-client,todos,
+  keys}.ts`, wired against `/api/bff/*` as of milestone-3/task-3) all go
+  through same-origin relative paths (`/api/...`), which need no per-fork
+  edit. If your fork ever adds an absolute base URL (a separately-hosted
+  API, a CDN-served SPA talking to a different origin than it's served
+  from), that's the value to rename here — check the codebase for one
+  before assuming there's nothing to do.
 - **Domain nouns inside the ported UI components.** `web/src/components/
   Header.tsx`'s `NAV_LINKS` still reads "Activity"/"Tasks"/"Projects" (a
   verbatim port of my-task's own nav, per `.chief/milestone-3/_plan/
   _todo.md`'s task-1 spec — no `/tasks` or `/projects` route actually
   exists in this template yet), `web/src/app/TodosPage.tsx`'s heading
-  says "Todos", `web/src/app/settings/ApiKeySettingsPlaceholder.tsx`
-  and other placeholder copy reference "Agent API keys" — the same
+  says "Todos", `web/src/app/settings/ApiKeySettings.tsx`
+  and other copy reference "Agent API keys" — the same
   "todo"-domain language `docs/GETTING-STARTED.md`'s own "Dangling
   references after a correct fork" section (below) already tells you to
   grep for on the Go side, now covering `*.tsx`/`*.ts` too since
@@ -708,13 +707,18 @@ Once Steps 1–5 are done (or even before, against the unforked template,
 to see it work at all — Steps 2–5 are skippable purely to try the
 unforked template as-is). **Step 1 is different: it's not skippable just
 because the rest of this walkthrough happens to work without it.** The
-numbered checklist below only exercises the API-key path (steps 1–5
-below never touch `bff`), so it'll pass with Step 1 undone — but the
-moment you or anyone else opens `GET /login`, an unregistered client
-means a dead login path, on the unforked template or any fork, local
-deployment included. If owner login is part of what you're validating,
-do Step 1 first regardless of whether this walkthrough alone would have
-caught its absence:
+numbered checklist below (1–5) only exercises the API-key path (it never
+touches `bff`), so it'll pass with Step 1 undone — but the moment you or
+anyone else opens `GET /login`, an unregistered client means a dead login
+path, on the unforked template or any fork, local deployment included.
+If owner login — or the owner-facing SPA's todo CRUD, step 6 below — is
+part of what you're validating, do Step 1 first regardless of whether
+this walkthrough alone would have caught its absence. **If you're
+running this exact template (not a fresh fork) against an already-live
+Hydra deployment, check whether Step 1 has already been done for you**
+— a registered client's `redirect_uris` pins a specific host/port
+(`sso-consumer-contract.md` §6), so it's a one-time-per-service-per-
+environment setup step, not something every run repeats:
 
 1. `make tools`, if you haven't already (Prerequisites, above).
 2. Start the service, either:
@@ -759,8 +763,31 @@ caught its absence:
    The raw key prints to stdout exactly once — copy it immediately, it's
    never stored anywhere recoverable (I8).
 5. Use the key: `curl -H "Authorization: Bearer <key>" http://localhost:8080/api/v1/me`
-   should return the handle you issued the key for. That's the same
-   condition GOAL.md's own Human Acceptance criterion stops at.
+   should return the handle you issued the key for. That's the agent/
+   API-key path's own stopping point — the one `.chief/milestone-1/
+   _goal/GOAL.md` and `.chief/milestone-2/_goal/GOAL.md`'s own Human
+   Acceptance criteria stop at. It does **not** touch `bff`, owner login,
+   or the SPA at all — step 6 below is the separate, further path that
+   does.
+6. **Owner login + todo CRUD through the real SPA** — this is
+   `.chief/milestone-3/_goal/GOAL.md`'s own Human Acceptance criterion,
+   and needs Step 1 done (a registered Hydra client) first, unlike steps
+   1–5 above:
+   - Open `http://localhost:8080/login` (or your `PORT`) in a real
+     browser. This redirects to Hydra and back through `GET /callback`
+     once you complete a real login there — not something any automated
+     check in this repo can do for you (no unattended loop can drive a
+     real Hydra consent screen).
+   - A successful login redirects to `/`, the SPA's todos page
+     (`web/src/app/TodosPage.tsx`), session-cookie-authenticated against
+     `/api/bff/me`.
+   - **Create** a todo (the "New todo" button/dialog), confirm it
+     **appears in the list**, **edit** it (toggle done, or retitle), then
+     **delete** it — all backed by real `/api/bff/todos` JSON endpoints
+     (`internal/transport/bff`, session-authenticated, owner-scoped).
+     This is what closes the "owner can log in but there's nothing to
+     create" gap milestone-2's acceptance attempt exposed; milestone-3
+     is what actually ships it.
 
 ### Running `web/` against a live Go backend (Vite dev mode)
 
@@ -814,41 +841,29 @@ commands:
 | `go run ./cmd/server` / `docker compose up` alone | `web/dist`'s embedded build, frozen at the last `make build` | Never, until you re-run `make build` and restart the server |
 | `npm run dev` (backend running separately) | Vite's dev server, live | Immediately, no rebuild |
 
-### Known limitation: the owner has no supported way to create a todo
+### The owner can create, edit, and delete their own todos
 
-If you log in through `GET /login` expecting to see (or create) something,
-there's nothing there yet, and that's expected, not a bug you're hitting
-by accident. The public API rejects an owner's Bearer token by design
-(I2 — a browser session must never carry API-key-equivalent write
-authority), and `internal/transport/bff` is read-only: `GET /login`,
-`GET /callback`, nothing that writes. **There is currently no supported
-path for the owner to create a todo at all.**
+This was a real limitation through milestone-3/task-1 (the SPA's todos
+page was a data-free placeholder) — **closed by task-2/task-3, not still
+true.** `GET /` serves the Vite SPA (`web/`, embedded via
+`web/embed.go`/`cmd/server/spa.go`); once logged in via `GET /login`,
+the todos page (`web/src/app/TodosPage.tsx`) lists the owner's own todos
+and offers create (a dialog), toggle-done/retitle (edit), and delete —
+all backed by real session-authenticated JSON endpoints under
+`/api/bff/todos` (`internal/transport/bff`, reusing
+`internal/domain/todo.Service` directly, no new domain logic). The public
+API's rejection of an owner's Bearer token (I2 — a browser session must
+never carry API-key-equivalent write authority) is still true and still
+the reason this write path lives on `/api/bff` and never on
+`/api/v1` — see `_contract/API.md`'s "I2/I12 boundary" section — but it
+no longer means the owner has *no* way to write at all. The BFF itself is
+no longer read-only.
 
-**As of milestone-3/task-1, `GET /` serves the Vite SPA (`web/`, embedded
-via `web/embed.go`/`cmd/server/spa.go`), not the old Go-`html/template`
-view** — but the SPA's own todos page is still a placeholder (a bare
-"Todos" heading, no data fetching) until task-3 wires it against the
-BFF's own JSON endpoints (task-2). Until then, logging in shows the SPA
-shell (header, footer, theme toggle) around an empty placeholder — the
-same "nothing to see or create yet" limitation this section describes,
-just rendered by React instead of `html/template` now.
-
-To seed something for the owner's view to actually render (a demo, or
-มายด์'s own acceptance check), reach into the database directly —
-`cmd/seed`-style direct DB access, or a manual `INSERT` against
-`DATABASE_PATH`'s SQLite file. This is the expected way to get data in
-front of the owner today, not a workaround for a missing feature you
-should go implement.
-
-**Open design question, deliberately not answered by this milestone:**
-if the owner never holds an API credential (I2) and the BFF never writes,
-who creates the owner's data in a real deployment? The likely answer,
-following my-task's own pattern, is **agents acting on the owner's
-behalf** — an agent holding its own API key performs the write, and the
-owner only ever views. If that's the intended pattern here too, it's
-worth stating explicitly so this read-only surface reads as a deliberate
-design choice rather than an unfinished stub. Whether to build toward
-that (or something else) is left for a future milestone.
+If you just want to seed a todo without going through the SPA/login flow
+at all (a demo, or a quick DB-level check), reaching into the database
+directly still works — `cmd/seed`-style direct DB access, or a manual
+`INSERT` against `DATABASE_PATH`'s SQLite file — but it is no longer the
+*only* supported path, just a shortcut around it.
 
 ## JWT seam: wired, but dormant by design
 
