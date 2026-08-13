@@ -33,6 +33,21 @@ migration" below) — well before the deletion sub-step, not just at it.
 `make tools` has nothing to do with Step 1 below (registering a Hydra
 client) — that step doesn't touch Go tooling at all.
 
+**A Node.js toolchain is also required, since milestone-3** — a fresh
+clone needs Node (22+; tested against Node 22, matching `web/package.json`'s
+own dependency versions) before `make build` or `make run`'s underlying
+`go run ./cmd/server` will do anything useful, and before the first time
+you run either. `internal/embed.FS`-style embedding (`web/embed.go`,
+`cmd/server/spa.go`) bakes whatever's on disk under `web/dist` into the Go
+binary at compile time — `make build` runs `web/`'s own build
+(`cd web && npm ci && npm run build`, the Makefile's `web-build` target)
+before `go build` for exactly this reason, so Node has to be on `PATH`
+before that target can succeed. A bare `go build ./...`/`go test ./...`
+(no `make build`) still compiles without Node — a tracked placeholder
+(`web/dist/.gitkeep`) keeps the embed directive satisfiable on a fresh
+checkout — but the resulting binary would serve an empty SPA at `GET /`,
+which is never what you actually want to ship or test against.
+
 ## Step 1: Register a Hydra client for owner login
 
 **Run this first, before any of the rename steps below — including if
@@ -194,6 +209,48 @@ code, the service name is what it's called everywhere else:
   checklist implies it. (`~/.my-template/bin/key`'s fallback chain is
   `argument → MY_TEMPLATE_CREW → TYP_CREW_NAME`; rename the middle one to
   match your fork's own service name.)
+
+## Step 3b: Rename the React app (`web/`)
+
+**A separate checklist from the one above, not folded into it** — the
+list above is every place this template's *Go* service is named;
+milestone-3 added a whole second application (the Vite SPA under `web/`)
+with its own places carrying `my-template`/`todo` by name, distinct
+enough from the Go-side list that a forker doing only the checklist above
+would still ship a mis-named frontend:
+
+- **`web/package.json`'s `name`** (currently `my-template-web`) — the
+  same kind of rename as `openapi.yaml`'s `info.title` above, just for
+  the frontend's own manifest.
+- **The API base URL, if you ever hardcode one.** Today nothing in `web/`
+  hardcodes a base URL to rename: `vite.config.ts`'s dev-time proxy
+  (`server.proxy`, see "Running `web/` against a live Go backend" below)
+  and the built SPA's own `fetch` calls (task-3 adds these — none exist
+  yet in task-1's placeholder pages) all go through same-origin relative
+  paths (`/api/...`), which need no per-fork edit. If your fork ever adds
+  an absolute base URL (a separately-hosted API, a CDN-served SPA talking
+  to a different origin than it's served from), that's the value to
+  rename here — check the codebase for one before assuming there's
+  nothing to do, since this list can't promise to stay accurate as task-3
+  and later work land.
+- **Domain nouns inside the ported UI components.** `web/src/components/
+  Header.tsx`'s `NAV_LINKS` still reads "Activity"/"Tasks"/"Projects" (a
+  verbatim port of my-task's own nav, per `.chief/milestone-3/_plan/
+  _todo.md`'s task-1 spec — no `/tasks` or `/projects` route actually
+  exists in this template yet), `web/src/app/TodosPage.tsx`'s heading
+  says "Todos", `web/src/app/settings/ApiKeySettingsPlaceholder.tsx`
+  and other placeholder copy reference "Agent API keys" — the same
+  "todo"-domain language `docs/GETTING-STARTED.md`'s own "Dangling
+  references after a correct fork" section (below) already tells you to
+  grep for on the Go side, now covering `*.tsx`/`*.ts` too since
+  milestone-3. That section's own command is the one to run; a
+  narrower version scoped to just this step, while you're only touching
+  `web/`, is:
+  ```sh
+  grep -rn -i 'todo' --include='*.tsx' --include='*.ts' web/src
+  ```
+  and swap whatever's left for your fork's own domain nouns once you've
+  replaced the example domain in Step 5 below.
 
 ## Step 4: Set `AUTH_AUDIENCE` to the new service's own public URL
 
@@ -693,6 +750,58 @@ caught its absence:
    should return the handle you issued the key for. That's the same
    condition GOAL.md's own Human Acceptance criterion stops at.
 
+### Running `web/` against a live Go backend (Vite dev mode)
+
+Everything above runs the SPA **built and embedded** — `web/dist`'s
+output baked into the Go binary at compile time (`web/embed.go`,
+Makefile's `build` target). That's the right mode for actually using the
+service, but the wrong one for iterating on `web/`'s own source: editing
+a `.tsx` file doesn't do anything to an already-running embedded binary —
+you'd have to re-run `make build` and restart the server for every change,
+losing Vite's whole live-reloading point. Milestone-2's own docs flagged
+this exact trap for a different reason (a stale generated-code artifact
+looking current when it wasn't); the embedded-SPA version of it is "why
+isn't my change showing" the moment you edit `web/src/*` while a
+built-and-embedded binary is what's actually running.
+
+The second mode — **Vite dev server proxying to the Go backend** — is
+for that iteration loop instead:
+
+1. Start the Go backend first, same as step 2 above (`go run ./cmd/server`
+   or `docker compose up`) — it still owns `/api/v1`, `/healthz`,
+   `/login`, `/callback`, and the BFF's own JSON endpoints (task-2/3).
+   Vite's dev server below only ever serves `web/`'s own source; it has
+   no backend of its own to talk to.
+2. In a second terminal, from `web/`:
+   ```sh
+   npm install   # first time only, or after web/package.json changes
+   npm run dev
+   ```
+   This starts Vite's dev server (default `http://localhost:5173`) with
+   live reloading — edits to `web/src/*` show up immediately, no rebuild,
+   no restart.
+3. Open the Vite dev server's URL (`http://localhost:5173`), not the Go
+   backend's port. `vite.config.ts`'s `server.proxy` forwards `/api`,
+   `/login`, and `/callback` from Vite's own server to the Go backend
+   (`http://localhost:8080` by default — override with
+   `VITE_BFF_PROXY_TARGET` if your Go backend runs somewhere else, e.g. a
+   non-default `PORT` or a `docker compose` service reachable at a
+   different host). This is what makes `GET /login`'s server-side OAuth
+   redirect and any BFF `fetch` call work from the Vite-served page
+   without a CORS or cookie-domain problem to configure — the browser
+   only ever talks to one origin (Vite's), which quietly forwards the
+   handful of paths that need the real backend.
+
+**Which mode you're in changes what a given command actually does** —
+worth stating plainly since this is exactly the kind of trap
+milestone-2's own docs called out once already for a different pair of
+commands:
+
+| You're running... | `GET /` serves... | Edits to `web/src/*` show up... |
+| --- | --- | --- |
+| `go run ./cmd/server` / `docker compose up` alone | `web/dist`'s embedded build, frozen at the last `make build` | Never, until you re-run `make build` and restart the server |
+| `npm run dev` (backend running separately) | Vite's dev server, live | Immediately, no rebuild |
+
 ### Known limitation: the owner has no supported way to create a todo
 
 If you log in through `GET /login` expecting to see (or create) something,
@@ -700,8 +809,17 @@ there's nothing there yet, and that's expected, not a bug you're hitting
 by accident. The public API rejects an owner's Bearer token by design
 (I2 — a browser session must never carry API-key-equivalent write
 authority), and `internal/transport/bff` is read-only: `GET /login`,
-`GET /callback`, `GET /` (a view), nothing that writes. **There is
-currently no supported path for the owner to create a todo at all.**
+`GET /callback`, nothing that writes. **There is currently no supported
+path for the owner to create a todo at all.**
+
+**As of milestone-3/task-1, `GET /` serves the Vite SPA (`web/`, embedded
+via `web/embed.go`/`cmd/server/spa.go`), not the old Go-`html/template`
+view** — but the SPA's own todos page is still a placeholder (a bare
+"Todos" heading, no data fetching) until task-3 wires it against the
+BFF's own JSON endpoints (task-2). Until then, logging in shows the SPA
+shell (header, footer, theme toggle) around an empty placeholder — the
+same "nothing to see or create yet" limitation this section describes,
+just rendered by React instead of `html/template` now.
 
 To seed something for the owner's view to actually render (a demo, or
 มายด์'s own acceptance check), reach into the database directly —
@@ -972,17 +1090,23 @@ This document's own opening line claims "skipping a step leaves a
 specific, identifiable trace"; a leftover `todo` in a comment is a trace
 regardless of whether any step was actually skipped, so it doesn't
 uniquely identify a missed step the way a stale import path does. After
-Steps 2–5, run one more pass — **excluding `.chief/`**, which is kept
-deliberately as historical record (see "`.chief/`" below) and would
-otherwise dominate the results with hits that aren't about your fork at
-all, and **including `docs/GETTING-STARTED.md` itself** in what you check
-(Step 3 already lists `docs/DEPLOY-REQUIREMENTS.md` as a rename-pass
-target for the same reason — this file collects the most references of
-any single file once you've forked, precisely because it's the file that
-explains the domain being replaced):
+Steps 2–5 (and Step 3b, milestone-3's own React-app rename step above),
+run one more pass — **excluding `.chief/`**, which is kept deliberately
+as historical record (see "`.chief/`" below) and would otherwise dominate
+the results with hits that aren't about your fork at all; **excluding
+`web/node_modules/` and `web/dist/`**, both generated/vendored and full
+of unrelated `todo` hits (third-party library internals, your own last
+built SPA bundle) that have nothing to do with your fork's domain; and
+**including `docs/GETTING-STARTED.md` itself** in what you check (Step 3
+already lists `docs/DEPLOY-REQUIREMENTS.md` as a rename-pass target for
+the same reason — this file collects the most references of any single
+file once you've forked, precisely because it's the file that explains
+the domain being replaced). `*.tsx`/`*.ts` are in this pass too, milestone-3
+on — Step 3b's own grep above is this same command, scoped down to just
+`web/src` while you're in the middle of that step specifically:
 
 ```sh
-grep -rn 'todo' --include='*.go' --include='*.md' --include='*.sql' --include='*.yaml' . --exclude-dir=.chief
+grep -rn 'todo' --include='*.go' --include='*.md' --include='*.sql' --include='*.yaml' --include='*.tsx' --include='*.ts' . --exclude-dir=.chief --exclude-dir=node_modules --exclude-dir=dist
 ```
 
 and update or remove whatever's left that's about the old domain, not
