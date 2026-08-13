@@ -646,6 +646,37 @@ ok  	.../internal/transport/publicapi
 The canonical two-suite gate (`make test`, `npm ci` + `npm test` + Go)
 run clean from a fresh `npm ci`, not just a warm `node_modules`.
 
+### Cold-clone verification
+
+Pushed (`570638b`), then cloned that exact commit fresh into an isolated
+scratchpad directory (not a cleaned copy of the working tree) and re-ran
+both suites there:
+
+```
+$ git clone --branch milestone-4/activity-log <repo> repo
+$ cd repo && git log -1 --format=%H
+570638b214afc36ed14e12fc387836043df6f3a7
+
+$ go test ./internal/... 2>&1 | tail
+ok  	.../internal
+ok  	.../internal/dbquery
+ok  	.../internal/domain/todo
+ok  	.../internal/identity
+ok  	.../internal/platform
+ok  	.../internal/transport/bff
+ok  	.../internal/transport/publicapi
+
+$ cd web && npm ci && npm test
+ Test Files  5 passed (5)
+      Tests  20 passed (20)
+```
+
+Identical result to the working-tree run above. What stayed warm: the Go
+module/build caches and the npm cache (legitimate dependency caches, not
+test artifacts) — the git clone, `node_modules`, and every test's own
+temp-file SQLite DB were freshly created. The clone was deleted
+afterward.
+
 ## Decisions
 
 - **`ProvenanceMark` has three states, not two** (`"owner"` → 🧑,
