@@ -38,9 +38,21 @@ comes only from the BFF's interactive session (I12), never from a Bearer
 credential on `publicapi`.
 
 **I3 — Ownership scoping is absence, not permission.** `scope: per-domain-module`
-A todo (or API key) that exists but belongs to a different owner returns
+A resource that exists but belongs to a different owner returns
 `not_found`, the same response as one that never existed. Never
 `forbidden` — that would confirm the row exists.
+
+*Scope, per domain (milestone-4 correction — wording unchanged, reach is
+not universal):* holds for the identity/API-key domain exactly as
+written — an agent's own key-listing stays scoped to itself; a wrong-id
+request there is still `not_found`, never `forbidden`. **Does not apply
+to the todo domain from milestone-4 onward**: todos are a shared
+collection every authenticated actor can see and act on
+(`milestone-4/_goal/GOAL.md`'s Ownership model decision), so there is no
+"belongs to a different owner" case left for a todo to trigger this rule
+on. A narrowing of I3's *reach*, not a reversal of what it says — noted
+here, not only in the milestone goal, because this is the file the next
+reader of I3 actually opens.
 
 **I4 — One seam reads identity.** `scope: per-domain-module`
 Only the actor-resolution middleware queries `users`/`api_keys` to

@@ -87,24 +87,21 @@ derived.
 | DELETE removed | `DELETE /api/v1/todos/:id` and `DELETE /api/bff/todos/:id` are both retired. Finishing a todo means moving it to `status: closed`, mirroring my-task's I12 exactly. Luna flagged this as a real tension rather than deciding it — my-task's own I12 text (quoted precisely, scope clause included: *"There is no hard delete **in this milestone**, for any role"*) is a milestone-1 decision, not an unconditional law, though its stated reason (*"deletion destroys the timeline, which is the reason the system exists"*) carries no such caveat. มายด์ ruled on both halves together | มายด์ (ruling 1, TPL-2 grill) |
 | Permission model | Mirrors my-task's `can()` (`~/gits/my-task/src/lib/policy.ts`) exactly, **including** the agent-restricted move-to-closed: any agent may comment/assign/change fields/change status on any shared todo; **only the owner may move a todo to `closed`**. Luna recommended dropping that restriction (nothing in มายด์'s ask implied needing owner sign-off on any status value); Clara did not take it — her reasoning: adding fidelity to the named source is safe, dropping it is a removal, and `closed` now exists in the enum specifically so the restriction has somewhere to bind | Clara (ruling 4) — role-based (not per-todo-identity-based), same shape as my-task's `can()`: owner passes unconditionally, agents get a permission table |
 | Owner-facing key visibility | A genuinely new query: the settings page lists **every** agent's non-revoked keys (not the session owner's own — which structurally can never be non-empty), and the owner may revoke any of them. Still **no key issuance from the UI** — that option was on the table and มายด์ did not take it; TPL-1's CLI-only issuance stands unchanged | มายด์ (ruling 4 of the survey's questions) |
+| `GET`/`DELETE /api/bff/keys` — replace, not add beside | The existing endpoint's session-owner-scoped semantics are **replaced**, not kept alongside a new one. `GET /api/bff/keys` becomes "every agent-role user's non-revoked keys"; `DELETE /api/bff/keys/:id` becomes "any agent's key, still session-gated to the owner" (no longer requiring `user_id = ownerID`). Reasoning: keeping the old owner-scoped endpoint around unchanged, next to the new one, means shipping a surface that is *known*, on purpose, to always return empty — exactly the kind of technically-correct-but-useless thing this milestone exists to remove, not add a second instance of. **Consequence: `internal/transport/bff/keys_handler_test.go`'s existing assertions are now wrong under the new semantics and must be rewritten as part of this milestone** — not left alone. Its `newBFFRouterForTwoOwnersWithKeys` fixture also tested a scenario (two distinct owners) that was already fictional under this template's actual single-seeded-owner model, independent of this change | Luna, per Clara's explicit request to decide it in the goal rather than leave it to the plan |
 | Idempotency added | `clientRequestId` (unique constraint) on `todo_events`, lookup at the top of the write path, inside the same transaction — mirrors my-task's I5 exactly. `.chief/_rules/_contract/API.md`'s existing Conventions text names this precise case: *"No Idempotency-Key requirement... re-add it if a fork adds one [an event log]."* This is that fork | Clara (decided directly, not มายด์'s to rule on) |
 | Append-only enforcement | Application-level only, matching my-task's I3/I4 exactly — module-import boundary (only the todo domain/service module may import the new events table's generated types) plus a test that asserts state changes always add a row (not just "no update method exists"). **No DB trigger or CHECK constraint.** Going further than the named source without being asked is explicitly out — if evidence surfaces during the build that convention-only enforcement is insufficient here, that's a question back to Clara/มายด์, not something to unilaterally strengthen | Clara (decided directly) |
-| Test-fixture discipline | Every new test that needs an agent identity goes through `cmd/issue-key`'s real path, not a direct repo insert with a convenient role. Every new test is checked against "would this still be green if the thing it guards were absent entirely?" before being trusted — the standing lesson from `keys_handler_test.go`'s existing gap, not fixed by this milestone (that gap predates it and isn't this milestone's to fix unless it becomes load-bearing for new work) | Clara |
+| Test-fixture discipline | Every new test that needs an agent identity goes through `cmd/issue-key`'s real path, not a direct repo insert with a convenient role. Every new test is checked against "would this still be green if the thing it guards were absent entirely?" before being trusted. **This milestone's own key-endpoint replacement (row above) makes `keys_handler_test.go`'s existing gap load-bearing, so it gets fixed here** — not left standing on the original reasoning ("not this milestone's to fix unless it becomes load-bearing"), which no longer holds once the endpoint it tests changes shape | Clara, updated per her own condition once E resolved toward "replace" |
 | Branch | New branch off `main` (not a continuation of `milestone-2/close-parity-gap` — that branch's PR is merged; PR #3 is open, separate, and unrelated to this ticket) | Luna (ruling 5, uncontested) |
 
 ### I3's scope, corrected for the todo domain
 
-`.chief/_rules/_contract/INVARIANTS.md`'s I3 (*"Ownership scoping is
-absence, not permission"*, `scope: per-domain-module`) is **unchanged in
-wording** but its application changes: it continues to hold for the
-identity/api-keys domain exactly as before (an agent's own key-listing via
-Bearer stays scoped to itself; a wrong-id request there is still 404, not
-403). It **no longer applies to the todo domain** — there is no "another
-owner's row" concept once todos are shared; every actor can see every
-todo, so there is nothing for a 404-not-403 rule to protect there anymore.
-This is a real, deliberate narrowing of I3's *reach*, not a reversal of
-what it says — stated explicitly here so nobody reads the promoted
-contract's still-general wording and assumes todos are still owner-scoped.
+**Lives in `.chief/_rules/_contract/INVARIANTS.md` itself, next to I3 —
+not held here.** The contract file is what the next reader of I3 actually
+opens; a scope correction that only exists in this goal has not really
+been written. Referenced, not restated: I3's wording is unchanged, its
+*reach* now excludes the todo domain (a shared collection has no "belongs
+to a different owner" case left to protect), and continues to hold for
+the identity/api-keys domain exactly as before.
 
 ## Scope
 
@@ -122,11 +119,17 @@ contract's still-general wording and assumes todos are still owner-scoped.
 - Single write path (mirrors `TaskService.append()`): idempotency check →
   dispatch by event type → domain-specific side effect → insert, one
   transaction
-- BFF and public API surfaces for: creating/reading todo events (comment,
-  status change, assignment, field change — mirrors my-task's REST
-  shape, one event type not directly creatable by API: none excluded
-  here unless the plan finds a `created`/equivalent-only-as-side-effect
-  case, matching my-task's own `created`/`moved` exclusions)
+- BFF and public API surfaces for: creating/reading todo events —
+  `comment`, `status_change`, `assign`, `field_change` are directly
+  client-specifiable. **`created` is never client-specifiable — it only
+  ever happens as a side effect of `POST /todos` itself, the same way
+  `buildAppendInput`'s switch has no `created` case
+  (`~/gits/my-task/src/app/api/v1/tasks/[id]/events/route.ts:45-181`,
+  cited in the survey).** This is a security property, not a style
+  choice: a client that could POST `type: "created"` could forge a
+  creation event under any actor and timestamp in the log that exists
+  specifically to establish who did what. Not something the plan is free
+  to decide either way
 - Cross-todo activity feed (owner-session, tRPC-shaped-equivalent on the
   BFF's JSON surface) — the new home-page-equivalent view
 - Per-todo timeline, sharing one row-rendering component with the feed
@@ -183,7 +186,11 @@ see Human Acceptance below, which is explicit about that.
    a direct repo insert on an owner-role fixture — the exact trap
    `keys_handler_test.go`'s existing test fell into). A second test
    proves an agent's own Bearer-authenticated key listing stays
-   self-scoped (I3, unchanged for this domain).
+   self-scoped (I3, unchanged for this domain). **`keys_handler_test.go`'s
+   existing `newBFFRouterForTwoOwnersWithKeys`-based assertions are
+   rewritten, not left in place** — they test semantics this milestone's
+   own decision (`GET`/`DELETE /api/bff/keys` — replace, not add beside)
+   removes.
 8. Cross-todo feed and per-todo timeline both render through the same
    row component — a test (Vitest, mirrors milestone-3's Done-when-7
    negative-control shape) proves a given event renders identically
@@ -197,6 +204,27 @@ see Human Acceptance below, which is explicit about that.
     the response — that the UI actually branches on it, mirroring
     milestone-2's Done-when-9 lesson about testing the property that
     matters, not a proxy for it).
+11. **Revocation actually stops the key, proven both ways, not just the
+    post-revoke half.** A test: issue a key through `cmd/issue-key`,
+    authenticate with it successfully against the public API (the
+    positive half — proves the key worked before revocation, so the
+    negative half means something), revoke it through the new
+    owner-facing endpoint, then prove the *same* key now fails
+    authentication. A test that only checks the post-revoke 401 is
+    consistent with the key never having worked at all — both halves are
+    required for this item to count as satisfied. (Clara's finding: the
+    milestone could otherwise go fully green with a revoke button that
+    writes `revoked_at` and a middleware that never reads it — ENG-13's
+    exact shape.)
+12. **The feed is proven cross-actor, not merely dual-page.** Done-when 8
+    proves the feed and the per-todo timeline render a *given* event the
+    same way — it does not prove either page ever shows another actor's
+    event. A test: an agent (via `cmd/issue-key`-issued Bearer credential)
+    creates a todo and acts on it (at least one non-`created` event);
+    separately, the owner's session-authenticated feed query returns that
+    event, attributed to the agent. This is ruling 1's only real proof —
+    a feed that happened to only ever show the viewer's own events would
+    pass every other item in this list.
 
 ## Human acceptance — the real finish line, not a supplement to Done-when
 
@@ -206,7 +234,8 @@ Anything only a test suite can exercise does not count toward it — same
 standing constraint as every milestone before this one. He logs in and,
 in one session:
 
-1. Sees every agent's key in Settings and revokes one.
+1. Sees every agent's key in Settings and revokes one, **and that key
+   stops working** — the clause that makes it a test, not a click.
 2. Sees todos agents created, not just his own.
 3. Sees a todo with status/assignee/priority/due date and changes one.
 4. Opens the feed and sees who did what, with human vs agent
