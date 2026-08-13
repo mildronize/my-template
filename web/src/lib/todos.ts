@@ -85,20 +85,18 @@ export function useTodoEventsQuery(id: string) {
  * pairing (`~/lib/activity.ts`'s `activityItemToTimelineEvent` is the
  * feed's own half).
  *
- * `actor` is an optional second argument, not read off `event` itself,
- * because `TodoEvent` genuinely does not carry one — see
- * `TimelineEventRow.tsx`'s own `TimelineEventData` doc comment for the
- * full explanation of that gap. `TodoDetailPage.tsx` always calls this
- * with no second argument (it has no real actor data to pass), which is
- * why every row it renders shows `role: "unknown"` in production —
- * `TimelineEventRow.test.tsx`'s Done-when 8 test calls this WITH a
- * supplied actor to prove the adapter+component pairing itself is
- * correctly shared, independent of that data gap.
+ * milestone-4 handle-exposure fix-round: `event.actor` is read directly
+ * now — the wire `TodoEvent` genuinely carries `{handle, role}` on every
+ * row (`bff-openapi.yaml`'s `TodoEvent.actor`, the same `ActivityActor`
+ * shape `ActivityItem.actor` already had), the same JOIN
+ * `ListTodoEventsByTodoID`'s own SQL query now does (task-7's report
+ * found this endpoint had none — see git history on this file's own
+ * previous version for the gap this closed). No more optional second
+ * argument standing in for missing data; `TimelineEventRow.test.tsx`'s
+ * Done-when 8 test still supplies its own event fixture directly, it just
+ * no longer needs a second parameter to do it.
  */
-export function todoEventToTimelineEvent(
-  event: TodoEvent,
-  actor?: { handle: string; role: string },
-): TimelineEventData {
+export function todoEventToTimelineEvent(event: TodoEvent): TimelineEventData {
   return {
     id: event.id,
     seq: event.seq,
@@ -106,7 +104,7 @@ export function todoEventToTimelineEvent(
     payload: event.payload,
     body: event.body ?? null,
     createdAt: event.createdAt,
-    actor: actor ?? { handle: event.actorId, role: "unknown" },
+    actor: event.actor,
   };
 }
 

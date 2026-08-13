@@ -313,6 +313,11 @@ func TestHandler_EventsRoundTrip_CreateReadAppendFieldChangedReadTimeline(t *tes
 	created := decodeTodo(t, createRec)
 	require.NotNil(t, created.AssigneeId)
 	assert.Equal(t, assigneeID, *created.AssigneeId)
+	// milestone-4 fix-round (handle-exposure): my-task's own agent-facing
+	// REST contract shows a handle to agents too (not just the owner UI),
+	// so this surface's Todo also carries the resolved handle now.
+	require.NotNil(t, created.AssigneeHandle)
+	assert.Equal(t, "assignee", *created.AssigneeHandle)
 	require.NotNil(t, created.Priority)
 	assert.Equal(t, api.TodoPriority("low"), *created.Priority)
 	require.NotNil(t, created.DueDate)
@@ -347,17 +352,59 @@ func TestHandler_EventsRoundTrip_CreateReadAppendFieldChangedReadTimeline(t *tes
 	require.NotNil(t, after.Priority)
 	assert.Equal(t, api.TodoPriority("urgent"), *after.Priority)
 
-	// Read the timeline back and find both events, oldest first.
+	// Append an `assigned` event too, re-pointing to the SAME assignee (a
+	// no-op reassignment is still a real write for this test's purposes) —
+	// milestone-4 fix-round (handle-exposure): the payload's `from`/`to`
+	// must now be {id, handle} snapshots, not bare ids.
+	assignRec := doJSONRequest(t, router, http.MethodPost, "/api/v1/todos/"+created.Id+"/events", rawKey, map[string]any{
+		"type":            "assigned",
+		"clientRequestId": "assign-1",
+		"to":              assigneeID,
+	})
+	require.Equal(t, http.StatusCreated, assignRec.Code)
+	assignedEvent := decodeTodoEvent(t, assignRec)
+	require.NotNil(t, assignedEvent.Payload)
+	assignPayload := *assignedEvent.Payload
+	fromSnap, ok := assignPayload["from"].(map[string]interface{})
+	require.True(t, ok, "assigned event's `from` must be a {id, handle} object, got %#v", assignPayload["from"])
+	assert.Equal(t, assigneeID, fromSnap["id"])
+	assert.Equal(t, "assignee", fromSnap["handle"])
+	toSnap, ok := assignPayload["to"].(map[string]interface{})
+	require.True(t, ok, "assigned event's `to` must be a {id, handle} object, got %#v", assignPayload["to"])
+	assert.Equal(t, assigneeID, toSnap["id"])
+	assert.Equal(t, "assignee", toSnap["handle"])
+
+	// Assigning to an id that names no real user is a 400 validation
+	// error, not a 500 and not a silently-stored garbage id — mirrors
+	// my-task's own unknownAssigneeError for exactly this case.
+	badAssignRec := doJSONRequest(t, router, http.MethodPost, "/api/v1/todos/"+created.Id+"/events", rawKey, map[string]any{
+		"type":            "assigned",
+		"clientRequestId": "assign-bad-1",
+		"to":              "no-such-user-id",
+	})
+	assert.Equal(t, http.StatusBadRequest, badAssignRec.Code, "an unresolvable assignee id must be rejected, not stored")
+
+	// Read the timeline back and find every event, oldest first.
 	timelineRec := doJSONRequest(t, router, http.MethodGet, "/api/v1/todos/"+created.Id+"/events", rawKey, nil)
 	require.Equal(t, http.StatusOK, timelineRec.Code)
 	timeline := decodeTodoEventList(t, timelineRec)
-	require.Len(t, timeline.Events, 2)
+	require.Len(t, timeline.Events, 3, "the rejected bad-assignee attempt above must not have written a row")
 	assert.Equal(t, "created", timeline.Events[0].Type)
 	assert.Equal(t, "field_changed", timeline.Events[1].Type)
 	assert.Equal(t, appended.Id, timeline.Events[1].Id)
 	require.NotNil(t, timeline.Events[1].Payload)
 	timelinePayload := *timeline.Events[1].Payload
 	assert.Equal(t, "urgent", timelinePayload["to"])
+	assert.Equal(t, "assigned", timeline.Events[2].Type)
+
+	// milestone-4 fix-round (handle-exposure): every row's own actorHandle
+	// is now populated, a bare handle string (no role — see toAPIEvent's
+	// own doc comment for why this surface deliberately withholds role
+	// from an agent caller, unlike the bff surface's {handle, role}
+	// object). agent-a wrote every one of these events.
+	for i, e := range timeline.Events {
+		assert.Equalf(t, "agent-a", e.ActorHandle, "event %d's actor handle", i)
+	}
 }
 
 // TestDoneWhen6_DeleteTodo_RouteGenuinelyDoesNotExist — GOAL.md Done-when

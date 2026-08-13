@@ -29,15 +29,17 @@
 //  3. Payload shapes are this repo's own, not my-task's — read
 //     `internal/domain/todo/service.go`'s `Append` (the actual JSON this
 //     project's Go backend marshals) rather than assuming my-task's own
-//     richer `{from:{name}}`/`{to:{handle}}` object shapes carry over:
+//     shapes carry over unmodified:
 //       - `status_changed`: `{from, to}` are bare status strings (this
 //         template's `Status` is a flat enum, not an entity with its own
-//         name field).
-//       - `assigned`: `{from, to}` are bare user ids (or `null`), not
-//         `{handle}` objects — `service.go:337`'s `strPtrToAny` on
-//         `AssigneeID` directly. See `ProvenanceMark`'s own doc comment
-//         below for the load-bearing consequence of this on the per-todo
-//         timeline specifically.
+//         name field) — unlike my-task's own richer status object.
+//       - `assigned`: `{from, to}` are each either `null` or a
+//         `{id, handle}` snapshot — milestone-4 handle-exposure
+//         fix-round, matching my-task's own `AssigneeSnapshot` shape
+//         exactly (`service.go`'s `resolveAssigneeSnapshot`, resolved
+//         once at write time into the stored payload — a later handle
+//         change never rewrites old history). See `AssignedSummary`
+//         below.
 //       - `field_changed`: `{field, from, to}`, `field` one of
 //         `title`|`priority`|`dueDate` (`service.go`'s `FieldChangeInput`).
 //       - `created`: `{title}` only (`service.go:137`) — no status object
@@ -62,21 +64,16 @@ import { Markdown } from "~/components/Markdown";
  * what `GET /api/bff/activity`'s `ActivityItem.actor` genuinely carries on
  * every row.
  *
- * `GET /api/bff/todos/:id/events`'s own `TodoEvent`, by contrast, carries
- * only `actorId` (a bare id) — no `handle`, no `role` — confirmed by
- * reading `internal/bffapi/bffapi.gen.go`'s `TodoEvent` struct and
- * `internal/transport/bff/todo_handler.go:100-105`'s `toBFFEvent`, which
- * never resolves one. This is a genuine, unresolved contract gap this
- * task found and is not this task's to fix (no `.go` files touched, per
- * task-7's own scope) — see the task-7 report's "Contract gap" section.
- * `TodoDetailPage.tsx` copes with it honestly: it sets `role: "unknown"`
- * for every row it renders (never guesses `"owner"` or `"agent"`), and
- * `ProvenanceMark` below renders a visibly distinct third mark for that
- * case rather than defaulting to either real one — the same discipline
- * Done-when 9's own test exists to enforce (a mark that silently defaults
- * to one value regardless of the data is exactly the failure class that
- * test is built to catch, and defaulting an *unknown* role to a real one
- * would be exactly that failure, just self-inflicted instead of a bug).
+ * Before the milestone-4 handle-exposure fix-round, `GET /api/bff/todos/
+ * :id/events`'s own `TodoEvent` carried only `actorId` (a bare id) — no
+ * `handle`, no `role` — and `TodoDetailPage.tsx` filled `role: "unknown"`
+ * for every row it rendered as an honest placeholder for that gap. That
+ * gap is closed: `ListTodoEventsByTodoID`'s own SQL query
+ * (`db/queries/todo_events.sql`) now joins `users` the same way the
+ * cross-todo feed's query already did, so `event.actor` on this endpoint
+ * is real on every row, same as `ActivityItem.actor`. `todos.ts`'s
+ * `todoEventToTimelineEvent` reads `event.actor` directly now — see that
+ * function's own doc comment.
  */
 export interface TimelineEventData {
   id: string;
@@ -104,12 +101,22 @@ function formatCreatedAt(value: string): string {
  * The provenance mark — Done-when 6/9's own subject. Three states, not
  * two: `role === "owner"` is มายด์ himself (the only role a BFF session
  * ever resolves to, `todo_handler.go:139`); `role === "agent"` is any
- * Bearer-authenticated crew member; anything else (concretely: `"unknown"`,
- * `TodoDetailPage.tsx`'s own honest placeholder for the contract gap
- * above) renders neither real mark — a wrong guess would be worse than an
- * admitted unknown, on a screen whose entire job is telling a later reader
- * who wrote what (`_contract/INVARIANTS.md` I20's own stated threat model:
- * "the activity log is a cross-agent channel").
+ * Bearer-authenticated crew member; anything else renders neither real
+ * mark — a wrong guess would be worse than an admitted unknown, on a
+ * screen whose entire job is telling a later reader who wrote what
+ * (`_contract/INVARIANTS.md` I20's own stated threat model: "the activity
+ * log is a cross-agent channel").
+ *
+ * Kept as defensive handling, not removed, now that the milestone-4
+ * handle-exposure fix-round closed the one gap that used to make this
+ * branch reachable in production (`TodoDetailPage.tsx`'s old
+ * `role: "unknown"` placeholder — see `TimelineEventData`'s own doc
+ * comment). Every real wire response now supplies `"owner"` or `"agent"`
+ * on every row, so this third branch should never fire again in
+ * practice — but it costs nothing to keep as a guard against a genuinely
+ * malformed or unexpected response, and Done-when 9's own test still
+ * exercises it directly, so removing it would also mean deciding what
+ * that test proves instead.
  */
 function ProvenanceMark({ role }: { role: string }) {
   if (role === "owner") {
@@ -152,21 +159,26 @@ function StatusChangedSummary({ payload }: { payload: unknown }) {
 }
 
 /**
- * `to`/`from` are bare user ids (`internal/domain/todo/service.go:337`),
- * not handles — this repo's `Todo.assigneeId` and `TodoEvent`'s own
- * `assigned` payload never carry a display name, the same category of gap
- * `TimelineEventData.actor`'s own doc comment names for the per-todo
- * timeline's actor. Shown as-is (a raw id) rather than invented — see the
- * task-7 report's "Contract gap" section.
+ * `to`/`from` are each either `null` or a `{id, handle}` snapshot —
+ * milestone-4 handle-exposure fix-round (`internal/domain/todo/
+ * service.go`'s `resolveAssigneeSnapshot`, called from the `assigned`
+ * case in `Append`), matching my-task's own `AssignedSummary`
+ * (`~/gits/my-task/src/components/TimelineEvent.tsx`) reading
+ * `p.to.handle`/`p.from.handle`. Resolved once, at write time, into the
+ * stored payload — a later handle change never rewrites old history, so
+ * this always shows the handle as it was at the moment of the
+ * reassignment, not whatever it is now.
  */
 function AssignedSummary({ payload }: { payload: unknown }) {
-  const p = payload as { from?: string | null; to?: string | null } | undefined;
+  const p = payload as
+    | { from?: { id: string; handle: string } | null; to?: { id: string; handle: string } | null }
+    | undefined;
   if (!p?.to) {
-    return <>unassigned{p?.from ? <> (was {p.from})</> : null}</>;
+    return <>unassigned{p?.from ? <> (was {p.from.handle})</> : null}</>;
   }
   return (
     <>
-      assigned to <b>{p.to}</b>
+      assigned to <b>{p.to.handle}</b>
     </>
   );
 }

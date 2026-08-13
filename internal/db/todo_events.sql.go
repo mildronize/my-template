@@ -109,22 +109,53 @@ func (q *Queries) InsertTodoEvent(ctx context.Context, arg InsertTodoEventParams
 }
 
 const listTodoEventsByTodoID = `-- name: ListTodoEventsByTodoID :many
-SELECT id, todo_id, seq, actor_id, type, payload, body, client_request_id, created_at FROM todo_events
-WHERE todo_id = ?
-ORDER BY seq ASC
+SELECT
+    todo_events.id, todo_events.todo_id, todo_events.seq, todo_events.actor_id, todo_events.type, todo_events.payload, todo_events.body, todo_events.client_request_id, todo_events.created_at,
+    users.handle AS actor_handle,
+    users.role AS actor_role
+FROM todo_events
+JOIN users ON users.id = todo_events.actor_id
+WHERE todo_events.todo_id = ?
+ORDER BY todo_events.seq ASC
 `
+
+type ListTodoEventsByTodoIDRow struct {
+	ID              string         `json:"id"`
+	TodoID          string         `json:"todo_id"`
+	Seq             int64          `json:"seq"`
+	ActorID         string         `json:"actor_id"`
+	Type            string         `json:"type"`
+	Payload         sql.NullString `json:"payload"`
+	Body            sql.NullString `json:"body"`
+	ClientRequestID string         `json:"client_request_id"`
+	CreatedAt       time.Time      `json:"created_at"`
+	ActorHandle     string         `json:"actor_handle"`
+	ActorRole       string         `json:"actor_role"`
+}
 
 // The per-todo timeline (`_contract/API.md`'s milestone-4 section):
 // oldest-first, unlike the cross-todo feed below.
-func (q *Queries) ListTodoEventsByTodoID(ctx context.Context, todoID string) ([]TodoEvent, error) {
+//
+// milestone-4 fix-round (handle-exposure): joins users for the actor's
+// handle/role, the same shape ListTodoEventsFeed below already carries -
+// task-7's own report found this query never had it, leaving the
+// per-todo timeline structurally unable to tell human from agent
+// (Done-when 6/9) or show a name at all (see TimelineEventRow.tsx's own
+// TimelineEventData doc comment, which named this exact gap). Explicit
+// column list, not SELECT *, for the same star-expansion-safety reason
+// ListTodoEventsFeed's own comment above gives for its join. No new
+// ReadOnlyGrant needed - this file already has one for users
+// (dbquery.ReadOnlyGrants: "todo_events.sql" / "users"), earned by
+// ListTodoEventsFeed's own join.
+func (q *Queries) ListTodoEventsByTodoID(ctx context.Context, todoID string) ([]ListTodoEventsByTodoIDRow, error) {
 	rows, err := q.db.QueryContext(ctx, listTodoEventsByTodoID, todoID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []TodoEvent
+	var items []ListTodoEventsByTodoIDRow
 	for rows.Next() {
-		var i TodoEvent
+		var i ListTodoEventsByTodoIDRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.TodoID,
@@ -135,6 +166,8 @@ func (q *Queries) ListTodoEventsByTodoID(ctx context.Context, todoID string) ([]
 			&i.Body,
 			&i.ClientRequestID,
 			&i.CreatedAt,
+			&i.ActorHandle,
+			&i.ActorRole,
 		); err != nil {
 			return nil, err
 		}

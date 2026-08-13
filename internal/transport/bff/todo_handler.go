@@ -80,15 +80,16 @@ func toBFFTodo(t todo.Todo) bffapi.Todo {
 		priority = &p
 	}
 	return bffapi.Todo{
-		Id:         t.ID,
-		Title:      t.Title,
-		Status:     bffapi.TodoStatus(t.Status),
-		AssigneeId: t.AssigneeID,
-		Priority:   priority,
-		DueDate:    t.DueDate,
-		CreatedBy:  t.CreatedBy,
-		CreatedAt:  t.CreatedAt,
-		UpdatedAt:  t.UpdatedAt,
+		Id:             t.ID,
+		Title:          t.Title,
+		Status:         bffapi.TodoStatus(t.Status),
+		AssigneeId:     t.AssigneeID,
+		AssigneeHandle: t.AssigneeHandle,
+		Priority:       priority,
+		DueDate:        t.DueDate,
+		CreatedBy:      t.CreatedBy,
+		CreatedAt:      t.CreatedAt,
+		UpdatedAt:      t.UpdatedAt,
 	}
 }
 
@@ -97,12 +98,23 @@ func toBFFTodo(t todo.Todo) bffapi.Todo {
 // publicapi's own toAPIEvent exactly, the one place in this file that
 // touches encoding/json directly, since todo.Service/Repo already store it
 // pre-marshalled.
-func toBFFEvent(e todo.TodoEvent) (bffapi.TodoEvent, error) {
+//
+// actor is bffapi.ActivityActor ({handle, role}) — the exact same shape
+// toBFFActivityItem below already gives ActivityItem.actor, on purpose
+// (milestone-4 fix-round, handle-exposure): this owner-only surface's
+// whole reason for existing is the 🧑/🤖 provenance mark
+// (TimelineEventRow.tsx), which needs role, not just a name. Contrast
+// publicapi's own toAPIEvent (internal/transport/publicapi/
+// todo_handler.go), which gives an agent caller only a handle, no role —
+// see that function's own doc comment for the my-task research behind
+// that asymmetry.
+func toBFFEvent(e todo.TodoEvent, actor bffapi.ActivityActor) (bffapi.TodoEvent, error) {
 	event := bffapi.TodoEvent{
 		Id:              e.ID,
 		TodoId:          e.TodoID,
 		Seq:             e.Seq,
 		ActorId:         e.ActorID,
+		Actor:           actor,
 		Type:            string(e.Type),
 		Body:            e.Body,
 		ClientRequestId: e.ClientRequestID,
@@ -155,7 +167,10 @@ func bffPolicyActor(c *gin.Context) (todo.PolicyActor, string, bool) {
 // todo.ErrNotFound -> 404, todo.ErrForbidden (I18's permission refusal,
 // unreachable for an owner session in practice, I12) -> 401 unauthorized
 // (never a distinct forbidden/403 code — this project has never had one),
-// anything else -> 500.
+// todo.ErrUnknownAssignee (milestone-4 fix-round, handle-exposure: an
+// `assigned` event whose "to" id does not resolve to any real user) -> 400
+// validation_error, mirroring my-task's own unknownAssigneeError for the
+// same case, anything else -> 500.
 func writeBFFAppendError(c *gin.Context, err error) {
 	if errors.Is(err, todo.ErrNotFound) {
 		c.AbortWithStatusJSON(http.StatusNotFound, bffTodoNotFoundError)
@@ -163,6 +178,10 @@ func writeBFFAppendError(c *gin.Context, err error) {
 	}
 	if errors.Is(err, todo.ErrForbidden) {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, jsonUnauthorizedBody)
+		return
+	}
+	if errors.Is(err, todo.ErrUnknownAssignee) {
+		c.AbortWithStatusJSON(http.StatusBadRequest, bffValidationErrorBody("unknown assignee id", "to"))
 		return
 	}
 	c.AbortWithStatus(http.StatusInternalServerError)
@@ -328,7 +347,7 @@ func (s *TodoServer) ListTodoEvents(c *gin.Context, id string) {
 
 	resp := bffapi.TodoEventList{Events: make([]bffapi.TodoEvent, 0, len(events))}
 	for _, e := range events {
-		event, err := toBFFEvent(e)
+		event, err := toBFFEvent(e.Event, bffapi.ActivityActor{Handle: e.ActorHandle, Role: e.ActorRole})
 		if err != nil {
 			c.AbortWithStatus(http.StatusInternalServerError)
 			return
@@ -481,7 +500,13 @@ func (s *TodoServer) CreateTodoEvent(c *gin.Context, id string) {
 		return
 	}
 
-	bffEvent, err := toBFFEvent(event)
+	// The actor who just wrote this event is the session owner itself —
+	// its handle/role are already resolved onto the gin context
+	// (ActorFromContext), no extra lookup needed the way ListTodoEvents'
+	// read path needs one per row. Role is always "owner" on this surface
+	// (I12), matching bffPolicyActor's own comment above.
+	actorUser, _ := ActorFromContext(c)
+	bffEvent, err := toBFFEvent(event, bffapi.ActivityActor{Handle: actorUser.Handle, Role: actorUser.Role})
 	if err != nil {
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return

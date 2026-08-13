@@ -43,10 +43,21 @@ func NewKeysServer(svc *identity.Service) *KeysServer {
 	return &KeysServer{Service: svc}
 }
 
+// toBFFKey's only caller is ListKeys, which only ever calls
+// identity.Service.ListAllAgentAPIKeys — the one identity.APIKey-producing
+// method that populates Handle (milestone-4 fix-round, handle-exposure:
+// db/queries/api_keys.sql's ListAllAgentAPIKeys now JOINs users for it).
+// k.Handle is asserted non-nil here rather than defended against, on
+// purpose: a nil Handle reaching this function would mean
+// ListAllAgentAPIKeys's own JOIN (not LEFT JOIN) somehow returned a row
+// with no matching user, which is a bug in that query, not a normal
+// runtime condition this handler should paper over with a fabricated
+// empty string.
 func toBFFKey(k identity.APIKey) bffapi.ApiKey {
 	return bffapi.ApiKey{
 		Id:        k.ID,
 		Prefix:    k.KeyPrefix,
+		Handle:    *k.Handle,
 		CreatedAt: k.CreatedAt,
 		ExpiresAt: k.ExpiresAt,
 	}

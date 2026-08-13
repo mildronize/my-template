@@ -26,19 +26,20 @@
 // session-owner-scoped set milestone-2/3 returned. The component's own
 // shape barely changes (still a list + a per-key revoke button, same
 // `ApiKey` wire shape) — what changes is the copy, since these are no
-// longer "your" keys. One real, named gap found while doing this: `ApiKey`
-// (`bff-openapi.yaml`) carries `id`/`prefix`/`createdAt`/`expiresAt` only —
-// no field naming WHICH agent a given key belongs to (no `handle`, no
-// `userId`). `internal/transport/bff/keys_handler.go`'s own `toBFFKey`
-// confirms the Go handler never resolves one either. So the list below
-// can show and revoke every agent's key, exactly as I21 requires, but
-// cannot label a row "this is clara's key" — only its prefix and dates.
-// This is the same shape of gap `TimelineEventRow.tsx`'s own
-// `TimelineEventData` doc comment names for `TodoEvent.actorId` and
-// `Todo.assigneeId`: a wire schema that carries a raw id/prefix where a
-// human-facing UI wants a name, with no lookup endpoint this milestone's
-// contract provides. Named here rather than worked around — see task-7's
-// report for the pattern across all three sites.
+// longer "your" keys.
+//
+// milestone-4 handle-exposure fix-round: task-7 found (and named, rather
+// than working around) that `ApiKey` carried `id`/`prefix`/`createdAt`/
+// `expiresAt` only — no field naming WHICH agent a given key belongs to.
+// `handle` closes that gap (`bff-openapi.yaml`'s `ApiKey.handle`,
+// `internal/transport/bff/keys_handler.go`'s `toBFFKey`) — this component
+// now shows it on every row and names it in the revoke confirmation,
+// mirroring my-task's own
+// `src/app/(app)/settings/api-key-settings.tsx` exactly:
+// `ApiKeyRow`'s `<span className="truncate">{k.handle}</span>` as the
+// row's primary text (prefix/dates demoted to the secondary line, the
+// reverse of this component's pre-fix-round layout), and
+// `RevokeKeyButton`'s dialog title "Revoke {handle}'s key?" verbatim.
 import { toast } from "sonner";
 
 import { Button } from "~/components/ui/button";
@@ -64,7 +65,7 @@ function formatDate(value: string): string {
   });
 }
 
-function RevokeKeyButton({ id, prefix }: { id: string; prefix: string }) {
+function RevokeKeyButton({ id, handle }: { id: string; handle: string }) {
   const revokeKey = useRevokeKeyMutation();
 
   return (
@@ -77,7 +78,10 @@ function RevokeKeyButton({ id, prefix }: { id: string; prefix: string }) {
       </AlertDialogTrigger>
       <AlertDialogContent onClick={(e) => e.stopPropagation()}>
         <AlertDialogHeader>
-          <AlertDialogTitle>Revoke key {prefix}…?</AlertDialogTitle>
+          {/* my-task's own exact copy shape (api-key-settings.tsx's
+              RevokeKeyButton): "Revoke {handle}'s key?" — the handle
+              names WHICH agent, not just that a key is being revoked. */}
+          <AlertDialogTitle>Revoke {handle}&apos;s key?</AlertDialogTitle>
           <AlertDialogDescription>
             It stops working on the next request. The record stays, so this key drops out of the
             list above. Issuing a new one is CLI-only — this screen never mints a replacement.
@@ -89,7 +93,7 @@ function RevokeKeyButton({ id, prefix }: { id: string; prefix: string }) {
             className="bg-destructive text-white hover:bg-destructive/90"
             onClick={() =>
               revokeKey.mutate(id, {
-                onSuccess: () => toast.success(`Revoked ${prefix}…`),
+                onSuccess: () => toast.success(`Revoked ${handle}'s key.`),
                 onError: (err) =>
                   toast.error(err instanceof Error ? err.message : "Couldn't revoke that key."),
               })
@@ -130,12 +134,17 @@ export function ApiKeySettings() {
           {keys.map((k) => (
             <li key={k.id} className="flex items-center justify-between gap-4 py-3">
               <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-[var(--sea-ink)]">{k.prefix}…</p>
+                {/* handle is the row's own primary text, mirroring
+                    my-task's ApiKeyRow (`{k.handle}`) — which agent this
+                    key belongs to is the thing this whole page exists to
+                    show (I21). */}
+                <p className="truncate text-sm font-medium text-[var(--sea-ink)]">{k.handle}</p>
                 <p className="text-xs text-[var(--sea-ink-soft)]">
-                  Created {formatDate(k.createdAt)} · Expires {formatDate(k.expiresAt)}
+                  {k.prefix}… · Created {formatDate(k.createdAt)} · Expires{" "}
+                  {formatDate(k.expiresAt)}
                 </p>
               </div>
-              <RevokeKeyButton id={k.id} prefix={k.prefix} />
+              <RevokeKeyButton id={k.id} handle={k.handle} />
             </li>
           ))}
         </ul>

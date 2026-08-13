@@ -81,13 +81,21 @@ func TestBFFHandler_ListKeys_ReturnsEveryAgentsKeys(t *testing.T) {
 	var list bffapi.ApiKeyList
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &list))
 
-	ids := make(map[string]bool, len(list.Keys))
+	byID := make(map[string]bffapi.ApiKey, len(list.Keys))
 	for _, k := range list.Keys {
-		ids[k.Id] = true
+		byID[k.Id] = k
 	}
-	assert.Truef(t, ids[issuedA.APIKey.ID], "owner's key listing must include agent-alpha's key — got %+v", list.Keys)
-	assert.Truef(t, ids[issuedB.APIKey.ID], "owner's key listing must include agent-beta's key — got %+v", list.Keys)
+	assert.Truef(t, byID[issuedA.APIKey.ID].Id != "", "owner's key listing must include agent-alpha's key — got %+v", list.Keys)
+	assert.Truef(t, byID[issuedB.APIKey.ID].Id != "", "owner's key listing must include agent-beta's key — got %+v", list.Keys)
 	assert.Len(t, list.Keys, 2, "exactly the two agent keys issued in this test, nothing else")
+
+	// milestone-4 fix-round (handle-exposure): the whole reason this
+	// endpoint exists is so a real settings page can say WHICH agent a
+	// key belongs to (my-task's own api-key-settings.tsx: `{k.handle}` on
+	// every row) — this asserts the actual response body, not just that
+	// the type carries the field.
+	assert.Equal(t, "agent-alpha", byID[issuedA.APIKey.ID].Handle, "the response body's own handle field must name the owning agent")
+	assert.Equal(t, "agent-beta", byID[issuedB.APIKey.ID].Handle)
 }
 
 // TestBFFHandler_RevokeKey_AnyAgentsKey_ThenListNoLongerShowsIt proves the

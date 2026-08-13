@@ -297,8 +297,19 @@ func TestRepo_ListEventsByTodoID_OldestFirst(t *testing.T) {
 	list, err := repo.ListEventsByTodoID(ctx, todo.ID)
 	require.NoError(t, err)
 	require.Len(t, list, 2)
-	assert.Equal(t, e1.ID, list[0].ID, "oldest first")
-	assert.Equal(t, e2.ID, list[1].ID)
+	assert.Equal(t, e1.ID, list[0].Event.ID, "oldest first")
+	assert.Equal(t, e2.ID, list[1].Event.ID)
+
+	// milestone-4 fix-round (handle-exposure): every row now carries the
+	// actor's real handle/role, resolved via the query's own JOIN —
+	// task-7's report found this endpoint had no equivalent before this
+	// fix-round (contrast ListEventsFeed's own TestRepo_ListEventsFeed_..._
+	// WithJoinFields test just below, which already covered the cross-todo
+	// feed's version of this).
+	assert.Equal(t, "user-one", list[0].ActorHandle)
+	assert.Equal(t, "agent", list[0].ActorRole)
+	assert.Equal(t, "user-one", list[1].ActorHandle)
+	assert.Equal(t, "agent", list[1].ActorRole)
 }
 
 func TestRepo_ListEventsFeed_NewestFirstAcrossTodos_WithJoinFields(t *testing.T) {

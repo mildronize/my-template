@@ -64,6 +64,18 @@ type Todo struct {
 	DueDate    *time.Time
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
+	// AssigneeHandle is AssigneeID's owning user's handle, for display —
+	// milestone-4 fix-round (handle-exposure): my-task's own task list/
+	// detail views show a plain handle (task.queries.ts's `assigneeHandle`
+	// LEFT JOIN), never a bare id, and task-7's report found this repo's
+	// own Todo had no equivalent. nil exactly when AssigneeID is nil (no
+	// assignee at all); List/GetByID populate it via a LEFT JOIN, and
+	// Create resolves it with a follow-up lookup (CreateTodo's own
+	// RETURNING * has no join to piggyback on). Additive, not a
+	// replacement for AssigneeID: the write path (CreateTodo's own
+	// AssigneeID input, Append's AssignmentInput.ToAssigneeID) still
+	// speaks in ids, unchanged — only this field is new.
+	AssigneeHandle *string
 }
 
 // EventType is todo_events.type's fixed vocabulary (DATA_MODEL.md) — the
@@ -103,6 +115,22 @@ type TodoEvent struct {
 type TodoEventFeedRow struct {
 	Event       TodoEvent
 	TodoTitle   string
+	ActorHandle string
+	ActorRole   string
+}
+
+// TodoEventWithActor is one row of the per-todo timeline (ListEventsByTodoID)
+// — a TodoEvent joined to the user who produced it. Deliberately its own
+// type, not TodoEventFeedRow reused: TodoEventFeedRow also carries
+// TodoTitle (the cross-todo feed's own extra context, ActivityItem.todo on
+// the wire), which the per-todo timeline has no use for — it is already
+// scoped to one todo. milestone-4 fix-round (handle-exposure): before this,
+// ListEventsByTodoID returned bare []TodoEvent (no actor identity at all)
+// — task-7's report found the per-todo timeline structurally could not
+// tell human from agent or show a name, unlike ListEventsFeed's
+// TodoEventFeedRow, which always could.
+type TodoEventWithActor struct {
+	Event       TodoEvent
 	ActorHandle string
 	ActorRole   string
 }
@@ -220,6 +248,10 @@ func (r *Repo) WithinTx(ctx context.Context, fn func(tx Repository) error) error
 // List returns every todo, created_at descending — no owner filter
 // (GOAL.md's Ownership model decision: todos are a shared collection,
 // every authenticated actor can see every one).
+//
+// milestone-4 fix-round (handle-exposure): the underlying query
+// (db/queries/todos.sql) now LEFT JOINs users for the assignee's handle,
+// so AssigneeHandle is populated whenever AssigneeID is non-nil.
 func (r *Repo) List(ctx context.Context) ([]Todo, error) {
 	rows, err := r.q.ListTodos(ctx)
 	if err != nil {
@@ -227,7 +259,19 @@ func (r *Repo) List(ctx context.Context) ([]Todo, error) {
 	}
 	todos := make([]Todo, 0, len(rows))
 	for _, row := range rows {
-		todos = append(todos, todoFromRow(row))
+		t := todoFromRow(db.Todo{
+			ID:         row.ID,
+			CreatedBy:  row.CreatedBy,
+			Title:      row.Title,
+			Status:     row.Status,
+			AssigneeID: row.AssigneeID,
+			Priority:   row.Priority,
+			DueDate:    row.DueDate,
+			CreatedAt:  row.CreatedAt,
+			UpdatedAt:  row.UpdatedAt,
+		})
+		t.AssigneeHandle = nullStringToPtr(row.AssigneeHandle)
+		todos = append(todos, t)
 	}
 	return todos, nil
 }
@@ -243,6 +287,16 @@ type CreateParams struct {
 // Create inserts a new todo attributed to createdBy (attribution only,
 // never access-scoping — GOAL.md). id and the timestamps are generated
 // here; status always starts StatusOpen.
+//
+// milestone-4 fix-round (handle-exposure): if params.AssigneeID is set,
+// resolves its handle with a follow-up ResolveUserHandle call —
+// CreateTodo's own INSERT...RETURNING * has no join to piggyback on, so
+// this is a second round trip rather than the LEFT JOIN List/GetByID use.
+// An AssigneeID that does not resolve to any real user degrades to a nil
+// AssigneeHandle rather than failing the whole create — CreateTodo has
+// never validated that its AssigneeID input names a real user (unlike
+// Append's EventTypeAssigned case below, which now does), and adding that
+// validation here is out of this fix-round's scope (see the report).
 func (r *Repo) Create(ctx context.Context, createdBy, title string, params CreateParams) (Todo, error) {
 	now := time.Now().UTC()
 	row, err := r.q.CreateTodo(ctx, db.CreateTodoParams{
@@ -259,13 +313,26 @@ func (r *Repo) Create(ctx context.Context, createdBy, title string, params Creat
 	if err != nil {
 		return Todo{}, err
 	}
-	return todoFromRow(row), nil
+	t := todoFromRow(row)
+	if params.AssigneeID != nil {
+		handle, err := r.ResolveUserHandle(ctx, *params.AssigneeID)
+		if err != nil && !errors.Is(err, ErrNotFound) {
+			return Todo{}, err
+		}
+		if err == nil {
+			t.AssigneeHandle = &handle
+		}
+	}
+	return t, nil
 }
 
 // GetByID looks up a todo by id alone — there is no "wrong owner" case
 // left to return ErrNotFound for (I3 no longer applies to this domain):
 // every actor can see every todo, so this either finds the row or it
 // never existed.
+//
+// milestone-4 fix-round (handle-exposure): same LEFT JOIN as List, same
+// reasoning.
 func (r *Repo) GetByID(ctx context.Context, id string) (Todo, error) {
 	row, err := r.q.GetTodoByID(ctx, id)
 	if err != nil {
@@ -274,7 +341,39 @@ func (r *Repo) GetByID(ctx context.Context, id string) (Todo, error) {
 		}
 		return Todo{}, err
 	}
-	return todoFromRow(row), nil
+	t := todoFromRow(db.Todo{
+		ID:         row.ID,
+		CreatedBy:  row.CreatedBy,
+		Title:      row.Title,
+		Status:     row.Status,
+		AssigneeID: row.AssigneeID,
+		Priority:   row.Priority,
+		DueDate:    row.DueDate,
+		CreatedAt:  row.CreatedAt,
+		UpdatedAt:  row.UpdatedAt,
+	})
+	t.AssigneeHandle = nullStringToPtr(row.AssigneeHandle)
+	return t, nil
+}
+
+// ResolveUserHandle resolves a user id to its handle — milestone-4
+// fix-round (handle-exposure). Used by Create (above) to fill in a
+// freshly created todo's assignee handle, and by service.go's Append to
+// bake a {id, handle} snapshot into the `assigned` event's payload at
+// write time, matching my-task's own mustGetAssignee
+// (~/gits/my-task/src/server/modules/task/task.service.ts:537-545). A
+// read-only display lookup covered by this file's own ReadOnlyGrant
+// (dbquery.ReadOnlyGrants: "todos.sql" / "users"), same as List/GetByID's
+// joins above — not a new grant, and never a write.
+func (r *Repo) ResolveUserHandle(ctx context.Context, id string) (string, error) {
+	row, err := r.q.GetUserHandleByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrNotFound
+		}
+		return "", err
+	}
+	return row.Handle, nil
 }
 
 // UpdateTitle sets title and bumps updated_at.
@@ -434,14 +533,36 @@ func (r *Repo) InsertEvent(ctx context.Context, todoID, actorID string, eventTyp
 
 // ListEventsByTodoID returns one todo's own timeline, oldest first
 // (`_contract/API.md`'s milestone-4 section — task-3/4's to wire up).
-func (r *Repo) ListEventsByTodoID(ctx context.Context, todoID string) ([]TodoEvent, error) {
+//
+// milestone-4 fix-round (handle-exposure): the underlying query
+// (db/queries/todo_events.sql) now joins users for the actor's
+// handle/role, the same shape ListEventsFeed's own TodoEventFeedRow
+// already carries — every event has an actor by construction (actor_id
+// is NOT NULL, every write path resolves a real actor before calling
+// Append/CreateTodo), so ActorHandle/ActorRole are always populated, never
+// a zero value standing in for "unknown".
+func (r *Repo) ListEventsByTodoID(ctx context.Context, todoID string) ([]TodoEventWithActor, error) {
 	rows, err := r.q.ListTodoEventsByTodoID(ctx, todoID)
 	if err != nil {
 		return nil, err
 	}
-	events := make([]TodoEvent, 0, len(rows))
+	events := make([]TodoEventWithActor, 0, len(rows))
 	for _, row := range rows {
-		events = append(events, todoEventFromRow(row))
+		events = append(events, TodoEventWithActor{
+			Event: TodoEvent{
+				ID:              row.ID,
+				TodoID:          row.TodoID,
+				Seq:             row.Seq,
+				ActorID:         row.ActorID,
+				Type:            EventType(row.Type),
+				Payload:         nullStringToPtr(row.Payload),
+				Body:            nullStringToPtr(row.Body),
+				ClientRequestID: row.ClientRequestID,
+				CreatedAt:       row.CreatedAt,
+			},
+			ActorHandle: row.ActorHandle,
+			ActorRole:   row.ActorRole,
+		})
 	}
 	return events, nil
 }

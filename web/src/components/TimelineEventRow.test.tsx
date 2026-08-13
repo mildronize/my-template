@@ -55,6 +55,7 @@ describe("TimelineEventRow — Done-when 8: shared between the feed and the per-
       ...sharedFields,
       todoId: "todo-9",
       actorId: "user-agent-luna",
+      actor: sharedActor,
       clientRequestId: "cr-1",
     };
     const activityItem: ActivityItem = {
@@ -63,13 +64,15 @@ describe("TimelineEventRow — Done-when 8: shared between the feed and the per-
       todo: { id: "todo-9", title: "ship the thing" },
     };
 
-    // TodoDetailPage.tsx's own real per-todo-timeline path: TodoEvent has
-    // no actor of its own (see TimelineEventRow.tsx's TimelineEventData
-    // doc comment for why), so its adapter takes one as a second
-    // argument — here supplied explicitly to prove the adapter+component
-    // pairing renders identically to the feed's own path when given
-    // equivalent data, independent of that separately-documented gap.
-    const fromTodoTimeline: TimelineEventData = todoEventToTimelineEvent(todoEvent, sharedActor);
+    // TodoDetailPage.tsx's own real per-todo-timeline path: TodoEvent now
+    // carries its own actor directly (milestone-4 handle-exposure
+    // fix-round — GET /api/bff/todos/:id/events's own query now joins
+    // users the same way the feed's query already did), so this adapter
+    // no longer takes a second argument at all — proving the
+    // adapter+component pairing renders identically to the feed's own
+    // path from equivalent real wire data, not from data plugged in by
+    // hand to paper over a gap.
+    const fromTodoTimeline: TimelineEventData = todoEventToTimelineEvent(todoEvent);
     // ActivityPage.tsx's own real feed path: ActivityItem carries its own
     // actor directly.
     const fromActivityFeed: TimelineEventData = activityItemToTimelineEvent(activityItem);

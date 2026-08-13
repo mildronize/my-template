@@ -82,11 +82,19 @@ type ReadOnlyGrant struct {
 // than accreting silently; an exemption nobody needs is an exemption
 // nobody notices.
 var ReadOnlyGrants = []ReadOnlyGrant{
-	// todo_events.sql's ListTodoEventsFeed joins users for the cross-todo
-	// activity feed's actor handle/role (so callers can tell human from
-	// agent) — a display read, never a write; todo_events.sql has no
+	// todo_events.sql's ListTodoEventsFeed and ListTodoEventsByTodoID both
+	// join users for the actor's handle/role (so callers can tell human
+	// from agent) — a display read, never a write; todo_events.sql has no
 	// query that ever writes to users.
 	{File: "todo_events.sql", Table: "users"},
+	// todos.sql's ListTodos/GetTodoByID LEFT JOIN users for the assignee's
+	// handle, and GetUserHandleByID reads a single user's handle by id
+	// (used both by CreateTodo's post-insert handle fill-in and by
+	// service.go's Append to bake a {id, handle} snapshot into the
+	// `assigned` event's payload) — milestone-4 fix-round
+	// (handle-exposure), same "display read, never a write" shape as the
+	// grant above.
+	{File: "todos.sql", Table: "users"},
 }
 
 func grantedReadOnly(file, table string) bool {

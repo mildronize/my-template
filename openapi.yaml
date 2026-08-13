@@ -255,6 +255,7 @@ components:
           title,
           status,
           assigneeId,
+          assigneeHandle,
           priority,
           dueDate,
           createdBy,
@@ -276,6 +277,21 @@ components:
           type: string
           nullable: true
           description: References a user (any role).
+        assigneeHandle:
+          type: string
+          nullable: true
+          description: >
+            milestone-4 fix-round (handle-exposure): assigneeId's owning
+            user's handle, for display — null exactly when assigneeId is
+            null. my-task's own agent-facing REST contract
+            (`GET /api/v1/tasks`, `GET /api/v1/tasks/:id` —
+            `~/gits/my-task/src/app/api/v1/tasks/route.ts:128`,
+            `serializeTaskDetail`) shows a plain handle to agents too, not
+            just the owner UI, so this field is on this surface
+            (internal/transport/publicapi), not only bff-openapi.yaml's
+            copy. Additive: assigneeId is unchanged, still what a caller
+            writes back (CreateTodoRequest.assigneeId, CreateTodoEventRequest's
+            `to` for an `assigned` event) — this is display-only.
         priority:
           type: string
           nullable: true
@@ -305,7 +321,7 @@ components:
             $ref: "#/components/schemas/Todo"
     TodoEvent:
       type: object
-      required: [id, todoId, seq, actorId, type, clientRequestId, createdAt]
+      required: [id, todoId, seq, actorId, actorHandle, type, clientRequestId, createdAt]
       properties:
         id:
           type: string
@@ -316,6 +332,21 @@ components:
           format: int64
         actorId:
           type: string
+        actorHandle:
+          type: string
+          description: >
+            milestone-4 fix-round (handle-exposure): the actor's handle —
+            always present, never null (every event has a real actor by
+            construction, DATA_MODEL.md). Deliberately a bare handle, no
+            role, unlike bff-openapi.yaml's own TodoEvent.actor
+            ({handle, role}): my-task's own agent-facing REST contract
+            gives an agent an event's actor as a plain handle string only
+            (`~/gits/my-task/src/server/modules/task/task.queries.ts:88-95`'s
+            `TaskTimelineEvent.actor: string`), while role-based
+            human/agent marking is resolved separately and stays owner-UI
+            only (`~/gits/my-task/src/server/api/routers/task.ts:82-101`'s
+            own `withActorRoles`, never reached from REST) — this field
+            matches that asymmetry.
         type:
           type: string
           description: >
@@ -329,8 +360,14 @@ components:
           nullable: true
           description: >
             JSON, shape depends on `type` — `{from, to}` pairs for
-            `status_changed`/`assigned`, `{field, from, to}` for
-            `field_changed`, `null` for `commented`.
+            `status_changed`, `null` for `commented`, `{field, from, to}`
+            for `field_changed`. `assigned`'s own `{from, to}` pair is each
+            either `null` or a `{id, handle}` snapshot resolved once, at
+            write time, into the stored payload (milestone-4 fix-round,
+            handle-exposure — matches my-task's own AssigneeSnapshot,
+            `~/gits/my-task/src/server/modules/task/task.service.ts:139-142`,
+            resolved the same way at the same moment: a later handle
+            change never rewrites old history).
         body:
           type: string
           nullable: true

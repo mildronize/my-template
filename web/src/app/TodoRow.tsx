@@ -138,9 +138,15 @@ export function TodoRow({ todo }: { todo: Todo }) {
         </span>
       )}
 
+      {/* milestone-4 handle-exposure fix-round: the handle is the
+          display text now, mirroring my-task's own task list (`t.assignee`,
+          a plain handle) — the raw id is still available (`title`, a
+          hover tooltip) rather than dropped, since it is still what a
+          caller writes back. assigneeHandle is only ever absent when
+          assigneeId itself is null (Todo's own doc comment). */}
       {todo.assigneeId && (
         <span className="truncate text-xs text-[var(--sea-ink-soft)]" title={todo.assigneeId}>
-          → {todo.assigneeId}
+          → {todo.assigneeHandle ?? todo.assigneeId}
         </span>
       )}
     </li>

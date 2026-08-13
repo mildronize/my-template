@@ -16,7 +16,10 @@ type Querier interface {
 	GetAPIKeyByHash(ctx context.Context, keyHash string) (ApiKey, error)
 	// milestone-4: no owner scoping - any authenticated actor may read any
 	// todo (Ownership model decision, GOAL.md).
-	GetTodoByID(ctx context.Context, id string) (Todo, error)
+	//
+	// milestone-4 fix-round (handle-exposure): same LEFT JOIN as ListTodos
+	// above, same reasoning.
+	GetTodoByID(ctx context.Context, id string) (GetTodoByIDRow, error)
 	// The idempotency lookup (I19): checked at the top of the write path,
 	// inside the same transaction as the insert it would otherwise perform.
 	// A hit means "return this row unchanged, write nothing."
@@ -30,6 +33,19 @@ type Querier interface {
 	GetUserByHandle(ctx context.Context, handle string) (User, error)
 	GetUserByID(ctx context.Context, id string) (User, error)
 	GetUserBySSOSubject(ctx context.Context, ssoSubject sql.NullString) (User, error)
+	// milestone-4 fix-round (handle-exposure): resolves a user id to its
+	// handle - used both to fill in a freshly created todo's assignee handle
+	// (CreateTodo's own RETURNING * has no join to piggyback on) and to bake
+	// a {id, handle} snapshot into the `assigned` event's payload at write
+	// time (internal/domain/todo/service.go's Append), matching my-task's own
+	// mustGetAssignee
+	// (~/gits/my-task/src/server/modules/task/task.service.ts:537-545), which
+	// resolves a handle at the exact same moment for the exact same reason:
+	// an immutable historical snapshot, not a live join, so a later handle
+	// change never rewrites old history. Read-only display lookup, same
+	// ReadOnlyGrant as this file's own joins above (todos.sql / users) - not
+	// a new grant.
+	GetUserHandleByID(ctx context.Context, id string) (GetUserHandleByIDRow, error)
 	// Every query in this file is named with a "TodoEvent" prefix on
 	// purpose, not just for readability: INVARIANTS.md I15 extends
 	// internal/architecture_test.go with a check that only
@@ -52,14 +68,32 @@ type Querier interface {
 	// tableisolation.go's TableOwnership) so it needs no ReadOnlyGrant, unlike
 	// todo_events.sql's cross-module JOIN on users.
 	//
-	// Explicit column list (api_keys.*), not a bare SELECT *, so the join
-	// against users never leaks a users column into the returned row shape -
-	// this query's Go return type must stay exactly db.ApiKey, matching every
-	// other query in this file.
-	ListAllAgentAPIKeys(ctx context.Context) ([]ApiKey, error)
+	// milestone-4 fix-round (handle-exposure): api_keys.* PLUS users.handle -
+	// my-task's own src/app/(app)/settings/api-key-settings.tsx shows
+	// `{k.handle}` on every row and its revoke dialog reads "Revoke
+	// {handle}'s key?" (RevokeKeyButton) - the handle is the centre of that
+	// whole interaction, not a nicety, so the owner-facing settings page
+	// structurally cannot do its job without it. Still an explicit column
+	// list, not a bare SELECT * against the join, for the same leak-prevention
+	// reason as before - this query's own Go return type
+	// (ListAllAgentAPIKeysRow) is scoped to this one query only; every other
+	// query in this file keeps returning bare db.ApiKey, unaffected.
+	ListAllAgentAPIKeys(ctx context.Context) ([]ListAllAgentAPIKeysRow, error)
 	// The per-todo timeline (`_contract/API.md`'s milestone-4 section):
 	// oldest-first, unlike the cross-todo feed below.
-	ListTodoEventsByTodoID(ctx context.Context, todoID string) ([]TodoEvent, error)
+	//
+	// milestone-4 fix-round (handle-exposure): joins users for the actor's
+	// handle/role, the same shape ListTodoEventsFeed below already carries -
+	// task-7's own report found this query never had it, leaving the
+	// per-todo timeline structurally unable to tell human from agent
+	// (Done-when 6/9) or show a name at all (see TimelineEventRow.tsx's own
+	// TimelineEventData doc comment, which named this exact gap). Explicit
+	// column list, not SELECT *, for the same star-expansion-safety reason
+	// ListTodoEventsFeed's own comment above gives for its join. No new
+	// ReadOnlyGrant needed - this file already has one for users
+	// (dbquery.ReadOnlyGrants: "todo_events.sql" / "users"), earned by
+	// ListTodoEventsFeed's own join.
+	ListTodoEventsByTodoID(ctx context.Context, todoID string) ([]ListTodoEventsByTodoIDRow, error)
 	// The cross-todo activity feed (`GET /api/bff/activity`,
 	// `_contract/API.md`): every event across every todo, newest first,
 	// joined to todos (title) and users (actor handle/role, so the caller can
@@ -90,7 +124,19 @@ type Querier interface {
 	ListTodoEventsFeed(ctx context.Context, arg ListTodoEventsFeedParams) ([]ListTodoEventsFeedRow, error)
 	// milestone-4: no owner filter - todos are a shared collection (I3 no
 	// longer applies to this domain). Reads every row.
-	ListTodos(ctx context.Context) ([]Todo, error)
+	//
+	// milestone-4 fix-round (handle-exposure): LEFT JOIN users for the
+	// assignee's handle - my-task's own task list/detail views show a plain
+	// handle (`t.assignee`, `task.queries.ts`'s `assigneeHandle` LEFT JOIN),
+	// never a bare id, and task-7's report found this repo's own
+	// `Todo.assigneeId` had no equivalent. LEFT JOIN, not JOIN: assignee_id is
+	// nullable (an unassigned todo must still be returned, with a null
+	// handle, not dropped). Explicit column list, not SELECT *, for the same
+	// star-expansion-safety reason ListTodoEventsFeed's own comment
+	// (todo_events.sql) gives for its join. Needs its own ReadOnlyGrant
+	// (dbquery.ReadOnlyGrants: "todos.sql" / "users") - this file owns
+	// "todos", not "users".
+	ListTodos(ctx context.Context) ([]ListTodosRow, error)
 	RevokeAPIKey(ctx context.Context, arg RevokeAPIKeyParams) (ApiKey, error)
 	// The owner-facing revoke endpoint's own query (I21): session-gated to a
 	// valid owner by the handler above this layer, but not scoped to any

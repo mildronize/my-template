@@ -77,15 +77,16 @@ func toAPITodo(t todo.Todo) api.Todo {
 		priority = &p
 	}
 	return api.Todo{
-		Id:         t.ID,
-		Title:      t.Title,
-		Status:     api.TodoStatus(t.Status),
-		AssigneeId: t.AssigneeID,
-		Priority:   priority,
-		DueDate:    t.DueDate,
-		CreatedBy:  t.CreatedBy,
-		CreatedAt:  t.CreatedAt,
-		UpdatedAt:  t.UpdatedAt,
+		Id:             t.ID,
+		Title:          t.Title,
+		Status:         api.TodoStatus(t.Status),
+		AssigneeId:     t.AssigneeID,
+		AssigneeHandle: t.AssigneeHandle,
+		Priority:       priority,
+		DueDate:        t.DueDate,
+		CreatedBy:      t.CreatedBy,
+		CreatedAt:      t.CreatedAt,
+		UpdatedAt:      t.UpdatedAt,
 	}
 }
 
@@ -95,12 +96,29 @@ func toAPITodo(t todo.Todo) api.Todo {
 // object, e.g. `{"from": "open", "to": "in_progress"}`, never a raw
 // string) — the one place in this file that touches encoding/json
 // directly, since todo.Service/Repo already store it pre-marshalled.
-func toAPIEvent(e todo.TodoEvent) (api.TodoEvent, error) {
+//
+// actorHandle is a plain string, not the bff surface's {handle, role}
+// object (keys_handler.go's sibling package aside, see
+// internal/transport/bff/todo_handler.go's toBFFEvent) — deliberately
+// asymmetric, matching my-task's own asymmetry found while researching
+// this fix-round: my-task's agent-facing REST contract
+// (TaskTimelineEvent, `~/gits/my-task/src/server/modules/task/
+// task.queries.ts:88-95`) gives an agent an event's actor as a bare
+// handle string ("that shape is REST's documented JSON contract", per
+// `~/gits/my-task/src/server/api/routers/task.ts:82-90`'s own comment),
+// while `actorRole` is resolved as a separate, owner-UI-only follow-up
+// (`withActorRoles`, same file, lines 91-101) never exposed over REST at
+// all. This surface (internal/transport/publicapi, agent-facing) mirrors
+// that: agents see WHO acted (a name), not a role-based human/agent
+// marker — that marker is reserved for the owner-only bff surface's
+// ActivityActor-shaped `actor` field (todo_handler.go, bff package).
+func toAPIEvent(e todo.TodoEvent, actorHandle string) (api.TodoEvent, error) {
 	apiEvent := api.TodoEvent{
 		Id:              e.ID,
 		TodoId:          e.TodoID,
 		Seq:             e.Seq,
 		ActorId:         e.ActorID,
+		ActorHandle:     actorHandle,
 		Type:            string(e.Type),
 		Body:            e.Body,
 		ClientRequestId: e.ClientRequestID,
@@ -133,7 +151,10 @@ func policyActorFor(c *gin.Context) (todo.PolicyActor, string, bool) {
 // handler below needs: todo.ErrNotFound -> 404, todo.ErrForbidden (I18's
 // permission refusal) -> 401 unauthorized (never a distinct forbidden/403
 // code — _contract/API.md's error-shape section, this project has never
-// had one), anything else -> 500.
+// had one), todo.ErrUnknownAssignee (milestone-4 fix-round,
+// handle-exposure: an `assigned` event whose "to" id does not resolve to
+// any real user) -> 400 validation_error, mirroring my-task's own
+// unknownAssigneeError for the same case, anything else -> 500.
 func writeAppendError(c *gin.Context, err error) {
 	if errors.Is(err, todo.ErrNotFound) {
 		c.AbortWithStatusJSON(http.StatusNotFound, todoNotFoundError)
@@ -141,6 +162,10 @@ func writeAppendError(c *gin.Context, err error) {
 	}
 	if errors.Is(err, todo.ErrForbidden) {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, unauthorizedBody)
+		return
+	}
+	if errors.Is(err, todo.ErrUnknownAssignee) {
+		c.AbortWithStatusJSON(http.StatusBadRequest, validationErrorBody("unknown assignee id", "to"))
 		return
 	}
 	c.AbortWithStatus(http.StatusInternalServerError)
@@ -314,7 +339,7 @@ func (s *TodoServer) ListTodoEvents(c *gin.Context, id string) {
 
 	resp := api.TodoEventList{Events: make([]api.TodoEvent, 0, len(events))}
 	for _, e := range events {
-		apiEvent, err := toAPIEvent(e)
+		apiEvent, err := toAPIEvent(e.Event, e.ActorHandle)
 		if err != nil {
 			c.AbortWithStatus(http.StatusInternalServerError)
 			return
@@ -458,7 +483,12 @@ func (s *TodoServer) CreateTodoEvent(c *gin.Context, id string) {
 		return
 	}
 
-	apiEvent, err := toAPIEvent(event)
+	// The actor who just wrote this event is the caller itself — its
+	// handle is already resolved onto the gin context (ActorFromContext),
+	// no extra lookup needed the way ListTodoEvents' read path needs one
+	// per row.
+	actorUser, _ := ActorFromContext(c)
+	apiEvent, err := toAPIEvent(event, actorUser.Handle)
 	if err != nil {
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return

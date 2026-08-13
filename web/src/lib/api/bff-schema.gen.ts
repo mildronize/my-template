@@ -181,6 +181,8 @@ export interface components {
             status: "open" | "in_progress" | "done" | "closed";
             /** @description References a user (any role). */
             assigneeId: string | null;
+            /** @description milestone-4 fix-round (handle-exposure): assigneeId's owning user's handle, for display — null exactly when assigneeId is null. my-task's own task list/detail views show a plain handle (`~/gits/my-task/src/server/modules/task/task.queries.ts`'s `assigneeHandle` LEFT JOIN, `t.assignee`/`detail.assignee` on the wire), never a bare id, and task-7's report found this repo's own Todo had no equivalent. Additive: assigneeId is unchanged, still what a caller writes back (CreateTodoRequest.assigneeId, CreateTodoEventRequest's `to` for an `assigned` event) — this is display-only, openapi.yaml's own Todo carries the identical field for the same reason (my-task's agent-facing REST shows it too, not just the owner UI). */
+            assigneeHandle: string | null;
             /** @enum {string|null} */
             priority: "low" | "medium" | "high" | "urgent" | null;
             /** Format: date-time */
@@ -201,9 +203,11 @@ export interface components {
             /** Format: int64 */
             seq: number;
             actorId: string;
+            /** @description milestone-4 fix-round (handle-exposure): the same `{handle, role}` shape `ActivityItem.actor` already carries on every row (this schema's own doc comment already says the two represent "the same underlying row... so the two share a rendering component" — before this fix-round that was only true for `type`/`payload`/`body`, not `actor`; task-7's report found the per-todo timeline (this endpoint, `GET /api/bff/todos/:id/events`) had no equivalent, unlike `GET /api/bff/activity`). Always present, never null — every event has a real actor by construction (DATA_MODEL.md). */
+            actor: components["schemas"]["ActivityActor"];
             /** @description `created` | `commented` | `status_changed` | `assigned` | `field_changed` — the full read-side vocabulary (DATA_MODEL.md). `created` only ever appears here as a read value, never as something `POST .../events` accepted (I16). */
             type: string;
-            /** @description JSON, shape depends on `type` — `{from, to}` pairs for `status_changed`/`assigned`, `{field, from, to}` for `field_changed`, `null` for `commented`. */
+            /** @description JSON, shape depends on `type` — `{from, to}` pairs for `status_changed`, `null` for `commented`, `{field, from, to}` for `field_changed`. `assigned`'s own `{from, to}` pair is each either `null` or a `{id, handle}` snapshot resolved once, at write time, into the stored payload (milestone-4 fix-round, handle-exposure — matches my-task's own AssigneeSnapshot, `~/gits/my-task/src/server/modules/task/task.service.ts:139-142`, resolved the same way at the same moment: a later handle change never rewrites old history). */
             payload?: {
                 [key: string]: unknown;
             } | null;
@@ -257,6 +261,8 @@ export interface components {
         ApiKey: {
             id: string;
             prefix: string;
+            /** @description milestone-4 fix-round (handle-exposure): the owning agent's handle — my-task's own api-key-settings.tsx shows `{k.handle}` on every row and its revoke dialog names the agent by handle ("Revoke {handle}'s key?"); this endpoint (GET /api/bff/keys) already JOINs users for every row it returns (I21 — every key here belongs to a role='agent' user), so this is always present, never null. */
+            handle: string;
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */

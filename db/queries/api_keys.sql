@@ -28,11 +28,17 @@ RETURNING *;
 -- tableisolation.go's TableOwnership) so it needs no ReadOnlyGrant, unlike
 -- todo_events.sql's cross-module JOIN on users.
 --
--- Explicit column list (api_keys.*), not a bare SELECT *, so the join
--- against users never leaks a users column into the returned row shape -
--- this query's Go return type must stay exactly db.ApiKey, matching every
--- other query in this file.
-SELECT api_keys.*
+-- milestone-4 fix-round (handle-exposure): api_keys.* PLUS users.handle -
+-- my-task's own src/app/(app)/settings/api-key-settings.tsx shows
+-- `{k.handle}` on every row and its revoke dialog reads "Revoke
+-- {handle}'s key?" (RevokeKeyButton) - the handle is the centre of that
+-- whole interaction, not a nicety, so the owner-facing settings page
+-- structurally cannot do its job without it. Still an explicit column
+-- list, not a bare SELECT * against the join, for the same leak-prevention
+-- reason as before - this query's own Go return type
+-- (ListAllAgentAPIKeysRow) is scoped to this one query only; every other
+-- query in this file keeps returning bare db.ApiKey, unaffected.
+SELECT api_keys.*, users.handle AS handle
 FROM api_keys
 JOIN users ON users.id = api_keys.user_id
 WHERE users.role = 'agent' AND api_keys.revoked_at IS NULL

@@ -105,16 +105,31 @@ function PriorityControl({ todoId, priority }: { todoId: string; priority: strin
 }
 
 /**
- * Free-text assignee-id field, not a picker — this template's contract
- * has no endpoint that lists users/agents by handle (`Todo.assigneeId` is
- * a bare user id on the wire, same gap as `TodoEvent.actorId` —
- * `TimelineEventRow.tsx`'s own `TimelineEventData` doc comment names the
- * general shape of this across the milestone). A real picker needs a
- * lookup this milestone's contract doesn't provide; typing an id
- * verbatim is the honest minimum rather than a fake-looking dropdown of
- * one.
+ * Free-text assignee-id field, not a picker. This is unchanged by the
+ * milestone-4 handle-exposure fix-round on purpose: my-task's own task
+ * detail page picks an assignee from a `<Combobox>` of known handles
+ * (`~/gits/my-task/src/app/(app)/tasks/[ref]/page.tsx`'s `usersQuery`),
+ * but building that here would mean adding a new `GET /api/bff/users`-
+ * shaped endpoint this milestone's contract does not have — a real,
+ * separate piece of work, noted as a possible follow-up rather than
+ * built speculatively in this fix-round. What DID close: the control now
+ * shows the current assignee's resolved handle as a label (below), not
+ * just the raw id inside the input — `Todo.assigneeHandle`, the new field
+ * this fix-round added. The input itself still reads/writes a raw id:
+ * `assigned`'s wire `to` is unchanged (still an id, `_contract/API.md`),
+ * so submitting the handle text here would not work — this is
+ * deliberately not "solved" by quietly swapping the input's own value to
+ * a handle without a real picker behind it.
  */
-function AssigneeControl({ todoId, assigneeId }: { todoId: string; assigneeId: string | null }) {
+function AssigneeControl({
+  todoId,
+  assigneeId,
+  assigneeHandle,
+}: {
+  todoId: string;
+  assigneeId: string | null;
+  assigneeHandle: string | null;
+}) {
   const createEvent = useCreateTodoEventMutation();
   const [draft, setDraft] = useState(assigneeId ?? "");
 
@@ -125,17 +140,22 @@ function AssigneeControl({ todoId, assigneeId }: { todoId: string; assigneeId: s
   }
 
   return (
-    <Input
-      value={draft}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") commit();
-      }}
-      placeholder="unassigned (paste a user id)"
-      className="h-8 w-56"
-      aria-label="Assignee user id"
-    />
+    <div className="flex flex-col gap-0.5">
+      <Input
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+        }}
+        placeholder="unassigned (paste a user id)"
+        className="h-8 w-56"
+        aria-label="Assignee user id"
+      />
+      {assigneeHandle && (
+        <span className="text-xs text-[var(--sea-ink-soft)]">currently: {assigneeHandle}</span>
+      )}
+    </div>
   );
 }
 
@@ -216,7 +236,11 @@ export default function TodoDetailPage() {
         </div>
         <div className="flex flex-col gap-1">
           <span className="text-xs text-[var(--sea-ink-soft)]">Assignee</span>
-          <AssigneeControl todoId={todo.id} assigneeId={todo.assigneeId} />
+          <AssigneeControl
+            todoId={todo.id}
+            assigneeId={todo.assigneeId}
+            assigneeHandle={todo.assigneeHandle}
+          />
         </div>
         {todo.dueDate && (
           <Badge variant="outline" className="ml-auto">

@@ -32,9 +32,26 @@ WHERE client_request_id = ?;
 -- name: ListTodoEventsByTodoID :many
 -- The per-todo timeline (`_contract/API.md`'s milestone-4 section):
 -- oldest-first, unlike the cross-todo feed below.
-SELECT * FROM todo_events
-WHERE todo_id = ?
-ORDER BY seq ASC;
+--
+-- milestone-4 fix-round (handle-exposure): joins users for the actor's
+-- handle/role, the same shape ListTodoEventsFeed below already carries -
+-- task-7's own report found this query never had it, leaving the
+-- per-todo timeline structurally unable to tell human from agent
+-- (Done-when 6/9) or show a name at all (see TimelineEventRow.tsx's own
+-- TimelineEventData doc comment, which named this exact gap). Explicit
+-- column list, not SELECT *, for the same star-expansion-safety reason
+-- ListTodoEventsFeed's own comment above gives for its join. No new
+-- ReadOnlyGrant needed - this file already has one for users
+-- (dbquery.ReadOnlyGrants: "todo_events.sql" / "users"), earned by
+-- ListTodoEventsFeed's own join.
+SELECT
+    todo_events.id, todo_events.todo_id, todo_events.seq, todo_events.actor_id, todo_events.type, todo_events.payload, todo_events.body, todo_events.client_request_id, todo_events.created_at,
+    users.handle AS actor_handle,
+    users.role AS actor_role
+FROM todo_events
+JOIN users ON users.id = todo_events.actor_id
+WHERE todo_events.todo_id = ?
+ORDER BY todo_events.seq ASC;
 
 -- name: ListTodoEventsFeed :many
 -- The cross-todo activity feed (`GET /api/bff/activity`,

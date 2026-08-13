@@ -50,6 +50,28 @@ type APIKey struct {
 	ExpiresAt time.Time
 	// RevokedAt is nil when the key has not been revoked.
 	RevokedAt *time.Time
+	// Handle is the owning user's handle — nil for every method that has
+	// no reason to resolve one (GetAPIKeyByHash, CreateAPIKey,
+	// ListAPIKeysByOwner, RevokeAPIKey: each already scoped to a single
+	// known userID, so a caller resolving its own identity gains nothing
+	// from a redundant handle on every row). Populated only by
+	// ListAllAgentAPIKeys (milestone-4 fix-round, handle-exposure) — the
+	// owner-facing settings page's whole reason for existing is showing
+	// WHICH agent a row belongs to (my-task's own api-key-settings.tsx:
+	// `{k.handle}` on every row, "Revoke {handle}'s key?"), and that is
+	// the one query whose own SQL (db/queries/api_keys.sql) now joins
+	// users for it.
+	//
+	// A pointer on the shared type, not a second, ListAllAgentAPIKeys-only
+	// return type: every consumer already handles APIKey as one shape
+	// (RevokeAnyAgentAPIKey takes/returns it, keys_handler.go's toBFFKey
+	// maps it), and a second parallel type would need either its own
+	// toBFFKey twin or a lossy conversion back to APIKey before reaching
+	// that mapper — more moving parts for one optional field. Every other
+	// method leaves this nil, never a guessed or empty-string value, so a
+	// caller can tell "not resolved by this method" apart from a
+	// hypothetical future empty handle.
+	Handle *string
 }
 
 func userFromRow(row db.User) User {
@@ -231,6 +253,12 @@ func (r *Repo) RevokeAPIKey(ctx context.Context, id, userID string) (APIKey, err
 // any one user_id. Unlike ListAPIKeysByOwner (which structurally can never
 // be non-empty for a session owner, since no key is ever issued to
 // role='owner' — I2), this is the query the settings page actually needs.
+//
+// milestone-4 fix-round (handle-exposure): the underlying query
+// (db/queries/api_keys.sql) now JOINs users for the owning agent's
+// handle, so every APIKey returned here has Handle set (never nil) — the
+// query's own JOIN, not LEFT JOIN, guarantees a matching users row exists
+// for every api_keys row it returns.
 func (r *Repo) ListAllAgentAPIKeys(ctx context.Context) ([]APIKey, error) {
 	rows, err := r.q.ListAllAgentAPIKeys(ctx)
 	if err != nil {
@@ -238,7 +266,18 @@ func (r *Repo) ListAllAgentAPIKeys(ctx context.Context) ([]APIKey, error) {
 	}
 	keys := make([]APIKey, 0, len(rows))
 	for _, row := range rows {
-		keys = append(keys, apiKeyFromRow(row))
+		k := apiKeyFromRow(db.ApiKey{
+			ID:        row.ID,
+			UserID:    row.UserID,
+			KeyHash:   row.KeyHash,
+			KeyPrefix: row.KeyPrefix,
+			CreatedAt: row.CreatedAt,
+			ExpiresAt: row.ExpiresAt,
+			RevokedAt: row.RevokedAt,
+		})
+		handle := row.Handle
+		k.Handle = &handle
+		keys = append(keys, k)
 	}
 	return keys, nil
 }

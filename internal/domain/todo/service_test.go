@@ -25,6 +25,12 @@ type fakeRepo struct {
 	events      map[string]TodoEvent
 	byClientReq map[string]string // clientRequestID -> event id
 	seqByTodo   map[string]int64
+	// handles is ResolveUserHandle's own backing store (milestone-4
+	// fix-round, handle-exposure) — id -> handle, empty by default so any
+	// test exercising EventTypeAssigned without seeding one gets
+	// ErrNotFound, the same "not resolved" signal a real, empty users
+	// table would give.
+	handles map[string]string
 
 	createCalled       bool
 	updateStatusCalled bool
@@ -36,6 +42,7 @@ func newFakeRepo() *fakeRepo {
 		events:      map[string]TodoEvent{},
 		byClientReq: map[string]string{},
 		seqByTodo:   map[string]int64{},
+		handles:     map[string]string{},
 	}
 }
 
@@ -151,15 +158,25 @@ func (f *fakeRepo) InsertEvent(ctx context.Context, todoID, actorID string, even
 	return e, nil
 }
 
-func (f *fakeRepo) ListEventsByTodoID(ctx context.Context, todoID string) ([]TodoEvent, error) {
-	var out []TodoEvent
+func (f *fakeRepo) ListEventsByTodoID(ctx context.Context, todoID string) ([]TodoEventWithActor, error) {
+	var out []TodoEventWithActor
 	for _, e := range f.events {
 		if e.TodoID == todoID {
-			out = append(out, e)
+			out = append(out, TodoEventWithActor{Event: e, ActorHandle: f.handles[e.ActorID], ActorRole: ""})
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Seq < out[j].Seq })
+	sort.Slice(out, func(i, j int) bool { return out[i].Event.Seq < out[j].Event.Seq })
 	return out, nil
+}
+
+// ResolveUserHandle satisfies Repository's own milestone-4 fix-round
+// (handle-exposure) addition — backed by f.handles, empty by default.
+func (f *fakeRepo) ResolveUserHandle(ctx context.Context, id string) (string, error) {
+	handle, ok := f.handles[id]
+	if !ok {
+		return "", ErrNotFound
+	}
+	return handle, nil
 }
 
 func (f *fakeRepo) ListEventsFeed(ctx context.Context, cursorCreatedAt *time.Time, cursorID *string, limit int64) ([]TodoEventFeedRow, error) {
@@ -188,8 +205,8 @@ func TestService_CreateTodo_DelegatesToRepoAndInsertsCreatedEvent(t *testing.T) 
 	events, err := svc.ListEvents(context.Background(), created.ID)
 	require.NoError(t, err)
 	require.Len(t, events, 1)
-	assert.Equal(t, EventCreated, events[0].Type)
-	assert.EqualValues(t, 1, events[0].Seq)
+	assert.Equal(t, EventCreated, events[0].Event.Type)
+	assert.EqualValues(t, 1, events[0].Event.Seq)
 }
 
 func TestService_ListTodos_ReturnsEveryTodo(t *testing.T) {
@@ -367,7 +384,7 @@ func TestI17_Append_EachStateChangeAddsExactlyOneEventRow(t *testing.T) {
 	// so exactly len(actions) rows are expected, one per Append call above.
 	assert.Len(t, events, len(actions))
 	for i, e := range events {
-		assert.EqualValues(t, i+1, e.Seq, "seq must be strictly monotonic across every action on this one todo")
+		assert.EqualValues(t, i+1, e.Event.Seq, "seq must be strictly monotonic across every action on this one todo")
 	}
 }
 
@@ -487,7 +504,7 @@ func TestI18_Append_SameAgentSameTodo_ClosedRejected_NonClosedSucceeds(t *testin
 	eventsAfter, err := repo.ListEventsByTodoID(ctx, created.ID)
 	require.NoError(t, err)
 	require.Len(t, eventsAfter, 1, "only the successful comment was written — the rejected attempt wrote nothing")
-	assert.Equal(t, EventCommented, eventsAfter[0].Type)
+	assert.Equal(t, EventCommented, eventsAfter[0].Event.Type)
 }
 
 // TestI18_Append_OwnerCanCloseTheSameTodo is Done-when 5's second half,

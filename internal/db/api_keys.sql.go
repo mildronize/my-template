@@ -106,12 +106,23 @@ func (q *Queries) ListAPIKeysByOwner(ctx context.Context, userID string) ([]ApiK
 }
 
 const listAllAgentAPIKeys = `-- name: ListAllAgentAPIKeys :many
-SELECT api_keys.id, api_keys.user_id, api_keys.key_hash, api_keys.key_prefix, api_keys.created_at, api_keys.expires_at, api_keys.revoked_at
+SELECT api_keys.id, api_keys.user_id, api_keys.key_hash, api_keys.key_prefix, api_keys.created_at, api_keys.expires_at, api_keys.revoked_at, users.handle AS handle
 FROM api_keys
 JOIN users ON users.id = api_keys.user_id
 WHERE users.role = 'agent' AND api_keys.revoked_at IS NULL
 ORDER BY api_keys.created_at DESC
 `
+
+type ListAllAgentAPIKeysRow struct {
+	ID        string       `json:"id"`
+	UserID    string       `json:"user_id"`
+	KeyHash   string       `json:"key_hash"`
+	KeyPrefix string       `json:"key_prefix"`
+	CreatedAt time.Time    `json:"created_at"`
+	ExpiresAt time.Time    `json:"expires_at"`
+	RevokedAt sql.NullTime `json:"revoked_at"`
+	Handle    string       `json:"handle"`
+}
 
 // I21 (_contract/INVARIANTS.md): the owner-facing key-listing endpoint
 // (GET /api/bff/keys) needs every role='agent' user's non-revoked keys,
@@ -122,19 +133,25 @@ ORDER BY api_keys.created_at DESC
 // tableisolation.go's TableOwnership) so it needs no ReadOnlyGrant, unlike
 // todo_events.sql's cross-module JOIN on users.
 //
-// Explicit column list (api_keys.*), not a bare SELECT *, so the join
-// against users never leaks a users column into the returned row shape -
-// this query's Go return type must stay exactly db.ApiKey, matching every
-// other query in this file.
-func (q *Queries) ListAllAgentAPIKeys(ctx context.Context) ([]ApiKey, error) {
+// milestone-4 fix-round (handle-exposure): api_keys.* PLUS users.handle -
+// my-task's own src/app/(app)/settings/api-key-settings.tsx shows
+// `{k.handle}` on every row and its revoke dialog reads "Revoke
+// {handle}'s key?" (RevokeKeyButton) - the handle is the centre of that
+// whole interaction, not a nicety, so the owner-facing settings page
+// structurally cannot do its job without it. Still an explicit column
+// list, not a bare SELECT * against the join, for the same leak-prevention
+// reason as before - this query's own Go return type
+// (ListAllAgentAPIKeysRow) is scoped to this one query only; every other
+// query in this file keeps returning bare db.ApiKey, unaffected.
+func (q *Queries) ListAllAgentAPIKeys(ctx context.Context) ([]ListAllAgentAPIKeysRow, error) {
 	rows, err := q.db.QueryContext(ctx, listAllAgentAPIKeys)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ApiKey
+	var items []ListAllAgentAPIKeysRow
 	for rows.Next() {
-		var i ApiKey
+		var i ListAllAgentAPIKeysRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.UserID,
@@ -143,6 +160,7 @@ func (q *Queries) ListAllAgentAPIKeys(ctx context.Context) ([]ApiKey, error) {
 			&i.CreatedAt,
 			&i.ExpiresAt,
 			&i.RevokedAt,
+			&i.Handle,
 		); err != nil {
 			return nil, err
 		}

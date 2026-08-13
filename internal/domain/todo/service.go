@@ -38,8 +38,14 @@ type Repository interface {
 
 	GetEventByClientRequestID(ctx context.Context, clientRequestID string) (TodoEvent, error)
 	InsertEvent(ctx context.Context, todoID, actorID string, eventType EventType, payload, body *string, clientRequestID string) (TodoEvent, error)
-	ListEventsByTodoID(ctx context.Context, todoID string) ([]TodoEvent, error)
+	ListEventsByTodoID(ctx context.Context, todoID string) ([]TodoEventWithActor, error)
 	ListEventsFeed(ctx context.Context, cursorCreatedAt *time.Time, cursorID *string, limit int64) ([]TodoEventFeedRow, error)
+
+	// ResolveUserHandle resolves a user id to its handle — milestone-4
+	// fix-round (handle-exposure), used by Append's EventTypeAssigned case
+	// below to bake a {id, handle} snapshot into the `assigned` event's
+	// payload at write time.
+	ResolveUserHandle(ctx context.Context, id string) (string, error)
 }
 
 // Service implements the todo domain contract from _contract/API.md and
@@ -72,8 +78,10 @@ func (s *Service) GetTodo(ctx context.Context, id string) (Todo, error) {
 	return s.Repo.GetByID(ctx, id)
 }
 
-// ListEvents returns one todo's own timeline, oldest first.
-func (s *Service) ListEvents(ctx context.Context, todoID string) ([]TodoEvent, error) {
+// ListEvents returns one todo's own timeline, oldest first, each event
+// carrying its actor's handle/role (milestone-4 fix-round,
+// handle-exposure — see TodoEventWithActor's own doc comment).
+func (s *Service) ListEvents(ctx context.Context, todoID string) ([]TodoEventWithActor, error) {
 	return s.Repo.ListEventsByTodoID(ctx, todoID)
 }
 
@@ -242,6 +250,76 @@ func strPtrToAny(p *string) interface{} {
 	return *p
 }
 
+// ErrUnknownAssignee is Append's own sentinel for an `assigned` event
+// whose "to" id does not resolve to any real user — my-task's own
+// equivalent (findUserByHandle failing in the assigned-event branch of
+// POST /api/v1/tasks/:id/events) surfaces as a 400 validation error
+// (unknownAssigneeError), not a 500; this repo's handler layer
+// (internal/transport/{bff,publicapi}/todo_handler.go) maps this error the
+// same way.
+var ErrUnknownAssignee = errors.New("todo: unknown assignee")
+
+// assigneeSnapshot is the `assigned` event payload's `from`/`to` shape —
+// milestone-4 fix-round (handle-exposure), matching my-task's own
+// AssigneeSnapshot
+// (~/gits/my-task/src/server/modules/task/task.service.ts:139-142) field
+// for field: `{id, handle}`, resolved once at write time and baked into
+// the stored payload permanently (see resolveAssigneeSnapshot below for
+// why write-time, not read-time).
+type assigneeSnapshot struct {
+	ID     string `json:"id"`
+	Handle string `json:"handle"`
+}
+
+// resolveAssigneeSnapshot resolves id (if non-nil) to a {id, handle}
+// snapshot baked into the `assigned` event's payload at write time —
+// matching my-task's own mustGetAssignee
+// (~/gits/my-task/src/server/modules/task/task.service.ts:537-545), which
+// does exactly this at exactly this moment: a snapshot captured when the
+// event is written, not a live join resolved later when the event is
+// read, so a later handle change (a user renamed, in a system that
+// allowed it) does not retroactively rewrite old history — the same
+// "immutable historical record" property every other todo_events row
+// already has (I17: append-only). This is a deliberate, load-bearing
+// choice, not an arbitrary one: my-task's own appendAssigned resolves
+// both `from` and `to` this way, at the moment the event is created, and
+// nowhere does a read path re-derive an old event's assignee snapshot
+// from the current users table.
+//
+// required distinguishes the two call sites' different failure
+// tolerance:
+//
+//   - the "to" id is caller-supplied input for THIS write (required:
+//     true) — an id that does not resolve to a real user is a genuine
+//     validation error (ErrUnknownAssignee), mirroring my-task's own
+//     unknownAssigneeError for exactly this case (POST /api/v1/tasks/:id/
+//     events's `assigned` branch, task-ref/route.ts).
+//   - the "from" id is whatever this todo's assignee_id already was
+//     before this write (required: false) — a lookup failure there means
+//     the previously-recorded assignee no longer resolves (e.g. stale
+//     data from before this fix-round, or a user row removed by some
+//     future admin action this milestone doesn't have yet). That is not
+//     something THIS write should fail over: it degrades to a snapshot
+//     whose handle equals the raw id (visibly a raw id, not a fabricated
+//     name) rather than blocking a legitimate reassignment because of a
+//     data anomaly unrelated to the reassignment itself.
+func resolveAssigneeSnapshot(ctx context.Context, tx Repository, id *string, required bool) (*assigneeSnapshot, error) {
+	if id == nil {
+		return nil, nil
+	}
+	handle, err := tx.ResolveUserHandle(ctx, *id)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			if required {
+				return nil, ErrUnknownAssignee
+			}
+			return &assigneeSnapshot{ID: *id, Handle: *id}, nil
+		}
+		return nil, err
+	}
+	return &assigneeSnapshot{ID: *id, Handle: handle}, nil
+}
+
 func timePtrToAny(p *time.Time) interface{} {
 	if p == nil {
 		return nil
@@ -334,10 +412,15 @@ func (s *Service) Append(ctx context.Context, input AppendInput) (TodoEvent, err
 			if input.Assignment == nil {
 				return fmt.Errorf("todo: assigned event missing Assignment input")
 			}
-			p, err := json.Marshal(fromToPayload{
-				From: strPtrToAny(current.AssigneeID),
-				To:   strPtrToAny(input.Assignment.ToAssigneeID),
-			})
+			fromSnap, err := resolveAssigneeSnapshot(ctx, tx, current.AssigneeID, false)
+			if err != nil {
+				return err
+			}
+			toSnap, err := resolveAssigneeSnapshot(ctx, tx, input.Assignment.ToAssigneeID, true)
+			if err != nil {
+				return err
+			}
+			p, err := json.Marshal(fromToPayload{From: fromSnap, To: toSnap})
 			if err != nil {
 				return err
 			}

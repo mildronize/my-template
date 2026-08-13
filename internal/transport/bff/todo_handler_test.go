@@ -388,6 +388,12 @@ func TestBFFHandler_EventsRoundTrip_CreateReadAppendFieldChangedReadTimeline(t *
 	created := decodeBFFTodo(t, createRec)
 	require.NotNil(t, created.AssigneeId)
 	assert.Equal(t, owner.ID, *created.AssigneeId)
+	// milestone-4 fix-round (handle-exposure): CreateTodo's own response
+	// must already carry the resolved handle, not just the id — Repo.Create's
+	// own follow-up ResolveUserHandle call, proven end to end here rather
+	// than only at the repo-test layer.
+	require.NotNil(t, created.AssigneeHandle)
+	assert.Equal(t, owner.Handle, *created.AssigneeHandle)
 	require.NotNil(t, created.Priority)
 	assert.Equal(t, bffapi.TodoPriority("low"), *created.Priority)
 	require.NotNil(t, created.DueDate)
@@ -415,17 +421,46 @@ func TestBFFHandler_EventsRoundTrip_CreateReadAppendFieldChangedReadTimeline(t *
 	require.NotNil(t, after.Priority)
 	assert.Equal(t, bffapi.TodoPriority("urgent"), *after.Priority)
 
-	// Read the timeline back and find both events, oldest first.
+	// Append an `assigned` event too — milestone-4 fix-round
+	// (handle-exposure): the payload's `from`/`to` must now be {id, handle}
+	// snapshots, not bare ids (service.go's Append, EventTypeAssigned case).
+	assignRec := doBFFJSONRequest(t, router, http.MethodPost, "/api/bff/todos/"+created.Id+"/events", sessionValue, map[string]any{
+		"type":            "assigned",
+		"clientRequestId": "assign-1",
+		"to":              nil,
+	})
+	require.Equal(t, http.StatusCreated, assignRec.Code)
+	assignedEvent := decodeBFFTodoEvent(t, assignRec)
+	require.NotNil(t, assignedEvent.Payload)
+	assignPayload := *assignedEvent.Payload
+	fromSnap, ok := assignPayload["from"].(map[string]interface{})
+	require.True(t, ok, "assigned event's `from` must be a {id, handle} object, got %#v", assignPayload["from"])
+	assert.Equal(t, owner.ID, fromSnap["id"])
+	assert.Equal(t, owner.Handle, fromSnap["handle"])
+	assert.Nil(t, assignPayload["to"], "unassigning: `to` is null")
+
+	// Read the timeline back and find every event, oldest first.
 	timelineRec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/todos/"+created.Id+"/events", sessionValue, nil)
 	require.Equal(t, http.StatusOK, timelineRec.Code)
 	timeline := decodeBFFTodoEventList(t, timelineRec)
-	require.Len(t, timeline.Events, 2)
+	require.Len(t, timeline.Events, 3)
 	assert.Equal(t, "created", timeline.Events[0].Type)
 	assert.Equal(t, "field_changed", timeline.Events[1].Type)
 	assert.Equal(t, appended.Id, timeline.Events[1].Id)
 	require.NotNil(t, timeline.Events[1].Payload)
 	timelinePayload := *timeline.Events[1].Payload
 	assert.Equal(t, "urgent", timelinePayload["to"])
+	assert.Equal(t, "assigned", timeline.Events[2].Type)
+
+	// milestone-4 fix-round (handle-exposure): every row's own `actor` now
+	// carries {handle, role}, resolved by ListTodoEventsByTodoID's own new
+	// JOIN — task-7's report found this endpoint had none at all before
+	// this fix-round. Checked on every row, not just one, since this is
+	// exactly the data Done-when 6/9's provenance mark needs.
+	for i, e := range timeline.Events {
+		assert.Equalf(t, owner.Handle, e.Actor.Handle, "event %d's actor handle", i)
+		assert.Equalf(t, "owner", e.Actor.Role, "event %d's actor role", i)
+	}
 }
 
 // TestDoneWhen6_DeleteTodo_RouteGenuinelyDoesNotExist_BFF — GOAL.md

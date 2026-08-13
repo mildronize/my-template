@@ -96,4 +96,47 @@ describe("TodosList", () => {
     // result.
     expect(screen.queryByText("someone elses private todo")).not.toBeInTheDocument();
   });
+
+  // milestone-4 handle-exposure fix-round: TodoRow.tsx now prefers
+  // assigneeHandle over the raw assigneeId for display (director's
+  // finding: "shipping raw ids where the named source shows names").
+  // Real rendered output, not just a type-level check that the field
+  // exists — a raw assigneeId with no assigneeHandle set at all would
+  // have passed the old code just as easily.
+  it("shows the assignee's handle on the row, not the bare id, when the mock carries one", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/api/bff/todos")) {
+        return new Response(
+          JSON.stringify({
+            todos: [
+              {
+                id: "todo-2",
+                title: "review the pr",
+                status: "open",
+                assigneeId: "user-abc123",
+                assigneeHandle: "clara",
+                priority: null,
+                dueDate: null,
+                createdBy: "owner-1",
+                createdAt: "2026-01-01T00:00:00Z",
+                updatedAt: "2026-01-01T00:00:00Z",
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url.endsWith("/api/bff/me")) {
+        return new Response(null, { status: 401 });
+      }
+      throw new Error(`TodosList.test.tsx: unexpected fetch to ${url}`);
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    renderWithClient(<TodosList />);
+
+    expect(await screen.findByText("→ clara")).toBeInTheDocument();
+    expect(screen.queryByText("→ user-abc123")).not.toBeInTheDocument();
+  });
 });
