@@ -172,10 +172,19 @@ with a second, table-specific check: an architecture test asserting only
 `*TodoEvent*`-named query functions — cheaper than a second `sqlc`
 output package, and it restores the actual property (not just the
 layer-level approximation of it) without requiring a second generated
-package this template's size doesn't otherwise need. **Verified by
-test**, two of them: the transaction property (a failure mid-write leaves
-neither the event row nor the `todos` state change) and the new
-table-specific reference check above.
+package this template's size doesn't otherwise need. **The check must
+first assert it found at least 3 such functions** (the design's own
+floor: insert one event, list a single todo's events, list the
+cross-todo feed — the minimum operations this milestone's write/read
+paths require) **before it asserts who references them.** A name-matcher
+that matches zero functions passes trivially and enforces nothing — the
+same shape `keys_handler_test.go` already cost this project once. If the
+count ever drops below 3, that's a real signal (the design changed, or a
+rename broke the matcher) and both deserve a failing test, not a silent
+pass. **Verified by test**, two of them: the transaction property (a
+failure mid-write leaves neither the event row nor the `todos` state
+change) and the new table-specific reference check above, itself gated
+on finding a non-trivial number of functions to check.
 
 **I16 — `created` is never client-specifiable.** `scope: per-domain-module`
 *(New, milestone-4.)* No request body, on either `publicapi` or `bff`,
