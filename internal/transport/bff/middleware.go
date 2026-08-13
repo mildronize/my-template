@@ -4,6 +4,7 @@ import (
 	"html"
 	"log/slog"
 	"net/http"
+	"net/url"
 
 	"github.com/gin-gonic/gin"
 
@@ -18,19 +19,49 @@ import (
 // package that would otherwise hold nothing else.
 const actorContextKey = "bff.actor"
 
+// secureFromURL reports whether cookies should carry the Secure attribute
+// for a service reachable at rawURL — true when rawURL's scheme is
+// "https", false when it's "http". This is task-10's fix (see
+// .chief/milestone-2/_plan/_todo.md): Secure is derived from
+// cfg.AuthAudience, the same value that already has to be correct for
+// OAuth redirect matching to work at all (oauth.go's redirectURL), rather
+// than a separately-settable flag someone could ship in the wrong
+// position. `http://localhost` (GETTING-STARTED.md's documented local-dev
+// setup) now correctly gets a non-Secure cookie — Safari refuses to store
+// a Secure cookie over plain http, which is exactly the bug this fixes —
+// while any real (always-https) deployment is unaffected.
+//
+// A rawURL that fails to parse (e.g. a missing scheme separator) fails
+// safe to Secure=true, the stricter attribute, rather than silently
+// downgrading to a non-Secure cookie on a malformed config. An empty or
+// schemeless rawURL parses successfully with an empty Scheme, so it falls
+// through to the false branch below like any other non-"https" value —
+// in practice this never reaches a real request anyway, since both
+// callers (NewLoginHandler, NewCallbackHandler) already refuse to set any
+// cookie at all while configured(cfg) is false, which an empty
+// cfg.AuthAudience always implies.
+func secureFromURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return true
+	}
+	return u.Scheme == "https"
+}
+
 // setCookie centralizes the cookie attributes task-4.md's login-flow spec
 // calls for on both cookies this package sets: HttpOnly (never readable
-// from JS), Secure, SameSite=Lax. path "/" so the cookie is sent back on
-// every route this package registers, not just the one that set it.
-func setCookie(c *gin.Context, name, value string, maxAge int) {
+// from JS), Secure (per secureFromURL above), SameSite=Lax. path "/" so
+// the cookie is sent back on every route this package registers, not just
+// the one that set it.
+func setCookie(c *gin.Context, name, value string, maxAge int, secure bool) {
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(name, value, maxAge, "/", "", true, true)
+	c.SetCookie(name, value, maxAge, "/", "", secure, true)
 }
 
 // clearCookie deletes a cookie this package previously set (maxAge<0).
-func clearCookie(c *gin.Context, name string) {
+func clearCookie(c *gin.Context, name string, secure bool) {
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(name, "", -1, "/", "", true, true)
+	c.SetCookie(name, "", -1, "/", "", secure, true)
 }
 
 // renderLoginError is the one error page GET /callback ever writes,

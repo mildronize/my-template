@@ -34,6 +34,11 @@ func secureCompareStrings(a, b string) bool {
 // users is only ever used for GetUserBySSOSubject here (I4 — this package
 // never queries any other identity table itself).
 func NewCallbackHandler(cfg *platform.Config, signer *Signer, idVerifier identity.JWTVerifier, users identity.UserRepo, logger *slog.Logger) gin.HandlerFunc {
+	// Parsed once here, at handler-construction time (wireBFF calls this
+	// once at startup), not per-request — see middleware.go's
+	// secureFromURL doc comment (task-10).
+	secure := secureFromURL(cfg.AuthAudience)
+
 	return func(c *gin.Context) {
 		if !configured(cfg) || idVerifier == nil {
 			renderLoginError(c, logger, "owner login not configured — SSO_ISSUER/SSO_CLIENT_ID/SSO_CLIENT_SECRET/AUTH_AUDIENCE must all be set (see docs/GETTING-STARTED.md Step 1)")
@@ -50,7 +55,7 @@ func NewCallbackHandler(cfg *platform.Config, signer *Signer, idVerifier identit
 			renderLoginError(c, logger, "no state cookie present (missing, expired, or already used)")
 			return
 		}
-		clearCookie(c, stateCookieName) // one-time use regardless of what happens next
+		clearCookie(c, stateCookieName, secure) // one-time use regardless of what happens next
 
 		wantState, verifier, err := signer.ParseStateCookie(stateCookie)
 		if err != nil {
@@ -120,7 +125,7 @@ func NewCallbackHandler(cfg *platform.Config, signer *Signer, idVerifier identit
 			renderLoginError(c, logger, "signing session cookie failed")
 			return
 		}
-		setCookie(c, sessionCookieName, sessionValue, int(sessionTTL.Seconds()))
+		setCookie(c, sessionCookieName, sessionValue, int(sessionTTL.Seconds()), secure)
 
 		c.Redirect(http.StatusFound, "/")
 	}

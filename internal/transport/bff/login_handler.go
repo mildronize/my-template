@@ -34,6 +34,11 @@ func randomState() (string, error) {
 // authorize endpoint with the corresponding S256 code_challenge always
 // present in the URL (I11).
 func NewLoginHandler(cfg *platform.Config, signer *Signer, logger *slog.Logger) gin.HandlerFunc {
+	// Parsed once here, at handler-construction time (wireBFF calls this
+	// once at startup), not per-request — see middleware.go's
+	// secureFromURL doc comment (task-10).
+	secure := secureFromURL(cfg.AuthAudience)
+
 	return func(c *gin.Context) {
 		if !configured(cfg) {
 			renderLoginError(c, logger, "owner login not configured — SSO_ISSUER/SSO_CLIENT_ID/SSO_CLIENT_SECRET/AUTH_AUDIENCE must all be set (see docs/GETTING-STARTED.md Step 1)")
@@ -52,7 +57,7 @@ func NewLoginHandler(cfg *platform.Config, signer *Signer, logger *slog.Logger) 
 			renderLoginError(c, logger, "signing state cookie failed")
 			return
 		}
-		setCookie(c, stateCookieName, cookieValue, int(stateTTL.Seconds()))
+		setCookie(c, stateCookieName, cookieValue, int(stateTTL.Seconds()), secure)
 
 		authURL := oauthConfig(cfg).AuthCodeURL(state, oauth2.S256ChallengeOption(verifier))
 		c.Redirect(http.StatusFound, authURL)
