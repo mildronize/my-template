@@ -3,6 +3,21 @@
 # pinned versions never collide with another repo's on the same machine.
 BIN_DIR := $(CURDIR)/bin
 
+# GO_PKGS is `./...` minus anything under node_modules. web/ sits inside
+# this module's root, and an npm dependency can ship its own .go file
+# (e.g. web/node_modules/flatted/golang/pkg/flatted/flatted.go, present
+# as of milestone-3) — `go list`/`./...` has no concept of "npm
+# dependency" and doesn't skip node_modules the way it skips testdata/
+# and dot- or underscore-prefixed directories, so every Go tool that
+# resolves packages from the module root would otherwise pick it up.
+# Harmless today because that file happens to compile/vet cleanly, but
+# `npm install` should never be able to introduce code that affects the
+# Go build, vet, or test surface — use $(GO_PKGS) instead of ./... in
+# build/vet/test below. Do not "simplify" this back to ./... — that
+# silently reopens the exposure the moment some transitive npm package
+# ships a .go file that doesn't compile/vet/pass cleanly.
+GO_PKGS = $(shell go list ./... | grep -v '/node_modules/')
+
 .PHONY: tools
 tools:
 	GOBIN=$(BIN_DIR) go install github.com/sqlc-dev/sqlc/cmd/sqlc
@@ -68,11 +83,11 @@ web-build:
 # than two independent ones a caller might reorder or skip.
 .PHONY: build
 build: web-build
-	go build ./...
+	go build $(GO_PKGS)
 
 .PHONY: vet
 vet:
-	go vet ./...
+	go vet $(GO_PKGS)
 
 # web-test runs web/'s own Vitest suite (`npm test` → `vitest run`,
 # web/package.json) — its own target so it's independently invokable, the
@@ -96,11 +111,18 @@ web-test:
 
 .PHONY: test
 test: web-test
-	go test ./...
+	go test $(GO_PKGS)
 
+# fmt-check is a raw filesystem walk (gofmt), not a go list/./...
+# package resolution — GO_PKGS above has no effect on it, so it needs
+# its own, separate exclusion of web/node_modules. Walking only
+# `git ls-files '*.go'` keeps this to files the project actually
+# tracks, which has the same effect (node_modules is untracked, so it's
+# never walked) plus the added benefit of never flagging build
+# artifacts or other untracked .go files that might land in the tree.
 .PHONY: fmt-check
 fmt-check:
-	gofmt -l .
+	gofmt -l $$(git ls-files '*.go')
 
 .PHONY: run
 run:

@@ -253,18 +253,35 @@ type goListPackage struct {
 // transport-surface names are each their own Go package with their own
 // import list, so inspecting Imports per package is sufficient"), so they
 // share this one invocation instead of shelling out three separate times.
+//
+// -e (not plain `go list -json ./...`) matters here for the same reason
+// the Makefile's GO_PKGS does: web/ sits inside this module's root, so an
+// npm dependency's own .go file (e.g.
+// web/node_modules/flatted/golang/pkg/flatted) is part of `./...` too.
+// Without -e, a single such file with an import `go list` can't resolve
+// turns the whole `go list -json ./...` invocation into a nonzero exit —
+// require.NoError below would then fail every rule-3/4/5 test for a
+// reason that has nothing to do with this repo's own import graph. -e
+// makes go list tolerate per-package errors instead of aborting, and the
+// node_modules filter below then drops that package (and any error it
+// carries) before the rules ever see it — the same "npm install must
+// never affect Go tooling" guarantee the Makefile enforces for
+// build/vet/test/fmt-check.
 func goListPackages(t *testing.T, root string) map[string]goListPackage {
 	t.Helper()
-	cmd := exec.Command("go", "list", "-json", "./...")
+	cmd := exec.Command("go", "list", "-e", "-json", "./...")
 	cmd.Dir = root
 	out, err := cmd.Output()
-	require.NoError(t, err, "go list -json ./...")
+	require.NoError(t, err, "go list -e -json ./...")
 
 	pkgs := make(map[string]goListPackage)
 	dec := json.NewDecoder(strings.NewReader(string(out)))
 	for dec.More() {
 		var pkg goListPackage
-		require.NoError(t, dec.Decode(&pkg), "decoding `go list -json ./...` output")
+		require.NoError(t, dec.Decode(&pkg), "decoding `go list -e -json ./...` output")
+		if strings.Contains(pkg.ImportPath, "/node_modules/") {
+			continue
+		}
 		pkgs[pkg.ImportPath] = pkg
 	}
 	return pkgs
