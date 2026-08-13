@@ -15,13 +15,15 @@
 // one) — this is the one place a stored string becomes something มายด์'s
 // own browser executes.
 //
-// **No HTML string is ever produced, and React's raw-HTML escape hatch
-// (`internal/frontend_safety_test.go`'s own `TestI20_...` check greps
-// web/src for that identifier verbatim, so it is deliberately not spelled
-// out literally in this comment either) is never reached for.**
+// **No HTML string is ever produced, and `dangerouslySetInnerHTML` —
+// React's raw-HTML escape hatch — is never reached for.**
 // `react-markdown` parses to an AST and emits React elements directly —
 // there is no intermediate HTML string for a sanitiser to be bypassed on,
 // because there is no sanitiser and no HTML.
+// (`internal/frontend_safety_test.go`'s `TestI20_...` check greps web/src
+// for that identifier verbatim to prove this file-wide — comments
+// included; it strips comments before scanning, so naming the API here,
+// in prose explaining it is deliberately avoided, does not trip it.)
 //
 // What is actually doing the work here, same four points my-task's own
 // header documents (not re-verified independently for this port beyond

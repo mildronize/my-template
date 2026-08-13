@@ -25,12 +25,34 @@ package internal
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// jsBlockCommentRe and jsLineCommentRe strip JS/TS comments before the
+// scan below runs — the same fix, for the same reason, as
+// internal/dbquery/tableisolation.go's stripSQLLineComments: a substring
+// scan cannot tell a real usage of the forbidden API from a comment that
+// merely NAMES it while explaining it is deliberately avoided ("this file
+// never reaches for dangerouslySetInnerHTML"), and this file's own
+// original header comment did exactly that, tripping itself as a false
+// positive (task-7's report). Block comments are stripped first — a
+// line-comment strip alone would leave a multi-line /* ... */ block's own
+// interior text unstripped past its first line.
+var (
+	jsBlockCommentRe = regexp.MustCompile(`(?s)/\*.*?\*/`)
+	jsLineCommentRe  = regexp.MustCompile(`//[^\n]*`)
+)
+
+func stripJSComments(content string) string {
+	content = jsBlockCommentRe.ReplaceAllString(content, "")
+	content = jsLineCommentRe.ReplaceAllString(content, "")
+	return content
+}
 
 // frontendSourceExtensions is every file type web/src actually holds
 // application code in — deliberately broad (not just .tsx) since
@@ -72,6 +94,35 @@ func frontendSourceFiles(t *testing.T, webSrcDir string) []string {
 	})
 	require.NoErrorf(t, err, "walking %s", webSrcDir)
 	return files
+}
+
+// --- comment-prose regression (found the same day, in this file's own
+// first version — task-7's report: Markdown.tsx's own header comment,
+// explaining in prose that the forbidden API is never used, tripped this
+// exact check as a false positive) ---
+
+func TestStripJSComments_IgnoresProseNamingTheForbiddenAPIInALineComment(t *testing.T) {
+	content := "// this file never uses dangerouslySetInnerHTML, on purpose\nconst x = 1;"
+	got := stripJSComments(content)
+	assert.NotContains(t, got, dangerouslySetInnerHTMLIdentifier,
+		"a line comment merely naming the API in prose must not survive stripping")
+	assert.Contains(t, got, "const x = 1;", "real code outside the comment must survive stripping")
+}
+
+func TestStripJSComments_IgnoresProseNamingTheForbiddenAPIInABlockComment(t *testing.T) {
+	content := "/*\n * dangerouslySetInnerHTML is deliberately never reached for here.\n */\nconst x = 1;"
+	got := stripJSComments(content)
+	assert.NotContains(t, got, dangerouslySetInnerHTMLIdentifier,
+		"a multi-line block comment merely naming the API in prose must not survive stripping")
+	assert.Contains(t, got, "const x = 1;")
+}
+
+func TestStripJSComments_StillCatchesRealUsageOutsideAComment(t *testing.T) {
+	content := "// safe rendering below\nconst el = <div dangerouslySetInnerHTML={{ __html: body }} />;"
+	got := stripJSComments(content)
+	assert.Contains(t, got, dangerouslySetInnerHTMLIdentifier,
+		"real code outside any comment must survive stripping — this is the positive control proving "+
+			"the strip doesn't just hide everything")
 }
 
 // meetsI20Floor is this check's own floor rule, the same shape as I15's
@@ -129,7 +180,7 @@ func TestI20_FrontendNeverUsesDangerouslySetInnerHTML(t *testing.T) {
 		data, err := os.ReadFile(path)
 		require.NoErrorf(t, err, "reading %s", path)
 		rel := strings.TrimPrefix(path, root+string(filepath.Separator))
-		assert.NotContainsf(t, string(data), dangerouslySetInnerHTMLIdentifier,
+		assert.NotContainsf(t, stripJSComments(string(data)), dangerouslySetInnerHTMLIdentifier,
 			"%s must never use %s — I20 forbids comment bodies (or anything else) reaching the DOM as raw "+
 				"HTML; render through the shared row component's Markdown-to-React-elements path instead",
 			rel, dangerouslySetInnerHTMLIdentifier)
