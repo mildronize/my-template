@@ -36,9 +36,16 @@ applied here to a removed field: sending `done` in a write body is a
 the new fields above. **No owner-scoping filter on `GET /todos`
 anymore** — returns every todo, not just the caller's own (I3 no longer
 applies to this domain). `POST` accepts `title` (required) and optionally
-`status`/`assigneeId`/`priority`/`dueDate`; the created event this
-produces is `type: "created"`, never client-specifiable as a distinct
-write (I16).
+`assigneeId`/`priority`/`dueDate`. **Not `status`** — every created todo
+starts `open` regardless of what a caller asks for, deliberately (Clara's
+decision, not a residual gap): มายด์'s own walkthrough only requires
+*changing* a todo's status after it exists, never setting one at
+creation, so `open` as the universal starting point already satisfies
+the brief. The asymmetry with `assigneeId`/`priority`/`dueDate` being
+settable at create is intentional, not an oversight — on มายด์'s
+acceptance list as something he's told, not a gate. The created event
+this produces is `type: "created"`, never client-specifiable as a
+distinct write (I16).
 
 **`DELETE /api/v1/todos/:id` — removed.** Finishing a todo means
 `PATCH`ing `status` to `closed` (owner-only, I18) or `done` (any actor).

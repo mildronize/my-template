@@ -139,7 +139,17 @@ func TestRepo_ListAPIKeysByOwner_ExcludesRevoked_IncludesExpired_OwnRowsOnly(t *
 		"a revoked key must be excluded, an expired-but-unrevoked key must still show up, and another owner's key must never leak in")
 }
 
-func TestRepo_RevokeAPIKeyScopedToOwner(t *testing.T) {
+// TestI3_RevokeAPIKeyScopedToOwner_AbsenceNotPermission is I3's
+// repo-layer proof for this package — internal/invariants_test.go's
+// TestDoneWhen12 requires a dedicated TestI3_ test inside every package
+// perDomainModuleScopePackages names, and internal/identity is one of
+// them (I3's ownership-scoping applies to key-listing/revocation, not
+// just todos). This test already existed as TestRepo_RevokeAPIKeyScoped-
+// ToOwner and already proved the property — renamed only, to carry the
+// naming convention the check greps for; the transport-layer half of I3
+// (404 not 403 on someone else's key) lives separately in
+// keys_handler_test.go's own TestI3_ tests.
+func TestI3_RevokeAPIKeyScopedToOwner_AbsenceNotPermission(t *testing.T) {
 	ctx := context.Background()
 	repo := NewRepo(newTestDB(t))
 
@@ -227,17 +237,22 @@ func TestRepo_DisableOtherAPIKeys_RevokesEverythingExceptKeepID_ScopedToOwner(t 
 // internal/domain/todo/repo_test.go's TestI4_TodoRepoOnlyQueriesTodosTable):
 // internal/identity's repo must only ever query users/api_keys, and must
 // never query a table that belongs to a different domain module (todos,
-// or whatever a fork replaces it with). Checked statically against the
-// sqlc query source each repo.go is generated from (db/queries/*.sql),
-// via internal/dbquery — the single shared implementation behind this
-// check and internal/domain/todo's equivalent, so the two can't drift into
-// two different (and, as task-8 found, differently buggy) copies of the
-// same logic. The forbidden-table set is derived dynamically from whatever
-// db/queries/*.sql files exist, never hardcoded — see
-// internal/dbquery's doc comment for the regression this fixes (an
-// earlier version of this test hardcoded "todos" as the only forbidden
-// table, which kept "passing" even after a fork deleted todos and added
-// an entirely different table it never checked for).
+// or whatever a fork replaces it with) — except through an explicit,
+// mechanically-enforced read-only grant (dbquery.ReadOnlyGrants).
+//
+// Checked statically against the sqlc query source each repo.go is
+// generated from (db/queries/*.sql), via internal/dbquery — the single
+// shared implementation behind this check and internal/domain/todo's
+// equivalent, so the two can't drift into two different (and, as task-8
+// found, differently buggy) copies of the same logic. Ownership is an
+// explicit map (dbquery.TableOwnership), never derived by scanning other
+// files' content — see internal/dbquery's own doc comment for why an
+// earlier, scan-and-guess version of this mechanism got two things wrong:
+// first a hardcoded forbidden-table list that passed vacuously once a
+// fork's tables changed underneath it, then (milestone-4) a heuristic
+// that could not tell a legitimate cross-module read from an ownership
+// claim, misattributing "users" to todo_events.sql because its feed
+// query legitimately JOINs it.
 //
 // This is I4's dedicated identity-module test, added in task-7 once
 // _contract/INVARIANTS.md tagged I4 `scope: per-domain-module`
@@ -253,11 +268,11 @@ func TestI4_IdentityRepoOnlyQueriesUsersAndAPIKeysTables(t *testing.T) {
 	root := repoRootForTests(t)
 	queriesDir := filepath.Join(root, "db", "queries")
 
-	// users.sql and api_keys.sql both belong to this same module — passing
-	// each other as sameModuleFiles means a query joining them (e.g.
-	// resolving an API key's owning user) stays I4-legal, while a
-	// reference to any *other* module's table (todos, or whatever a fork
-	// replaces it with) is still forbidden.
-	dbquery.AssertQueryFileReferencesOnlyOwnTable(t, queriesDir, "users.sql", "users", "api_keys.sql")
-	dbquery.AssertQueryFileReferencesOnlyOwnTable(t, queriesDir, "api_keys.sql", "api_keys", "users.sql")
+	// users.sql and api_keys.sql both belong to the same module
+	// (dbquery.TableOwnership) — a query joining them (e.g. resolving an
+	// API key's owning user) is automatically I4-legal from that alone, no
+	// per-call exemption list needed; a reference to any *other* module's
+	// table is still forbidden unless explicitly granted.
+	dbquery.AssertQueryFileReferencesOnlyOwnTable(t, queriesDir, "users.sql", "users")
+	dbquery.AssertQueryFileReferencesOnlyOwnTable(t, queriesDir, "api_keys.sql", "api_keys")
 }

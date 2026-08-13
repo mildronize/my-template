@@ -349,11 +349,33 @@ caught a missing invariant test.
 - **Clara is keeping a running list of things มายด์ would want to know at
   acceptance, not now** — I21 (the owner deliberately seeing every
   agent's keys), the `done`→`status` migration mapping and its
-  visibility consequence, and TPL-3 (not this milestone's — noted only
-  because Clara mentioned it, not investigated). Anything that would make
-  him angry to learn late is an interrupt to Clara, not a list item — bias
+  visibility consequence, TPL-3 (not this milestone's — noted only
+  because Clara mentioned it, not investigated), and **`status` is not
+  settable on `POST /todos` (Clara's decision)** — every new todo starts
+  `open` regardless of what a caller asks for; `assigneeId`/`priority`/
+  `dueDate` ARE settable at creation, only `status` is not. Deliberate,
+  not an oversight: มายด์'s own walkthrough only requires *changing* a
+  todo's status after it exists, never setting one at creation, and
+  `open` as the universal starting point satisfies that. `_contract/
+  API.md` originally said `status` was optionally acceptable at create;
+  task-3's implementation couldn't (`CreateInput` has no such field) and
+  flagged the gap rather than silently working around it; Clara took the
+  gap as the decision rather than routing a fix. Contract and OpenAPI spec
+  updated to state this as intentional, not a residual TODO. A small
+  shape choice he might have opinions about — he should hear it from us,
+  not discover the asymmetry himself. Anything that would make him angry
+  to learn late is an interrupt to Clara, not a list item — bias
   toward telling her rather than deciding something is list-shaped
   unilaterally.
+- **I4's contract text was amended (`_rules/_contract/INVARIANTS.md`,
+  same shape as the I3 scope note)** — a query file may now *read* (never
+  write) a table it doesn't own, but only through an explicit, named,
+  mechanically-enforced grant (`internal/dbquery.ReadOnlyGrants`); today's
+  one grant lets the cross-todo activity feed show an agent's handle/role
+  alongside their events. Clara's call, stated as a clarification of what
+  I4 always meant in practice, not a weakening. Internal engineering, does
+  not touch มายด์'s walkthrough — on his told-list, not a gate, same as
+  I21 and the migration mapping above.
 - **The no-browser-automation limit is a known, accepted gap for this
   milestone specifically**, not a general policy — Clara confirmed
   directly (checked for a fleet-wide `docker-playwright` skill, found it

@@ -379,12 +379,14 @@ components:
       description: >
         `additionalProperties: false` so a stray `done` (milestone-1/2/3's
         removed field) is a `validation_error`, not silently dropped
-        (`_contract/API.md`). No `status` field: `CreateTodo`'s current
-        service signature (`internal/domain/todo/service.go`'s
-        `CreateInput`) has no way to accept one — every created todo
-        starts `open` regardless of what a caller might ask for. Flagged
-        in task-3's own report as a real gap against `_contract/API.md`'s
-        "optionally status" text, not silently worked around here.
+        (`_contract/API.md`). No `status` field, deliberately (Clara's
+        decision, not a residual gap): every created todo starts `open`
+        regardless of what a caller might ask for. มายด์'s own walkthrough
+        only requires *changing* a todo's status after it exists, never
+        setting one at creation, so `open` as the universal starting
+        point already satisfies the brief. The asymmetry with
+        `assigneeId`/`priority`/`dueDate` being settable here is
+        intentional — `_contract/API.md` states the same reasoning.
       required: [title, clientRequestId]
       properties:
         title:

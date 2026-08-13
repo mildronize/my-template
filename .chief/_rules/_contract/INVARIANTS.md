@@ -80,6 +80,25 @@ establish who's calling. Handlers receive an already-resolved actor; they
 never do their own lookup against those tables. Practical form: "one repo,
 one table" per domain module.
 
+*Clarification (milestone-4 — of what this always meant in practice, not a
+weakening; the mechanism enforcing this changed and the text has to say
+what it actually enforces, not what a reader's own reasonable-sounding
+gloss on "one repo, one table" might otherwise assume):* **a query file
+may read (never write) a table it does not own, but only via an explicit,
+named, per-file grant** — `internal/dbquery.ReadOnlyGrants`, enforced
+mechanically (a grant does not make a table's writes legal; `INTO`/
+`UPDATE` against a granted table still fails this invariant, checked
+directly against the SQL text, not trusted to the grantor's stated
+intent) and required to be exercised (an unused grant is itself a
+failure, not a permanent dormant exemption). Today's one grant:
+`todo_events.sql` may read `users` (the cross-todo activity feed's actor
+handle/role), because it displays identity data, never decides anything
+from it. Without this clarification, a cross-module read looks equally
+forbidden under "one repo, one table" as written — the milestone-4
+mechanism that implements the distinction was found to be a *reading* of
+the text, not something the text itself said, which is a trap for
+whoever reads I4 next without also reading the mechanism.
+
 **I5 — 401 never leaks why.** `scope: global`
 Missing credential, malformed credential, expired key, revoked key,
 expired JWT, wrong issuer/audience, and the I2/I12 role-rejections all

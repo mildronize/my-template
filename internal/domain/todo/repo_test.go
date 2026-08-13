@@ -408,34 +408,38 @@ func TestRepo_WithinTx_CommitsOnSuccess(t *testing.T) {
 // applied here as "one repo, one table" for the non-identity side of that
 // boundary): db/queries/todos.sql must only ever reference the todos
 // table, never a table owned by a different domain module (users/
-// api_keys). Unchanged from before this task (task-1/milestone-1) other
-// than living in the rewritten repo_test.go — restored here rather than
-// dropped, since internal/invariants_test.go's TestDoneWhen12 requires a
-// dedicated TestI4_ test inside every domain module's own package
-// (per-domain-module scope) and this is that test.
+// api_keys) — except through an explicit, mechanically-enforced read-only
+// grant (dbquery.ReadOnlyGrants). Unchanged in shape from before this task
+// (task-1/milestone-1) other than living in the rewritten repo_test.go —
+// restored here rather than dropped, since internal/invariants_test.go's
+// TestDoneWhen12 requires a dedicated TestI4_ test inside every domain
+// module's own package (per-domain-module scope) and this is that test.
 //
-// todo_events.sql is passed as a sameModuleFiles argument: both files
-// belong to this one domain module (internal/domain/todo owns both the
-// todos and todo_events tables, across two query files, the same shape
-// internal/identity already uses for users.sql/api_keys.sql) — legitimate
-// for todo_events.sql to reference todos (its own FK/JOIN target) without
-// that tripping "belongs to a different module's query file".
+// todos.sql and todo_events.sql both belong to the same module
+// (dbquery.TableOwnership: both "todo") — a query referencing both is
+// automatically I4-legal from that alone, no per-call exemption list
+// needed, the same shape internal/identity's own test uses for
+// users.sql/api_keys.sql.
 //
-// todo_events.sql's ListTodoEventsFeed query *also* legitimately joins
-// users (for the cross-todo feed's actor handle/role — a decided,
-// existing read, not something this task added), which is a genuinely
-// different module's table, not this one's. internal/dbquery's
-// AssertQueryFileReferencesOnlyOwnTable has no way to say "this table is
-// legitimately read, not owned, by this file" — only "same module,
-// exempt entirely" or "different module, forbidden entirely" — so that
-// join can't be allowed here without also suppressing the check on
-// todo_events.sql's real cross-module reference. Left exactly as
-// generated (not scanned by this test — see this task's own report for
-// the same limitation breaking internal/identity's equivalent check, from
-// the other direction: todo_events.sql referencing users).
+// todo_events.sql is now ALSO checked as its own subject file below —
+// this was NOT true when this comment (and this test's original design)
+// was first written. That first version found that ListTodoEventsFeed's
+// legitimate JOIN to users (identity's table, for the feed's actor
+// handle/role) had no way to be expressed under the old mechanism's
+// binary "same module: exempt" / "different module: forbidden" model, and
+// resolved it by never checking todo_events.sql as a subject at all —
+// which meant this test could not have caught a real violation in that
+// file, by construction, and the explanation of why read as diligence
+// while carrying the same information as "this file is not examined."
+// Flagged as its own finding (not a design note) once recognized as that
+// shape; internal/dbquery's redesign (explicit TableOwnership +
+// dbquery.ReadOnlyGrants, read-only enforced mechanically, unused grants
+// themselves asserted exercised) closes the gap this comment used to
+// describe — see internal/dbquery's own doc comment for the full history.
 func TestI4_TodoRepoOnlyQueriesTodosTable(t *testing.T) {
 	root := repoRootForTests(t)
 	queriesDir := filepath.Join(root, "db", "queries")
 
-	dbquery.AssertQueryFileReferencesOnlyOwnTable(t, queriesDir, "todos.sql", "todos", "todo_events.sql")
+	dbquery.AssertQueryFileReferencesOnlyOwnTable(t, queriesDir, "todos.sql", "todos")
+	dbquery.AssertQueryFileReferencesOnlyOwnTable(t, queriesDir, "todo_events.sql", "todo_events")
 }

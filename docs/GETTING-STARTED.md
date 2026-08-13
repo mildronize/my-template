@@ -954,7 +954,12 @@ In short, so the choices below can be made informed even if you don't:
   identity's. In practice this is checked as "one repo, one table (or
   table-set)" per domain module — `TestI4_TodoRepoOnlyQueriesTodosTable`,
   its `internal/identity` equivalent — statically, against the sqlc query
-  source.
+  source, via `internal/dbquery`'s explicit `TableOwnership` map (not
+  guessed by scanning). A module may *read* (never write) a table it
+  doesn't own, but only through an explicit, named
+  `dbquery.ReadOnlyGrants` entry, enforced mechanically — writing to a
+  granted table still fails this check regardless of the grant
+  (`_rules/_contract/INVARIANTS.md`'s I4 clarification, milestone-4).
 
 A new invariant needs both an `INVARIANTS.md` entry and a `TestI<N>_`
 test — the check in `internal/invariants_test.go` enforces the second
