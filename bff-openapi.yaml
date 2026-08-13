@@ -1,0 +1,309 @@
+openapi: 3.0.3
+info:
+  title: my-template BFF API
+  version: "1.0.0"
+  description: >
+    The BFF's session-authenticated JSON surface (milestone-3
+    `.chief/milestone-3/_contract/API.md`), consumed only by the SPA
+    running in the owner's own browser. Every request authenticates over
+    a signed, HttpOnly session cookie, resolved by
+    `internal/transport/bff`'s own session middleware
+    (`bff.RequireJSONSession`) — not by anything in this spec: no
+    `security` scheme is declared here on purpose, for the exact same
+    reason `openapi.yaml`'s own header comment gives for that file: this
+    spec's job is request/response *shape* validation (`gin-middleware`),
+    not auth. A second, independent file from `openapi.yaml` on purpose
+    (`_contract/API.md` "Two specs, not one") — the public API
+    (Bearer-authenticated, agent-facing) and this BFF surface
+    (session-authenticated, owner-facing browser only) are two disjoint
+    proof-of-identity mechanisms by construction (I2/I12), and a single
+    shared spec file would blur that boundary even though the code
+    enforces it.
+
+    Deliberately absent from this surface: `POST /todos` aside, there is
+    no key issuance or rotation endpoint here (no `POST /keys`, no
+    rotate) — same reasoning `openapi.yaml`'s own `/keys/{id}` comment
+    gives: a raw key can't be returned safely over an HTTP response, so
+    issuance and rotation stay CLI-only regardless of which surface is
+    asking (`_contract/API.md`, `milestone-3/_goal/GOAL.md` Done-when 5).
+servers:
+  - url: /api/bff
+paths:
+  /me:
+    get:
+      operationId: getMe
+      summary: Session-check endpoint backing the SPA's AuthGate-equivalent hook.
+      description: >
+        Same response shape as the public API's `GET /api/v1/me`,
+        deliberately — one response shape for "who am I," regardless of
+        which surface asked.
+      responses:
+        "200":
+          description: The signed-in owner.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /todos:
+    get:
+      operationId: listTodos
+      summary: List the caller's own todos.
+      description: >
+        Returns only the session owner's own todos, created_at
+        descending, unpaginated — same shape and same no-pagination
+        reasoning as `_rules/_contract/API.md`'s `GET /api/v1/todos`.
+      responses:
+        "200":
+          description: The caller's own todos.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TodoList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      operationId: createTodo
+      summary: Create a todo owned by the caller.
+      description: >
+        `owner_id` is always the resolved session owner — never accepted
+        from the body (I1, same rule, different auth mechanism). `done`
+        starts false. Calls `internal/domain/todo.Service.CreateTodo`
+        directly — the same service instance and method the public API's
+        handler calls (`_rules/_standard/ARCHITECTURE.md`'s
+        shared-service-layer rule).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTodoRequest"
+      responses:
+        "201":
+          description: The created todo.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Todo"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /todos/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getTodo
+      summary: Get one of the caller's own todos.
+      description: >
+        Owner-scoped (I3): another owner's id, or an id that never
+        existed, both return `not_found` — never `forbidden`.
+      responses:
+        "200":
+          description: The todo.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Todo"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: updateTodo
+      summary: Update one of the caller's own todos.
+      description: Owner-scoped, same 404 rule as GET.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTodoRequest"
+      responses:
+        "200":
+          description: The updated todo.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Todo"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteTodo
+      summary: Delete one of the caller's own todos.
+      description: >
+        Owner-scoped, same 404 rule. Deleting an already-deleted id is
+        also `not_found` (naturally idempotent, same as the public API).
+      responses:
+        "204":
+          description: Deleted.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /keys:
+    get:
+      operationId: listKeys
+      summary: List the caller's own non-revoked API keys.
+      description: >
+        Same response shape as `_rules/_contract/API.md`'s
+        `GET /api/v1/keys`. Calls `internal/identity.Service.ListAPIKeys`
+        directly — same service, same method, session-resolved owner
+        instead of Bearer-resolved actor.
+      responses:
+        "200":
+          description: The caller's own non-revoked keys.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKeyList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /keys/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      operationId: revokeKey
+      summary: Revoke one of the caller's own API keys.
+      description: >
+        Sets `revoked_at`. Owner-scoped, same 404 rule. Calls
+        `internal/identity.Service.RevokeAPIKey` directly. Deliberately
+        no `POST /keys` and no rotate endpoint anywhere on this surface —
+        see this file's `info.description`.
+      responses:
+        "204":
+          description: Revoked.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+components:
+  schemas:
+    Me:
+      type: object
+      required: [handle, role, active]
+      properties:
+        handle:
+          type: string
+        role:
+          type: string
+        active:
+          type: boolean
+    Todo:
+      type: object
+      required: [id, title, done, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        done:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    TodoList:
+      type: object
+      required: [todos]
+      properties:
+        todos:
+          type: array
+          items:
+            $ref: "#/components/schemas/Todo"
+    ApiKey:
+      type: object
+      required: [id, prefix, createdAt, expiresAt]
+      properties:
+        id:
+          type: string
+        prefix:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+    ApiKeyList:
+      type: object
+      required: [keys]
+      properties:
+        keys:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApiKey"
+    CreateTodoRequest:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+    UpdateTodoRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        done:
+          type: boolean
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            hint:
+              type: string
+  responses:
+    BadRequest:
+      description: The request violates a request-shape or validation rule.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: >
+        Missing, expired, or wrong-role session cookie — same shape
+        regardless of which check failed (I5). A behavior change from
+        this package's own HTML `GET /` view: this JSON surface always
+        answers 401, never a redirect (a `fetch` call can't follow a
+        redirect the way a browser navigation does — the SPA's own
+        AuthGate-equivalent hook is what turns a 401 into a redirect,
+        client-side).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: >
+        Unknown id, or an id that exists but isn't the caller's (I3 —
+        absence, not permission).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"

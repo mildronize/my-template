@@ -1,5 +1,10 @@
 # Invariants
 
+**Superseded 2026-08-13 — promoted to `.chief/_rules/_contract/INVARIANTS.md`
+in milestone-2** (which also adds I11–I14 and corrects I7). This file is
+historical; the promoted copy is the live authority.
+
+
 Numbered so `API.md`, `DATA_MODEL.md`, and test names can point at a
 specific one instead of re-describing it. Authority for the auth-related
 invariants (I2, I6, I7, I9, I10) is

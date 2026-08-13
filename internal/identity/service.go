@@ -36,6 +36,11 @@ type APIKeyRepo interface {
 	CreateAPIKey(ctx context.Context, userID, keyHash, keyPrefix string, expiresAt time.Time) (APIKey, error)
 	ListAPIKeysByOwner(ctx context.Context, userID string) ([]APIKey, error)
 	RevokeAPIKey(ctx context.Context, id, userID string) (APIKey, error)
+	// DisableOtherAPIKeys revokes every one of userID's still-live keys
+	// except keepID (Rotate's I13 second step) — see repo.go's doc comment
+	// for why this is built from ListAPIKeysByOwner+RevokeAPIKey rather
+	// than a new sqlc query.
+	DisableOtherAPIKeys(ctx context.Context, userID, keepID string) (int, error)
 }
 
 // JWTVerifier verifies a Bearer token as an SSO-issued JWT (task-2.md
@@ -62,6 +67,16 @@ type Service struct {
 	JWT     JWTVerifier // nil disables the JWT branch entirely (dormant seam, GOAL.md)
 	Logger  *slog.Logger
 	Now     Clock
+
+	// rotateAfterNewKeyIssued, if non-nil, is invoked by Rotate right after
+	// the new key has been stored (and is therefore already queryable) but
+	// before any old key has been touched. It exists solely so
+	// TestI13_RotateIssuesNewKeyBeforeDisablingOld (service_test.go) has an
+	// observable sequencing point mid-call: asserting on Rotate's return
+	// value alone only proves both things are eventually true, not which
+	// happened first. Unexported and unset in production — nothing outside
+	// this package (and its own tests) can reach it.
+	rotateAfterNewKeyIssued func(newKey APIKey)
 }
 
 // NewService wires a Service from its dependencies. jwtVerifier may be
@@ -296,6 +311,70 @@ func (s *Service) IssueAPIKeyForHandle(ctx context.Context, handle string) (KeyI
 	}
 
 	return KeyIssuanceResult{User: user, APIKey: key, RawKey: raw}, nil
+}
+
+// RotateResult is what cmd/issue-key's -rotate mode needs to print: the
+// same shape as KeyIssuanceResult, plus how many of the handle's prior
+// keys got disabled.
+type RotateResult struct {
+	User   User
+	APIKey APIKey
+	// RawKey exists only here, in memory, at rotation time — never stored
+	// (I8), same rule as KeyIssuanceResult.RawKey.
+	RawKey string
+	// RevokedCount is how many of handle's previously-live keys Rotate
+	// disabled as its second step. Usually 1, but never assumed to be —
+	// see DisableOtherAPIKeys's doc comment.
+	RevokedCount int
+}
+
+// Rotate implements I13 (_rules/_contract/INVARIANTS.md): it issues a
+// brand-new key for handle FIRST, and only once that key exists and is
+// queryable does it disable every other live key handle already held.
+// This is the reverse of my-task's actual (undocumented) `cmdRotate`
+// ordering (`agent.ts` lines 236-256: disableAllKeysFor before issueKey),
+// which produces a real gap where the caller holds zero valid keys between
+// the two calls. Deliberately NOT extended into a longer dual-valid grace
+// period beyond that reorder — see INVARIANTS.md I13's own reasoning
+// (rotation here is primarily leak response; widening the compromised
+// key's remaining validity window is the wrong direction for that case).
+//
+// Unlike IssueAPIKeyForHandle, Rotate never creates a users row — handle
+// must already exist (ErrNotFound if not). There is nothing to "rotate"
+// for a handle nothing was ever issued to.
+func (s *Service) Rotate(ctx context.Context, handle string) (RotateResult, error) {
+	user, err := s.Users.GetUserByHandle(ctx, handle)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return RotateResult{}, fmt.Errorf("rotating key for %q: %w", handle, ErrNotFound)
+		}
+		return RotateResult{}, fmt.Errorf("looking up user %q: %w", handle, err)
+	}
+
+	raw, err := generateRawAPIKey()
+	if err != nil {
+		return RotateResult{}, fmt.Errorf("generating key: %w", err)
+	}
+	hash := HashAPIKey(raw)
+	prefix := raw[:apiKeyPrefixLength]
+
+	// Step 1 (I13): issue the new key first.
+	newKey, err := s.APIKeys.CreateAPIKey(ctx, user.ID, hash, prefix, s.now().Add(apiKeyTTL))
+	if err != nil {
+		return RotateResult{}, fmt.Errorf("storing new key: %w", err)
+	}
+
+	if s.rotateAfterNewKeyIssued != nil {
+		s.rotateAfterNewKeyIssued(newKey)
+	}
+
+	// Step 2 (I13): only now disable whatever handle held before.
+	revokedCount, err := s.APIKeys.DisableOtherAPIKeys(ctx, user.ID, newKey.ID)
+	if err != nil {
+		return RotateResult{}, fmt.Errorf("disabling old key(s): %w", err)
+	}
+
+	return RotateResult{User: user, APIKey: newKey, RawKey: raw, RevokedCount: revokedCount}, nil
 }
 
 // generateRawAPIKey returns a new "tpl_<64 hex chars>" raw key. The first

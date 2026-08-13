@@ -1,7 +1,9 @@
 // Package identity owns the users and api_keys tables and the
-// actor-resolution middleware (API key -> JWT -> reject). Unlike
-// internal/todo, keep this directory on fork — every service built from
-// this template needs its own identity/auth seam.
+// actor-resolution logic (API key -> JWT -> reject) behind them — see
+// doc.go for why the gin middleware that drives it lives in
+// internal/transport/publicapi instead. Unlike internal/domain/todo, keep
+// this directory on fork — every service built from this template needs
+// its own identity/auth seam.
 package identity
 
 import (
@@ -222,4 +224,33 @@ func (r *Repo) RevokeAPIKey(ctx context.Context, id, userID string) (APIKey, err
 		return APIKey{}, err
 	}
 	return apiKeyFromRow(row), nil
+}
+
+// DisableOtherAPIKeys revokes every one of userID's still-live keys except
+// keepID, returning how many it revoked. This is service.go's Rotate
+// (I13) calling in, after it has already issued and stored the key it
+// passes as keepID — deliberately built from ListAPIKeysByOwner +
+// RevokeAPIKey (both already I4-legal, already tested) rather than a new
+// sqlc query, so I4 ("one repo, one table" per domain module) doesn't grow
+// a second db/queries/*.sql surface just for this. A key that was already
+// revoked before this call (e.g. one the owner revoked by hand earlier) is
+// simply skipped, not double-counted or errored on — ListAPIKeysByOwner
+// already excludes it.
+func (r *Repo) DisableOtherAPIKeys(ctx context.Context, userID, keepID string) (int, error) {
+	live, err := r.ListAPIKeysByOwner(ctx, userID)
+	if err != nil {
+		return 0, err
+	}
+
+	count := 0
+	for _, key := range live {
+		if key.ID == keepID {
+			continue
+		}
+		if _, err := r.RevokeAPIKey(ctx, key.ID, userID); err != nil {
+			return count, err
+		}
+		count++
+	}
+	return count, nil
 }

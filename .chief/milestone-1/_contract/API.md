@@ -1,5 +1,10 @@
 # API contract
 
+**Superseded 2026-08-13 — promoted to `.chief/_rules/_contract/API.md` in
+milestone-2**, which sits beside a new `bff` surface documented in
+milestone-2's own `_contract/API.md`. This file is historical.
+
+
 One REST surface, `/api/v1`, OpenAPI-first (`openapi.yaml` at repo root —
 GOAL.md Decisions). No web UI, no session cookie, no tRPC — everything
 authenticates over `Authorization: Bearer <credential>`, where the

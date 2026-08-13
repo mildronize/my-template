@@ -22,6 +22,19 @@ services:
       # docs/DEPLOY-REQUIREMENTS.md.
       SSO_ISSUER: ""
       AUTH_AUDIENCE: ""
+      # SSO_CLIENT_ID/SSO_CLIENT_SECRET left unset the same way — owner
+      # login (internal/transport/bff) needs a Hydra client registered
+      # first (docs/GETTING-STARTED.md Step 1, scripts/register.sh), which
+      # this compose file's own local/smoke-test scope doesn't do for you.
+      # GET /login and GET /callback answer with a plain "not configured"
+      # page instead of a working flow until you set these.
+      SSO_CLIENT_ID: ""
+      SSO_CLIENT_SECRET: ""
+      # SESSION_SECRET is intentionally not set here either: cmd/server
+      # generates a random one at startup when it's empty (logging a
+      # warning), which is fine for this file's own local/smoke-test scope
+      # — it just means an owner session doesn't survive `docker compose
+      # restart`. Set it explicitly for any deployment where that matters.
     volumes:
       - sqlite-data:/app/data
     # No Docker healthcheck: the distroless runtime image ships neither a

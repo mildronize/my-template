@@ -46,16 +46,39 @@ const (
 	scopePerDomainModule = "per-domain-module"
 )
 
-// findInvariantsFiles globs for every INVARIANTS.md anywhere under
-// <root>/.chief/, rather than hardcoding a single milestone's path
-// (`.chief/milestone-1/_contract/INVARIANTS.md`) — a fork that
-// reorganizes `.chief/` (a new milestone directory, a renamed
-// `_contract/`) doesn't silently break this test's ability to find the
-// file it needs, and docs/GETTING-STARTED.md doesn't need to document
-// the coupling for the same reason: there's nothing fork-specific left
-// to get out of sync with.
+// promotedInvariantsPath is where a project-wide INVARIANTS.md lives once
+// promoted out of a single milestone (milestone-2's own
+// _rules/_contract/INVARIANTS.md is the first instance of this) — see
+// _rules/_standard/ARCHITECTURE.md's "Contract promotion" note. When this
+// file exists it is the *only* authority; a milestone's own _contract/
+// copy becomes history the moment its content is promoted, and must not
+// keep contributing to this check.
+const promotedInvariantsPath = ".chief/_rules/_contract/INVARIANTS.md"
+
+// findInvariantsFiles returns the file(s) that define the required
+// invariant set. If a promoted, project-wide INVARIANTS.md exists
+// (promotedInvariantsPath), it is the *only* input — not unioned with any
+// milestone's own copy, even a still-live one, because a promoted
+// document is supposed to be the one place this is defined. Without this
+// rule, a superseded milestone copy kept in-tree for history (this repo's
+// own convention — see ARCHITECTURE.md) would silently keep driving a
+// live check: editing the historical copy would change what's required,
+// and an invariant a later milestone deliberately retired would stay
+// demanded forever because an old copy still names it (found by Clara,
+// milestone-2, reviewing this exact promotion).
+//
+// Only when no promoted file exists does this fall back to globbing every
+// INVARIANTS.md under <root>/.chief/ and unioning them — this preserves
+// the original (milestone-1-era) behavior for a fork that never promotes
+// a contract at all, where "one file per milestone, no promotion yet" is
+// still the actual shape.
 func findInvariantsFiles(t *testing.T, root string) []string {
 	t.Helper()
+
+	promoted := filepath.Join(root, promotedInvariantsPath)
+	if _, err := os.Stat(promoted); err == nil {
+		return []string{promoted}
+	}
 
 	var paths []string
 	err := filepath.WalkDir(filepath.Join(root, ".chief"), func(path string, d fs.DirEntry, walkErr error) error {
@@ -211,6 +234,27 @@ func hasTestWithPrefix(names []string, prefix string) bool {
 // true; it matters more now that the check is per-module, since writing
 // an empty one to silence a real gap is a deliberate lie, not an
 // accidental miss.
+//
+// Second known limitation, same section of the doc (task-9, Clara's fifth
+// blind fork test): per-domain-module scope (above) requires *some*
+// TestI<N>_ test in the module's package, not one per layer. This repo's
+// own convention (internal/domain/todo) writes a separate
+// TestI3_Repo.../TestI3_Service.../TestI3_Handler... per module — but
+// nothing here requires that granularity, so renaming away only the
+// repo-layer test (leaving service/handler's alone) stays invisible to
+// this check: it still finds a TestI3_ match and reports the module
+// covered. Deliberately not hardened into a layer-aware check: I4 (the
+// other per-domain-module invariant) only ever has a repo-layer test by
+// nature — it's a static check against sqlc query source, not something a
+// service or handler layer would meaningfully re-test — so "require
+// Repo+Service+Handler" would be wrong for I4 the moment it was applied
+// uniformly, and a per-invariant table of which layers to require would
+// be exactly the kind of special-cased, drift-prone mechanism this
+// project has repeatedly found silent gaps behind elsewhere. A human
+// reviewer checking that a module's I3 coverage actually spans repo,
+// service, and handler — the same way "checks names, not bodies" already
+// asks a human to read the test body — is the deliberate choice here,
+// not an oversight.
 func TestDoneWhen12_EveryInvariantHasANamedTest(t *testing.T) {
 	root := repoRoot(t)
 	required := requiredInvariantNumbers(t, root)
@@ -220,7 +264,12 @@ func TestDoneWhen12_EveryInvariantHasANamedTest(t *testing.T) {
 	modules := domainModuleNames(t, root)
 	perModuleNames := make(map[string][]string, len(modules))
 	for _, module := range modules {
-		perModuleNames[module] = collectTestFuncNames(t, filepath.Join(root, "internal", module))
+		// domainModuleNames (internal/architecture_test.go) enumerates
+		// internal/domain/*'s own subdirectories post-restructure — join
+		// against that same path, not internal/<module> (milestone-1's
+		// path, before the domain/transport split moved every domain
+		// module one directory deeper).
+		perModuleNames[module] = collectTestFuncNames(t, filepath.Join(root, "internal", "domain", module))
 	}
 
 	for _, inv := range required {
@@ -236,7 +285,7 @@ func TestDoneWhen12_EveryInvariantHasANamedTest(t *testing.T) {
 		case scopePerDomainModule:
 			for _, module := range modules {
 				assert.Truef(t, hasTestWithPrefix(perModuleNames[module], prefix),
-					"no test named %s<something> found inside internal/%s's own package — "+
+					"no test named %s<something> found inside internal/domain/%s's own package — "+
 						"_contract/INVARIANTS.md's I%d (scope: per-domain-module) requires a dedicated test "+
 						"in every domain module, not just somewhere in the repo (GOAL.md Done-when 12; task-7)",
 					prefix, module, inv.number)

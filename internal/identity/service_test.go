@@ -120,6 +120,25 @@ func (f *fakeAPIKeyRepo) RevokeAPIKey(_ context.Context, id, userID string) (API
 	return APIKey{}, ErrNotFound
 }
 
+// DisableOtherAPIKeys mirrors repo.go's real implementation exactly
+// (ListAPIKeysByOwner-shaped filter, then revoke each) rather than a
+// shortcut, so a test exercising Service.Rotate against this fake is
+// exercising the same "list live, skip keepID, revoke the rest" shape the
+// real Repo does.
+func (f *fakeAPIKeyRepo) DisableOtherAPIKeys(_ context.Context, userID, keepID string) (int, error) {
+	count := 0
+	for hash, k := range f.byHash {
+		if k.UserID != userID || k.ID == keepID || k.RevokedAt != nil {
+			continue
+		}
+		now := time.Now()
+		k.RevokedAt = &now
+		f.byHash[hash] = k
+		count++
+	}
+	return count, nil
+}
+
 type fakeJWTVerifier struct {
 	sub   string
 	err   error
@@ -386,4 +405,88 @@ func TestIssueAPIKeyForHandle_ReusesExistingUser(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, users.createCalled)
 	assert.Equal(t, existing.ID, result.User.ID)
+}
+
+// --- I13: rotate issues the new key before disabling the old one(s) -------
+
+// TestI13_RotateIssuesNewKeyBeforeDisablingOld is I13's ordering proof.
+// End-state assertions alone ("the new key is live and the old key is
+// revoked, once Rotate returns") can't distinguish issue-then-disable from
+// my-task's actual disable-then-issue — both orderings reach the exact
+// same end state. This test instead uses Service's
+// rotateAfterNewKeyIssued hook as an observable sequencing point *inside*
+// the call: at the moment the hook fires (right after the new key is
+// stored, before DisableOtherAPIKeys has run), it independently queries
+// the fake repo and asserts both that the new key is already resolvable
+// by hash AND that every pre-existing key is still live. Only the real
+// issue-first ordering can make both of those true at that exact point —
+// disable-then-issue would show the old key(s) already revoked here.
+func TestI13_RotateIssuesNewKeyBeforeDisablingOld(t *testing.T) {
+	users := newFakeUserRepo()
+	keys := newFakeAPIKeyRepo()
+	agent := User{ID: "u1", Handle: "agent-a", Role: "agent", Active: true}
+	users.put(agent)
+	now := time.Now()
+
+	// Two pre-existing live keys — "old one(s)", plural, per I13's own
+	// wording — so the test also proves DisableOtherAPIKeys doesn't stop
+	// after the first.
+	putAPIKey(keys, "tpl_oldoneoldoneoldo1", agent.ID, now.Add(time.Hour), nil)
+	putAPIKey(keys, "tpl_oldtwooldtwooldt2", agent.ID, now.Add(time.Hour), nil)
+
+	svc := newTestService(users, keys, nil, now)
+
+	var (
+		hookFired           bool
+		newKeyQueryable     bool
+		allOldKeysStillLive bool
+	)
+	svc.rotateAfterNewKeyIssued = func(newKey APIKey) {
+		hookFired = true
+
+		got, err := keys.GetAPIKeyByHash(context.Background(), newKey.KeyHash)
+		newKeyQueryable = err == nil && got.ID == newKey.ID
+
+		allOldKeysStillLive = true
+		for _, raw := range []string{"tpl_oldoneoldoneoldo1", "tpl_oldtwooldtwooldt2"} {
+			old, err := keys.GetAPIKeyByHash(context.Background(), HashAPIKey(raw))
+			if err != nil || old.RevokedAt != nil {
+				allOldKeysStillLive = false
+			}
+		}
+	}
+
+	result, err := svc.Rotate(context.Background(), "agent-a")
+	require.NoError(t, err)
+
+	require.True(t, hookFired, "rotateAfterNewKeyIssued must fire — otherwise this test proves nothing about ordering")
+	assert.True(t, newKeyQueryable, "the new key must already exist and be queryable at the mid-call observation point")
+	assert.True(t, allOldKeysStillLive, "every pre-existing key must still be live at the mid-call observation point — proves issue-then-disable, not disable-then-issue")
+
+	// End state, checked separately from the ordering proof above: both
+	// old keys are now disabled, the new key is live, and nothing else got
+	// touched.
+	assert.Equal(t, 2, result.RevokedCount)
+	for _, raw := range []string{"tpl_oldoneoldoneoldo1", "tpl_oldtwooldtwooldt2"} {
+		old, err := keys.GetAPIKeyByHash(context.Background(), HashAPIKey(raw))
+		require.NoError(t, err)
+		assert.NotNil(t, old.RevokedAt, "old key must be disabled once Rotate returns")
+	}
+	newAfter, err := keys.GetAPIKeyByHash(context.Background(), result.APIKey.KeyHash)
+	require.NoError(t, err)
+	assert.Nil(t, newAfter.RevokedAt, "the freshly-rotated key must not itself be disabled")
+	assert.True(t, strings.HasPrefix(result.RawKey, "tpl_"))
+}
+
+// TestRotate_UnknownHandleFails — Rotate never creates a users row the way
+// IssueAPIKeyForHandle does; a handle with no existing user has nothing to
+// rotate.
+func TestRotate_UnknownHandleFails(t *testing.T) {
+	users := newFakeUserRepo()
+	keys := newFakeAPIKeyRepo()
+	svc := newTestService(users, keys, nil, time.Now())
+
+	_, err := svc.Rotate(context.Background(), "never-issued-to")
+	assert.ErrorIs(t, err, ErrNotFound)
+	assert.False(t, keys.createCalled, "must not issue a key for a handle that was never provisioned")
 }

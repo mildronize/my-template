@@ -1,0 +1,14 @@
+/*
+ * TPL-1 milestone-3/task-3: replaces task-1's system-font stopgap now that
+ * the root layout is rewritten for real (index.html + main.tsx, no
+ * next/font). index.html loads the same two families my-task's root
+ * layout.tsx loaded via next/font/google (Manrope, Fraunces) as real
+ * Google Fonts <link> tags -- Vite has no next/font equivalent to port, so
+ * a <link> tag is the plain-web substitute: same result (globals.css's
+ * --font-sans/--font-display resolve to the real typefaces), no bundler
+ * plugin needed.
+ */
+:root {
+  --font-manrope: "Manrope", ui-sans-serif, system-ui, sans-serif;
+  --font-fraunces: "Fraunces", Georgia, "Times New Roman", serif;
+}

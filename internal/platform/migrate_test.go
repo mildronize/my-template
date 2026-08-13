@@ -19,11 +19,11 @@ import (
 //
 // Moved here from internal/todo/migration_test.go (task-6.md, P1(b)):
 // that location meant this test — Done-when 2's *only* check — was
-// deleted silently the moment a fork did GETTING-STARTED.md Step 4's
+// deleted silently the moment a fork did GETTING-STARTED.md Step 5's
 // `rm -rf internal/todo`, with no invariant name tying it to anything
 // that would notice. It exercises Migrate and the embedded migration
 // set, not anything domain-specific, so internal/platform (which
-// GETTING-STARTED.md says is not part of Step 4's deletion) is where it
+// GETTING-STARTED.md says is not part of Step 5's deletion) is where it
 // belongs and survives a fork.
 //
 // Only users and api_keys — internal/identity's tables, which

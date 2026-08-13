@@ -1,8 +1,10 @@
-// Package dbquery is a small, non-domain helper package — similar standing
-// to internal/api, internal/db, and internal/platform (see
-// internal/architecture_test.go's nonDomainInternalDirs) — that holds the
-// single implementation behind every domain module's own I4
-// ("one seam reads identity" / "one repo, one table") check.
+// Package dbquery is a small, non-domain helper package — a sibling of
+// internal/api, internal/db, and internal/platform, all living directly
+// under internal/ rather than internal/domain/ (internal/architecture_
+// test.go's domainModuleNames only ever looks under internal/domain/, so
+// none of these need excluding by name the way milestone-1's version had
+// to) — that holds the single implementation behind every domain module's
+// own I4 ("one seam reads identity" / "one repo, one table") check.
 //
 // Before task-8, internal/todo and internal/identity each had their own
 // near-duplicate copy of this check
@@ -53,10 +55,10 @@ func TablesReferencedIn(content string) []string {
 
 // AssertQueryFileReferencesOnlyOwnTable is I4's shared check, the single
 // implementation behind every domain module's own dedicated
-// TestI4_..._OnlyQueries...Table(s) test (internal/todo/repo_test.go,
-// internal/identity/repo_test.go, and any domain module a fork adds
-// alongside or instead of them). It asserts two things about the .sql
-// file at filepath.Join(queriesDir, filename):
+// TestI4_..._OnlyQueries...Table(s) test (internal/domain/todo/
+// repo_test.go, internal/identity/repo_test.go, and any domain module a
+// fork adds alongside or instead of them). It asserts two things about
+// the .sql file at filepath.Join(queriesDir, filename):
 //
 //  1. it references ownTable at least once (proving the file isn't
 //     vacuously empty of the table it's supposed to own);

@@ -160,9 +160,9 @@ paths:
       operationId: revokeKey
       summary: Revoke one of the caller's own API keys.
       description: >
-        Sets `revoked_at`. Owner-scoped, same 404 rule as todos (I3).
-        There is deliberately no `POST /api/v1/keys` — issuance is
-        CLI-only (`cmd/issue-key`).
+        Sets `revoked_at`. Owner-scoped, same 404 rule as every other
+        owner-scoped resource on this surface (I3). There is deliberately
+        no `POST /api/v1/keys` — issuance is CLI-only (`cmd/issue-key`).
       responses:
         "204":
           description: Revoked.

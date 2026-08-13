@@ -4,3 +4,12 @@
 bin
 data
 *.db
+
+# web-build's own stage (Dockerfile) runs `npm ci` and `npm run build`
+# fresh inside the image — a host machine's own web/node_modules (which
+# can carry platform-specific native bindings, e.g. Rollup's, built for
+# the host's OS/arch rather than the image's) or a stale local web/dist
+# must never leak into the build context, or `COPY web/ ./` after
+# `npm ci` would silently overwrite what npm ci just installed/built.
+web/node_modules
+web/dist

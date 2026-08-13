@@ -1,7 +1,9 @@
 // Package platform holds the pieces every service built from this
-// template keeps as-is on fork: config, logging, DB wiring, and HTTP
-// server setup. It must never import a domain module (internal/todo,
-// internal/identity) — see .chief/_rules/_standard/ARCHITECTURE.md rule 3.
+// template keeps as-is on fork: config, logging, DB wiring, HTTP server
+// setup, and the cross-cutting gin middleware (middleware.go) shared by
+// every transport engine. It must never import a domain module
+// (internal/domain/*), internal/identity, or an internal/transport/*
+// surface — see .chief/_rules/_standard/ARCHITECTURE.md rule 5.
 package platform
 
 import (
@@ -32,6 +34,44 @@ type Config struct {
 
 	// DatabasePath is the filesystem path to the SQLite database file.
 	DatabasePath string `env:"DATABASE_PATH" envDefault:"./data/app.db"`
+
+	// SSOClientID/SSOClientSecret are internal/transport/bff's Hydra OAuth2
+	// client credentials for the owner-login flow (authorization_code +
+	// PKCE, sso-consumer-contract.md §2) — printed by scripts/register.sh
+	// on success (docs/DEPLOY-REQUIREMENTS.md). Unlike SSOIssuer/
+	// AuthAudience's JWT-path dormant seam, leaving these unset does not
+	// stop cmd/server from starting: GETTING-STARTED.md's own walkthrough
+	// (steps 1-5) never touches bff, so the server and the public API must
+	// keep working with no Hydra client registered yet. internal/transport/
+	// bff's own wiring (cmd/server/main.go's wireBFF) checks these and
+	// simply serves a clear "owner login isn't configured" error from
+	// GET /login and GET /callback instead of a working flow when either is
+	// empty — the same pattern wireIdentity already uses for the JWT branch.
+	SSOClientID     string `env:"SSO_CLIENT_ID"`
+	SSOClientSecret string `env:"SSO_CLIENT_SECRET"`
+
+	// SessionSecret HMAC-signs/verifies internal/transport/bff's session
+	// and state cookies (DATA_MODEL.md's "BFF session" note — no
+	// server-side session store; the signature itself is the whole
+	// validity proof). Deliberately not required at startup, unlike the
+	// fields above staying-optional-by-design being an availability
+	// concern — this one is a security concern instead, so cmd/server
+	// doesn't silently run with an empty (trivially forgeable) key: if
+	// unset, it generates a random one for that process's lifetime and
+	// logs a warning that existing sessions won't survive a restart. Set
+	// this explicitly for any real deployment (docs/DEPLOY-REQUIREMENTS.md).
+	SessionSecret string `env:"SESSION_SECRET"`
+
+	// SeedOwnerSSOSubject is the owner's known Hydra `sub` claim,
+	// cmd/seed's sole input (DATA_MODEL.md's "Owner provisioning" note —
+	// the owner row is seeded once from a known subject, never
+	// JIT-created). Deliberately not required here at config-parse time,
+	// the same way SSOClientID/SSOClientSecret above are optional at this
+	// layer — cmd/seed is the only consumer, and it is the one that
+	// enforces this is set, with a clear error, rather than LoadConfig
+	// failing every other command (cmd/server, cmd/issue-key, cmd/smoke)
+	// over a var they never read.
+	SeedOwnerSSOSubject string `env:"SEED_OWNER_SSO_SUBJECT"`
 }
 
 // LoadConfig loads a .env file if one exists in the working directory
