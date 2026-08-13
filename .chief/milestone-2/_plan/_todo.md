@@ -92,7 +92,7 @@ before this milestone started.
       until task-5. Confirm I11/I12 now pass; I13/I14 remaining red is
       not this task's regression.
       **Owns: Done-when 3, 7, 8, 9.**
-- [ ] task-5: Key lifecycle finish — `rotate` CLI command
+- [x] task-5: Key lifecycle finish — `rotate` CLI command
       (issue-new-then-disable-old ordering, I13), key-file + resolver
       script ported verbatim from `~/.my-task/bin/key` (I14 — the
       empty-argument guard, the fallback chain, the `0600`-is-a-rule
