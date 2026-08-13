@@ -4,24 +4,25 @@ See `../_goal/GOAL.md` for objective/scope/decisions/done-when and
 `../_contract/API.md` for the new `bff-openapi.yaml` surface. Every
 Done-when item is owned by exactly one task.
 
-**Ordering is deliberate, not just dependency order.** `_goal/GOAL.md`'s
-two-spec-file split (Decision "API spec: two files, not one") is one of
-six Decisions rows Clara has flagged to มายด์ as his to cut, and he has
-not gated the goal yet. Planning is cheap to redo; code written against
-`bff-openapi.yaml`, its generated Go interface, and a typed SPA fetch
-layer is not. So: **task 1 does everything that stands regardless of
-that decision — the Vite/React port, the design-system carry,
-`embed.FS` wiring, `make build` ordering, the docs.** Task 2 is where the
-split-dependent work starts (authoring the second spec file, wiring its
-codegen, writing the handlers against it). If มายด์ cuts the split, only
-task 2 onward needs rework — task 1's output is unaffected either way.
-This is good task ordering on its own terms (get the framework-agnostic
-work landed and verified before touching anything contract-shaped) and
-happens to be cheap insurance against the one open decision.
+**Ordering was deliberate while the goal was ungated, and stands even
+now that it isn't.** `_goal/GOAL.md`'s two-spec-file split (Decision "API
+spec: two files, not one") was one of six Decisions rows Clara flagged to
+มายด์ as his to cut. **He has since gated the goal — "for this LGTM" —
+and cut nothing. All six stand, including the split.** Task-2 is
+unblocked as written; no re-scope needed. The ordering below (task-1
+first, split-dependent work starting at task-2) is kept because it's
+good ordering on its own terms regardless of the gate having landed —
+framework-agnostic work verified before anything contract-shaped — not
+because task-2 is still conditionally blocked.
 
-**Chief-loop does not start until มายด์ gates the goal**, regardless of
-this ordering — see this milestone's `loop-readiness` review. This file
-plans the work; it doesn't authorize starting it.
+**Human acceptance is a browser, not the suite** (Clara, relaying
+มายด์'s own words: *"i'll waiting until milestone-3 is ready to login and
+test on my browser"*). Eleven green Done-when items are not the
+finish line — an instance he can point a browser at and create a todo
+in is. What it takes to get him from nothing to that browser (a running
+instance, a registered Hydra client, one command or as close to it as
+possible) is part of what "ready" means, not a separate concern to
+assemble afterward — see task-5.
 
 - [ ] task-1: Vite/React scaffold + design-system carry — `web/`:
       `package.json`, `vite.config.ts`, `tsconfig.json`, Tailwind config.
@@ -122,4 +123,23 @@ plans the work; it doesn't authorize starting it.
       last touched — three tasks land code after task-2's endpoints
       exist, any of which could regress what an earlier task's tests
       confirmed.
+
+      **Also owns, not a Done-when item but the actual finish line
+      (มายด์, relayed by Clara): confirm the path from "loop done" to
+      "มายด์ has a browser pointed at a working instance" is one command,
+      or as close to it as this fork's real deployment allows.** `docs/
+      GETTING-STARTED.md`'s existing "Running what you forked" section
+      already documents `docker compose up` (or `go run ./cmd/server`)
+      plus a one-time `register-<service>.sh` against a real Hydra
+      client (Step 1) as the path to an owner-login-capable instance —
+      confirm that path still holds with `web/`+`embed.FS` in the mix
+      (it should, since Done-when 11 already checks `docker compose up`
+      works), and that opening `GET /login` in a browser against a
+      running instance now actually lets the owner create a todo, not
+      just view one. If reaching that instance in practice takes more
+      than `docker compose up` plus a URL (an SSH tunnel, a specific
+      host, anything Clara had to assemble by hand for milestone-2's
+      acceptance), that's the gap to close or hand to Clara explicitly
+      before reporting done — not something to leave for her to
+      re-discover the way she had to last time.
       **Owns: Done-when 11.**
