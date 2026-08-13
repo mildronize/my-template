@@ -47,6 +47,44 @@ agreed to expect):
   it red or absent until this task lands; not evaluated before it.
 - **task-9 is the only point both suites are required green together.**
 
+**Superseding update (Clara, after task-2): named-command gates exclude
+by construction.** Task-2's own gate (`go test ./internal/domain/todo/...`
+plus `go test ./internal/ -run TestArchitecture`) was green while a real
+regression — `TestI4_TodoRepoOnlyQueriesTodosTable` dropped,
+`TestI3_...` renamed out of its required prefix — sat undetected in
+`internal`, a package neither named filter touched. Found only because
+verification happened to also run an unfiltered sweep; the stated gate
+itself would not have caught it. **Standing requirement for every
+remaining task, superseding the per-task lines above where they
+conflict**: end with an **unfiltered** `go test ./internal/...` (no
+`-run`), plus the JS suite once task-7 gives it a real state, and
+classify every failure against the **named, explicit known-red
+baseline** below — not "expected failures exist somewhere," the actual
+list:
+
+- `TestDoneWhen12_EveryInvariantHasANamedTest` failing, specifically and
+  only on I20 (task-7's) and I21 (task-6's) having no test yet.
+- `internal/transport/publicapi/todo_handler.go` not building, until
+  task-3 lands.
+
+**Any failure outside this exact list is a regression until proven
+otherwise.** The baseline only shrinks as tasks land what it's waiting
+on — it never grows silently; if a task finds it genuinely needs to grow
+the baseline, that's a report to Clara, not a unilateral edit here.
+
+**`TestDoneWhen12` itself is not a reliable safety net right now** —
+Clara's independent finding (see below): its `per-domain-module` scope
+check only ever enumerates `internal/domain/*` (currently just `todo`),
+so I3/I4 coverage in `internal/identity` is invisible to it even though
+real `TestI3_`/`TestI4_` tests exist there, and I15-I19/I21 are
+category-mismatched onto the same tag (I21 specifically will block
+task-6: a correctly-placed `TestI21_` in `internal/identity` is exactly
+what the current mechanism won't accept). **This must be resolved before
+task-6** — a design proposal is with Clara, not yet decided or built.
+Until it's fixed, `TestDoneWhen12`'s own red/green is read with that
+unreliability in mind, not trusted as the mechanism that would have
+caught a missing invariant test.
+
 - [ ] task-1: Schema + migration — `todos` gains `status` (enum, replaces
       `done`), `assignee_id`, `priority`, `due_date`, `created_by`
       (replaces `owner_id`); new `todo_events` table (`_rules/_contract/
