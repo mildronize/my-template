@@ -15,6 +15,38 @@ name-matching or count-based check states its floor deliberately (I15's
 own fix this milestone is the concrete example) rather than accepting
 zero matches as a pass.
 
+**Green gate, stated per task rather than assumed** (Clara's finding: six
+tasks touch shared schema/service code before the suite can mean anything
+again — without saying which suite is red for which reason at each step,
+a genuine regression in task-5 hides inside failures everyone already
+agreed to expect):
+
+- **task-1 ends green on its own migration test, in isolation.** Nothing
+  else in the repo compiles yet — `todo.Service`, both transports, and
+  every existing todo test all reference `owner_id`/`done`, which this
+  task removes. **`go build ./...` and `go test ./...` are expected red
+  after task-1, for exactly this reason — not a regression, the reason
+  is "not updated yet," and task-2 is where that stops being true for
+  the service layer.**
+- **task-2 ends green on `go test ./internal/domain/todo/...` and the
+  architecture test specifically**, not the whole repo — the handler
+  packages (`publicapi`, `bff`) still reference the old service shape
+  until tasks 3/4 update them. `go build ./...` still red, same reason
+  as task-1, now localized to the transport packages instead of the
+  domain package.
+- **task-3 ends green on `go build ./...` and `go test
+  ./internal/transport/publicapi/...`** — the first point the whole repo
+  compiles again. `bff` may still be red until task-4 lands (a real,
+  expected gap, not a regression).
+- **task-4 ends green on `go build ./...` and `go test ./...`** — the
+  first point the full Go suite is green again. From here on, red in any
+  Go package is a real regression, not an expected gap.
+- **tasks 5, 6, 8 each end green on the full Go suite plus their own new
+  tests** — no more "expected red" from here.
+- **task-7 is where the JS suite exists to have a state at all** — expect
+  it red or absent until this task lands; not evaluated before it.
+- **task-9 is the only point both suites are required green together.**
+
 - [ ] task-1: Schema + migration — `todos` gains `status` (enum, replaces
       `done`), `assignee_id`, `priority`, `due_date`, `created_by`
       (replaces `owner_id`); new `todo_events` table (`_rules/_contract/
@@ -28,7 +60,8 @@ zero matches as a pass.
       `done` states before the migration runs** — a test asserting the
       exact post-migration `status` value per pre-migration `done` value,
       not merely that the migration executes without error against an
-      empty database.
+      empty database. This test must be green in isolation even though
+      the rest of the repo isn't — see the green-gate note above.
       **Owns: Done-when 1.**
 - [ ] task-2: Domain service layer — `todo.Service` extended for the new
       fields; the single write path for `todo_events` (I15): idempotency
@@ -36,9 +69,10 @@ zero matches as a pass.
       itself, per the contract's explicit strengthening — not at each
       call site) → dispatch by event type → domain-specific side effect →
       insert, one transaction. `type: "created"` never accepted as a
-      client-specified write (I16). Permission layer (`can`-equivalent,
-      role-based): owner unconditional, agents refused only on
-      `status: closed`.
+      client-specified write at the service level (I16) — the HTTP-level
+      proof of this is Done-when 13/14, owned by tasks 3/4, not this one.
+      Permission layer (`can`-equivalent, role-based): owner
+      unconditional, agents refused only on `status: closed`.
       **I15's own enforcement fix, built here**: extend
       `internal/architecture_test.go` (or a new test in the same file)
       with the table-specific check — asserts **at least 3** functions
@@ -48,12 +82,10 @@ zero matches as a pass.
       passes by matching zero functions enforces nothing — this is the
       one place this milestone's own contract review already caught that
       shape once; don't reintroduce it while building the fix for it.
-      **Expected failing at this point**: no handler surface exists yet
-      to exercise this service through HTTP — that's tasks 3/4. This
-      task's own tests (transaction atomicity, append-only, idempotency,
-      the paired permission test, the table-specific architecture test)
-      are what it owns; nothing here should require the handlers to
-      exist first.
+      **Green gate: `go test ./internal/domain/todo/...` plus the
+      architecture test, not the whole repo** — see the green-gate note
+      above for why `go build ./...` staying red here is expected, not a
+      regression.
       **Owns: Done-when 2, 3, 4, 5.**
 - [ ] task-3: Public API surface (`internal/transport/publicapi`,
       `openapi.yaml`) — todo endpoints updated for the new fields (no more
@@ -63,14 +95,39 @@ zero matches as a pass.
       surface, mirrors my-task's own REST shape (`_contract/API.md`'s
       exact body shapes per `type`). **`DELETE /api/v1/todos/:id`
       removed** — the route no longer exists (genuine 404, not 405).
+      **`type: "created"` genuinely rejected (400), not silently
+      accepted or dropped** — a real HTTP-level test against this
+      handler, not inferred from I16 holding at the service layer.
       Implementation work for Done-when 6's public-API half; task-8 owns
-      the Done-when item itself once the skill doc is also updated.
+      that Done-when item once the skill doc is also updated.
+      **Green gate: `go build ./...` clean (first point the whole repo
+      compiles again) and `go test ./internal/transport/publicapi/...`
+      green.** `bff` may still be red until task-4 — expected, not a
+      regression.
+      **Owns: Done-when 13.**
 - [ ] task-4: BFF surface (`internal/transport/bff`, `bff-openapi.yaml`)
       — same shape as task-3, session-authenticated: todo endpoints
       updated, `POST/GET /api/bff/todos/:id/events`, **`status: closed`
       succeeds here** (I18 — this is the owner's surface).
-      **`DELETE /api/bff/todos/:id` removed.** Implementation work for
-      Done-when 6's BFF half; task-8 owns the Done-when item.
+      **`DELETE /api/bff/todos/:id` removed.** **`type: "created"`
+      genuinely rejected (400)**, tested independently of task-3's proof
+      — two handlers, two chances to get this wrong separately.
+      Implementation work for Done-when 6's BFF half; task-8 owns that
+      Done-when item.
+      **A cheap reachability check, at the end of this task specifically
+      — not deferred to task-9's walkthrough.** Real running binary, a
+      real owner session (the same `bff.Signer.NewSessionCookie` fixture
+      this project's own tests already use), confirm the SPA shell still
+      loads at `/` and at least one authenticated BFF endpoint (e.g.
+      `GET /api/bff/me`) still answers correctly. Not the walkthrough —
+      just proof the login door still opens, at the point the schema
+      rename (task-1) has had the most opportunity to have broken session
+      or user resolution without anyone noticing. If this breaks, the
+      cause is at most two tasks back, not eight.
+      **Green gate: `go build ./...` and `go test ./...` both clean — the
+      first point the full Go suite is green again.** From here on, any
+      red Go package is a real regression, not an expected gap.
+      **Owns: Done-when 14.**
 - [ ] task-5: Cross-todo activity feed — `GET /api/bff/activity`
       (`_contract/API.md`'s exact shape: cursor over `todo_events` across
       every todo, newest first, joined to `todos`/`users`). Owner-session
@@ -83,6 +140,7 @@ zero matches as a pass.
       viewer's own events would pass every other check in this milestone
       — this is ruling 1's only real proof, and it doesn't exist until
       this test does.
+      **Green gate: full Go suite green, plus this task's own new tests.**
       **Owns: Done-when 12.**
 - [ ] task-6: Key-listing replacement (I21) — `GET /api/bff/keys` becomes
       "every `role='agent'` user's non-revoked keys"; `DELETE
@@ -103,6 +161,8 @@ zero matches as a pass.
       milestone's new owner-facing endpoint, then proves the *same* key
       now fails. A test that only checks the post-revoke 401 is
       consistent with the key never having worked at all.
+      **Green gate: full Go suite green, plus this task's own new tests
+      (including the rewritten `keys_handler_test.go`).**
       **Owns: Done-when 7, 11.**
 - [ ] task-7: SPA — per-todo detail page (`web/src/app/todos/[id]/` or
       equivalent, doesn't exist yet), todos list page updated for the new
@@ -128,6 +188,9 @@ zero matches as a pass.
       Done-when-7 negative-control shape — a given event renders
       identically (same summary text, same provenance mark) regardless of
       which page's query fed it into the component.
+      **Green gate: full Go suite green (unaffected by this task); this
+      is where the JS suite's own state begins meaning something — expect
+      it red or absent before this task, not evaluated before it.**
       **Owns: Done-when 8, 9, 10.**
 - [ ] task-8: Companion `<service>-api` skill doc — DELETE no longer
       named anywhere (presence/absence check against the doc's actual
@@ -139,6 +202,7 @@ zero matches as a pass.
       `DELETE` from the code; this task confirms the doc caught up too, a
       doc that still says "call DELETE" makes the removal undone for the
       only readers who act on it.
+      **Green gate: full Go suite green (doc-only task, unaffected).**
       **Owns: Done-when 6.**
 - [ ] task-9: Final verification — **last task, full-suite gate, same
       shape as milestone-3's task-5.** `go test ./...` and the JS suite

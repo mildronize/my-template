@@ -236,6 +236,18 @@ see Human Acceptance below, which is explicit about that.
     event, attributed to the agent. This is ruling 1's only real proof —
     a feed that happened to only ever show the viewer's own events would
     pass every other item in this list.
+13. **I16 (`created` is never client-specifiable) is verified at the HTTP
+    layer on the public API, not just enforced in the service.** A `POST
+    /api/v1/todos/:id/events` with `type: "created"` is genuinely
+    **rejected** (400) — not silently accepted and dropped, not
+    misrouted, not ignored. "Rejected" and "silently ignored" are
+    different outcomes and only one satisfies I16's own wording; a
+    handler that quietly discards the field would pass a naive test and
+    still violate the invariant.
+14. **The same proof, on the BFF.** `POST /api/bff/todos/:id/events` with
+    `type: "created"` is genuinely rejected (400), independently tested —
+    not inferred from Done-when 13 holding on the other surface. Two
+    surfaces, two handlers, two chances to get this wrong independently.
 
 ## Human acceptance — the real finish line, not a supplement to Done-when
 
