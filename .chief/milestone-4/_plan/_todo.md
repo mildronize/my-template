@@ -90,6 +90,18 @@ this baseline's own "re-measure fresh when something could change the
 reason" discipline doesn't by itself require. Worth remembering for
 whichever task next touches a timing-sensitive path.
 
+**Re-measured at `74821a8`** (task-6's own report commit), fresh clone,
+cold: **down to one item — I21 is gone.** `TestDoneWhen12` now fails only
+on I20 (task-7's). Independently reconfirmed (Luna): I21's own placement
+mechanism attacked from both directions (a wrong-package stub isolated
+under `internal/domain/todo` — rejected; the identical stub moved into
+`internal/identity` — accepted), the key-listing/revocation properties
+attacked with different mutations than the task's own report used (a
+partial-truncation bug instead of a wholesale revert; a repo-layer
+wrong-value write instead of a handler-layer skip), and the working tree
+confirmed byte-identical to the original commit (`git diff` empty) after
+every attack was reverted.
+
 A baseline is a measurement, and a measurement has a subject — record the
 commit it was taken against, not just the list, since the list can read
 identical while the *reason* underneath it changed (this milestone's own
@@ -273,7 +285,7 @@ caught a missing invariant test.
       shrink `TestDoneWhen12`'s own failure mode, not add to the
       baseline.**
 
-- [ ] task-6: Key-listing replacement (I21) — `GET /api/bff/keys` becomes
+- [x] task-6: Key-listing replacement (I21) — `GET /api/bff/keys` becomes
       "every `role='agent'` user's non-revoked keys"; `DELETE
       /api/bff/keys/:id` becomes "any agent's key, still session-gated to
       the owner." `GET /api/v1/keys` (agent Bearer) stays untouched and
