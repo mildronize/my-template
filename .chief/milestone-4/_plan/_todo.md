@@ -78,6 +78,18 @@ end) before this line was updated. From here on, **any red Go package at
 all is a real regression**, not an expected gap — the baseline is down to
 exactly the two invariant-coverage lines above.
 
+**Reconfirmed at `8bc37c9`** (task-5 plus its own millisecond-precision
+fix-round), fresh clone, cold: same two-item list, no change to the set
+or the reason underneath it. Worth naming here because task-5 is the one
+place this milestone found a genuine, real intermittent failure
+(`TestBFFHandler_ListActivity_OrderingAndPagination`, ~30-45% under
+repeated runs, not a single unlucky sweep) that a single cold sweep alone
+would not have caught — a fresh clone proves the *state*, not the *rate*;
+finding the flake took stress-testing the same commit repeatedly, which
+this baseline's own "re-measure fresh when something could change the
+reason" discipline doesn't by itself require. Worth remembering for
+whichever task next touches a timing-sensitive path.
+
 A baseline is a measurement, and a measurement has a subject — record the
 commit it was taken against, not just the list, since the list can read
 identical while the *reason* underneath it changed (this milestone's own
@@ -196,7 +208,7 @@ caught a missing invariant test.
       first point the full Go suite is green again.** From here on, any
       red Go package is a real regression, not an expected gap.
       **Owns: Done-when 14.**
-- [ ] task-5: Cross-todo activity feed — `GET /api/bff/activity`
+- [x] task-5: Cross-todo activity feed — `GET /api/bff/activity`
       (`_contract/API.md`'s exact shape: cursor over `todo_events` across
       every todo, newest first, joined to `todos`/`users`). Owner-session
       only, mirrors my-task's `activity.list`.
