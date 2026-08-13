@@ -111,6 +111,40 @@ Row shape changed as a side effect of dropping `sqlc.embed`
 (`ListTodoEventsFeedRow`'s columns are flat, no nested `TodoEvent`
 struct) — updated in `Repo.ListEventsFeed`, the one caller.
 
+## Near-miss: a regression this task itself introduced, then caught before reporting done
+
+Rewriting `repo_test.go` wholesale for the new schema silently broke
+`internal/invariants_test.go`'s `TestDoneWhen12_EveryInvariantHasANamedTest`
+in two ways that this task's own stated green gate (`go test
+./internal/domain/todo/...` + `go test ./internal/ -run TestArchitecture`)
+does **not** cover, because `TestDoneWhen12` lives in the same `internal`
+package but under a different `-run` filter: the old `TestI3_
+RepoOwnershipScoping_GetUpdateDelete` got renamed to `TestI3NoLongerApplies_
+GetByIDReadsAnyCreator` (losing the required `TestI3_` prefix), and the
+old `TestI4_TodoRepoOnlyQueriesTodosTable` was dropped entirely while
+rewriting the file around the new schema.
+
+Caught only because, before writing this report, I ran a broader sweep
+(`go test ./internal/... -run '.*'`) than the task's own stated gate
+strictly requires — the failure would not have shown up if I had stopped
+at the two commands the green-gate note names. Confirmed via a throwaway
+`git worktree` at `eff83f3` (task-1's merged HEAD, before this task
+touched anything) that both tests passed there, so this was a regression
+this task introduced, not a pre-existing gap. Fixed in a dedicated commit
+(`f4377af`): `TestI3_GetByIDReadsAnyCreator_ScopingRetiredForThisDomain`
+restores the prefix; `TestI4_TodoRepoOnlyQueriesTodosTable` is restored,
+now passing `todo_events.sql` as a `sameModuleFiles` argument (both files
+are the same domain module) so `todo_events.sql`'s legitimate join to its
+own module's `todos` table doesn't trip the checker. Re-verified cold
+(fresh clone, `go clean -cache -testcache`) after the fix: `TestDoneWhen12`
+now fails only on I20/I21, both task-6/7's own scope, matching the exact
+residual set already present at task-1's own merged HEAD.
+
+Stated here as its own section, not folded into the Verification numbers
+below, because a check that would have let this ship (task-2's own
+literal green-gate command) is worth naming plainly rather than only
+fixing quietly.
+
 ## A second pre-existing bug found, NOT fixed (out of this task's scope)
 
 While running a broader check than my own green gate strictly requires
@@ -193,6 +227,17 @@ Also ran with `-race`: `go test -count=1 -race ./internal/domain/todo/...`
 
 `gofmt -l` on every file this task touched (`internal/domain/todo`,
 `internal/architecture_test.go`, `db/queries/`): empty output, clean.
+
+**Beyond the two literal commands above**: also ran `go test
+./internal/...` and `go test ./internal/ -v` (no `-run` filter) as a
+broader sweep before considering this task done — this is how the
+regression documented in "Near-miss" below was actually caught (`TestI3_`/
+`TestI4_` naming/coverage broken by the `repo_test.go` rewrite, invisible
+to the two commands task-2's own green gate names). After the fix
+(`f4377af`), re-verified cold once more: `TestDoneWhen12_
+EveryInvariantHasANamedTest` fails only on I20/I21 (task-6/7's own
+scope), matching the exact residual set already present at task-1's
+merged HEAD.
 
 ### Done-when 1 (task-1's, re-confirmed unaffected)
 
@@ -392,5 +437,7 @@ yet, which is tasks 3/4's own scope.
 - `a663466` — `feat(milestone-4/task-2): todo domain service layer for the shared-collection schema`
 - `5e0a7cb` — `test(milestone-4/task-2): I15's table-specific architecture check, floor-first`
 - `3e02ef4` — `test(milestone-4/task-2): Done-when 2-5 - atomicity, append-only, idempotency, permission`
+- `8746e81` — `docs(milestone-4/task-2): task-2 report` (superseded by this file's current content — the near-miss below was found after this commit, fixed in the next one)
+- `f4377af` — `fix(milestone-4/task-2): restore TestI3_/TestI4_ named tests dropped in the repo_test.go rewrite`
 
-Pushed: `eff83f3..3e02ef4 milestone-4/activity-log -> milestone-4/activity-log`.
+Pushed through `f4377af`: `eff83f3..f4377af milestone-4/activity-log -> milestone-4/activity-log` (two pushes — `eff83f3..8746e81` first, then `8746e81..f4377af` after the near-miss fix).
