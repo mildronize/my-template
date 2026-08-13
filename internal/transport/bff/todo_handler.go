@@ -13,11 +13,24 @@ import (
 	"github.com/mildronize/my-template/internal/transport/publicapi"
 )
 
+// bffActivityDefaultLimit mirrors my-task's own activity.list default
+// (`~/gits/my-task/src/server/api/routers/activity.ts`:
+// "limit: input.limit ?? 30") — applied here when the query omits `limit`
+// entirely. The 1-100 bound itself is enforced one layer up, by
+// bff-openapi.yaml's own `minimum`/`maximum` on the `limit` parameter
+// (the request validator mounted ahead of this handler, same as every
+// other bff-openapi.yaml-declared constraint on this surface) — this
+// handler only ever sees either "omitted" or an already-in-range value.
+const bffActivityDefaultLimit = 30
+
 // TodoServer adapts todo.Service to internal/bffapi's generated
 // ServerInterface's todo-shaped subset (ListTodos, CreateTodo, GetTodo,
-// UpdateTodo, ListTodoEvents, CreateTodoEvent) — the session-authenticated
-// counterpart to internal/transport/publicapi.TodoServer. Calls the exact
-// same *todo.Service instance/methods publicapi's own TodoServer calls
+// UpdateTodo, ListTodoEvents, CreateTodoEvent, ListActivity) — the
+// session-authenticated counterpart to internal/transport/publicapi.TodoServer.
+// ListActivity has no publicapi equivalent at all (task-5,
+// `_contract/API.md`'s "Owner-session only; no agent-facing equivalent" —
+// mirrors my-task's own `activity.list`, tRPC/owner-only). Every other
+// method here calls the exact same *todo.Service instance/methods publicapi's own TodoServer calls
 // (_rules/_standard/ARCHITECTURE.md's shared-service-layer rule,
 // _contract/API.md's per-endpoint service-method citations) — no
 // todo-specific logic is duplicated or reimplemented here, only the
@@ -474,4 +487,117 @@ func (s *TodoServer) CreateTodoEvent(c *gin.Context, id string) {
 		return
 	}
 	c.JSON(http.StatusCreated, bffEvent)
+}
+
+// toBFFActivityItem converts one todo.TodoEventFeedRow (the cross-todo
+// feed's own row shape, already joined to todos/users one layer down in
+// internal/domain/todo) into the wire ActivityItem — mirrors toBFFEvent's
+// payload-decode step exactly, plus the actor/todo context the per-todo
+// timeline doesn't carry (`_contract/API.md`'s `GET /api/bff/activity`).
+func toBFFActivityItem(row todo.TodoEventFeedRow) (bffapi.ActivityItem, error) {
+	item := bffapi.ActivityItem{
+		Id:        row.Event.ID,
+		Seq:       row.Event.Seq,
+		Type:      string(row.Event.Type),
+		Actor:     bffapi.ActivityActor{Handle: row.ActorHandle, Role: row.ActorRole},
+		Body:      row.Event.Body,
+		CreatedAt: row.Event.CreatedAt,
+		Todo:      bffapi.ActivityTodoRef{Id: row.Event.TodoID, Title: row.TodoTitle},
+	}
+	if row.Event.Payload != nil {
+		var payload map[string]interface{}
+		if err := json.Unmarshal([]byte(*row.Event.Payload), &payload); err != nil {
+			return bffapi.ActivityItem{}, err
+		}
+		item.Payload = &payload
+	}
+	return item, nil
+}
+
+// ListActivity implements bffapi.ServerInterface — GET /api/bff/activity,
+// task-5's own endpoint: a cursor over todo_events across every todo,
+// newest first, joined to todos (title) and users (actor handle/role) —
+// `_contract/API.md`. Owner-session only; there is no agent-facing
+// equivalent on either surface (this type's own doc comment, mirrors
+// my-task's `activity.list` having no REST counterpart).
+//
+// This is ruling 1's (GOAL.md) only real proof that todos are a genuinely
+// shared collection rather than merely dual-paged: TestDoneWhen12_*
+// (todo_handler_test.go) seeds a real agent identity through
+// identity.Service.IssueAPIKeyForHandle (the same method cmd/issue-key's
+// own `run` calls — task-5-report.md's own note on why this isn't the
+// newBFFRouterForTwoOwnersWithKeys-shaped shortcut GOAL.md's "Test-fixture
+// discipline" row warns against), has that agent act on a todo over the
+// real Bearer-authenticated publicapi surface, then asserts this handler's
+// response actually contains that event, attributed to the agent.
+//
+// Pagination mirrors my-task's own TaskQueryService.listActivity exactly:
+// fetch limit+1 rows so an extra row present means there's a next page
+// (hasMore), the (limit)th row's own (createdAt, id) becomes nextCursor,
+// and the query's own cursor args stay nil for the first page — no
+// separate "first page" branch needed, ListFeed/ListTodoEventsFeed
+// already treat a nil cursor as "start from the newest row"
+// (todo_events.sql's own sqlc.narg(cursor_created_at) IS NULL branch).
+//
+// cursorCreatedAtMs/cursorId are validated as a pair here (bff-openapi.yaml
+// can declare each parameter's own type/range but not a cross-field "both
+// or neither" rule) — everything else about `limit`'s own bounds is
+// already enforced one layer up by the request validator before this
+// handler is ever reached.
+func (s *TodoServer) ListActivity(c *gin.Context, params bffapi.ListActivityParams) {
+	if _, ok := bffOwnerID(c); !ok {
+		return
+	}
+
+	limit := int64(bffActivityDefaultLimit)
+	if params.Limit != nil {
+		limit = int64(*params.Limit)
+	}
+
+	var cursorCreatedAt *time.Time
+	var cursorID *string
+	switch {
+	case params.CursorCreatedAtMs != nil && params.CursorId != nil:
+		t := time.UnixMilli(*params.CursorCreatedAtMs).UTC()
+		cursorCreatedAt = &t
+		cursorID = params.CursorId
+	case params.CursorCreatedAtMs != nil || params.CursorId != nil:
+		c.AbortWithStatusJSON(http.StatusBadRequest, bffValidationErrorBody(
+			`"cursorCreatedAtMs" and "cursorId" must be supplied together`, "cursor"))
+		return
+	}
+
+	// Fetch one extra row so an extra row present means there's a next
+	// page (my-task's own hasMore check, task_events.ts:544-545) — the
+	// (limit)th row's own (created_at, id) is what nextCursor names.
+	rows, err := s.Service.ListFeed(c.Request.Context(), cursorCreatedAt, cursorID, limit+1)
+	if err != nil {
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+
+	hasMore := int64(len(rows)) > limit
+	if hasMore {
+		rows = rows[:limit]
+	}
+
+	resp := bffapi.ActivityFeed{Items: make([]bffapi.ActivityItem, 0, len(rows))}
+	for _, row := range rows {
+		item, err := toBFFActivityItem(row)
+		if err != nil {
+			c.AbortWithStatus(http.StatusInternalServerError)
+			return
+		}
+		resp.Items = append(resp.Items, item)
+	}
+
+	if hasMore {
+		last := rows[len(rows)-1]
+		resp.NextCursor = &bffapi.ActivityCursor{
+			CreatedAtMs: last.Event.CreatedAt.UnixMilli(),
+			Id:          last.Event.ID,
+		}
+	}
+
+	c.JSON(http.StatusOK, resp)
 }

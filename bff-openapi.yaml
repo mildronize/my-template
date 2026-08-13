@@ -229,6 +229,59 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+  /activity:
+    get:
+      operationId: listActivity
+      summary: The cross-todo activity feed — every event, across every todo, newest first.
+      description: >
+        `_contract/API.md`'s `GET /api/bff/activity`: a cursor over
+        `todo_events` across every todo, newest first, joined to `todos`
+        (title) and `users` (actor handle/role, so the caller can mark
+        human vs agent). Owner-session only — mirrors my-task's
+        `activity.list` (`~/gits/my-task/src/server/api/routers/
+        activity.ts`), adapted from tRPC's `{limit, cursor: {createdAtMs,
+        id}}` input shape to this surface's plain-JSON query-string
+        convention: `limit` (default 30, same as my-task's own default;
+        1-100 inclusive) plus `cursorCreatedAtMs`/`cursorId`, which must
+        be supplied together or not at all (a lone one of the pair is a
+        malformed cursor, `validation_error`). `nextCursor` in the
+        response echoes the exact field names
+        (`cursorCreatedAtMs`/`cursorId` on the way in, `createdAtMs`/`id`
+        on the way out) so a client can round-trip it verbatim into the
+        next page's query string. `nextCursor: null` means exhausted —
+        mirrors `TaskQueryService.listActivity`'s own `hasMore` check
+        (fetch `limit + 1` rows, an extra row present means there's a
+        next page).
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: cursorCreatedAtMs
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+        - name: cursorId
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A page of the cross-todo feed, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActivityFeed"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /keys:
     get:
       operationId: listKeys
@@ -385,6 +438,91 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/TodoEvent"
+    ActivityActor:
+      type: object
+      required: [handle, role]
+      description: >
+        Carried so the UI can mark human vs agent (I20's sibling
+        requirement, not itself an invariant — a rendering fact, not a
+        safety one, `_contract/API.md`).
+      properties:
+        handle:
+          type: string
+        role:
+          type: string
+    ActivityTodoRef:
+      type: object
+      required: [id, title]
+      description: The todo this event belongs to — enough to link/label it, not the full `Todo` shape.
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+    ActivityCursor:
+      type: object
+      required: [createdAtMs, id]
+      description: >
+        Round-trips verbatim: the response's `nextCursor` and the
+        request's `cursorCreatedAtMs`/`cursorId` query params name the
+        same two values, mirrors my-task's own `{createdAtMs, id}` cursor
+        object shape adapted to a flat query string.
+      properties:
+        createdAtMs:
+          type: integer
+          format: int64
+        id:
+          type: string
+    ActivityItem:
+      type: object
+      required: [id, seq, type, actor, createdAt, todo]
+      description: >
+        One `todo_events` row, shaped for the feed — same underlying row
+        `TodoEvent` (this file's own schema) represents on the per-todo
+        timeline, so the two share a rendering component
+        (`_goal/GOAL.md` Done-when 8): same `type`/`payload`/`body`
+        meaning, plus `actor`/`todo` context a single-todo timeline
+        doesn't need to repeat.
+      properties:
+        id:
+          type: string
+        seq:
+          type: integer
+          format: int64
+        type:
+          type: string
+          description: Full read-side vocabulary, `created` included (a read value here, never a write one — I16).
+        actor:
+          $ref: "#/components/schemas/ActivityActor"
+        payload:
+          type: object
+          additionalProperties: true
+          nullable: true
+        body:
+          type: string
+          nullable: true
+          description: >
+            The comment text for `type: commented`, `null` otherwise —
+            same Markdown-to-React-elements rendering rule as `TodoEvent.
+            body` (never raw HTML, I8's mirror).
+        createdAt:
+          type: string
+          format: date-time
+        todo:
+          $ref: "#/components/schemas/ActivityTodoRef"
+    ActivityFeed:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ActivityItem"
+        nextCursor:
+          allOf:
+            - $ref: "#/components/schemas/ActivityCursor"
+          nullable: true
+          description: Null when exhausted.
     ApiKey:
       type: object
       required: [id, prefix, createdAt, expiresAt]
