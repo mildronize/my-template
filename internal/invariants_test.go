@@ -234,6 +234,27 @@ func hasTestWithPrefix(names []string, prefix string) bool {
 // true; it matters more now that the check is per-module, since writing
 // an empty one to silence a real gap is a deliberate lie, not an
 // accidental miss.
+//
+// Second known limitation, same section of the doc (task-9, Clara's fifth
+// blind fork test): per-domain-module scope (above) requires *some*
+// TestI<N>_ test in the module's package, not one per layer. This repo's
+// own convention (internal/domain/todo) writes a separate
+// TestI3_Repo.../TestI3_Service.../TestI3_Handler... per module — but
+// nothing here requires that granularity, so renaming away only the
+// repo-layer test (leaving service/handler's alone) stays invisible to
+// this check: it still finds a TestI3_ match and reports the module
+// covered. Deliberately not hardened into a layer-aware check: I4 (the
+// other per-domain-module invariant) only ever has a repo-layer test by
+// nature — it's a static check against sqlc query source, not something a
+// service or handler layer would meaningfully re-test — so "require
+// Repo+Service+Handler" would be wrong for I4 the moment it was applied
+// uniformly, and a per-invariant table of which layers to require would
+// be exactly the kind of special-cased, drift-prone mechanism this
+// project has repeatedly found silent gaps behind elsewhere. A human
+// reviewer checking that a module's I3 coverage actually spans repo,
+// service, and handler — the same way "checks names, not bodies" already
+// asks a human to read the test body — is the deliberate choice here,
+// not an oversight.
 func TestDoneWhen12_EveryInvariantHasANamedTest(t *testing.T) {
 	root := repoRoot(t)
 	required := requiredInvariantNumbers(t, root)
@@ -264,7 +285,7 @@ func TestDoneWhen12_EveryInvariantHasANamedTest(t *testing.T) {
 		case scopePerDomainModule:
 			for _, module := range modules {
 				assert.Truef(t, hasTestWithPrefix(perModuleNames[module], prefix),
-					"no test named %s<something> found inside internal/%s's own package — "+
+					"no test named %s<something> found inside internal/domain/%s's own package — "+
 						"_contract/INVARIANTS.md's I%d (scope: per-domain-module) requires a dedicated test "+
 						"in every domain module, not just somewhere in the repo (GOAL.md Done-when 12; task-7)",
 					prefix, module, inv.number)
