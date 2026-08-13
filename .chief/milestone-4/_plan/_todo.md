@@ -189,6 +189,57 @@ caught a missing invariant test.
       this test does.
       **Green gate: full Go suite green, plus this task's own new tests.**
       **Owns: Done-when 12.**
+
+- [ ] **Fix-round, before task-6, owns no Done-when — not folded into
+      task-6.** `internal/invariants_test.go`'s `scope:` mechanism
+      conflates two ideas under `per-domain-module`: "applies to every
+      domain module" (true of I3/I4) and "belongs to exactly one named
+      place" (true of I15-I19, I21) — correct only because the domain-
+      module set currently has one member. Confirmed independently:
+      `domainModuleNames()` enumerates `internal/domain/*` only;
+      `internal/identity`'s real `TestI3_`/`TestI4_` tests exist and are
+      genuinely never looked at; I21 (an identity invariant) is tagged
+      `per-domain-module`, so a correctly-placed `TestI21_` in
+      `internal/identity` — exactly what task-6 needs to write — would
+      not satisfy the check, and a stub `TestI21_` under
+      `internal/domain/todo` would.
+      **The fix**: a new `scope: domain:<name>` tag form, resolved by a
+      small explicit name→package mapping (`domain:todo` →
+      `internal/domain/todo`, `domain:identity` → `internal/identity`
+      — not assumed to live under `internal/domain/`, since identity
+      deliberately doesn't per `ARCHITECTURE.md`'s own milestone-2
+      decision). Reassign I15-I19 → `domain:todo`, I21 → `domain:identity`.
+      **An unknown name in that mapping must abort loudly, not resolve to
+      a no-op check** — the exact shape of every other "matches nothing,
+      passes trivially" gap this milestone has already found and fixed
+      once (I15's own floor, the sqlc-ignores-Down measurement). A test
+      proves a deliberately bogus scope tag makes the suite fail, not
+      silently pass.
+      `per-domain-module` stays, for I3/I4 only, with its own **explicit,
+      hand-maintained** enumeration (not `domainModuleNames()` — that
+      function answers "what counts as a domain module for restructuring
+      purposes," and `internal/identity` failing it is the design, not a
+      gap this fix should paper over by widening it). **Assert the
+      explicit list is a superset of `domainModuleNames()`**, so a new
+      domain module nobody remembered to add fails loudly instead of
+      being silently exempt — this doesn't catch a new non-domain package
+      the way identity was missed (nothing mechanical will), so the file
+      states plainly that the list is hand-maintained and what adding a
+      package requires.
+      **Attack standard**: move a correctly-placed `TestI21_` out of
+      `internal/identity` and confirm the checker catches it; put a stub
+      `TestI21_` under `internal/domain/todo` and confirm that does
+      **not** satisfy it — this second one is the exact shortcut the old
+      mechanism would have silently accepted, and it's the one that
+      matters.
+      **Not on มายด์'s acceptance walkthrough** — internal engineering
+      that doesn't change what he sees; goes on his told-not-gated
+      acceptance list instead.
+      **Green gate: unfiltered `go test ./internal/...`, checked against
+      the current known-red baseline (above) — this fix-round should
+      shrink `TestDoneWhen12`'s own failure mode, not add to the
+      baseline.**
+
 - [ ] task-6: Key-listing replacement (I21) — `GET /api/bff/keys` becomes
       "every `role='agent'` user's non-revoked keys"; `DELETE
       /api/bff/keys/:id` becomes "any agent's key, still session-gated to
