@@ -54,3 +54,13 @@ fmt-check:
 .PHONY: run
 run:
 	go run ./cmd/server
+
+# smoke runs cmd/smoke against an already-running instance of this
+# service — it does NOT start one itself (see cmd/smoke/main.go's own
+# usage comment for why, and what it assumes about DATABASE_PATH/.env
+# matching that instance). Point it elsewhere with SMOKE_BASE_URL, e.g.
+# `SMOKE_BASE_URL=https://host make smoke`; defaults to
+# http://localhost:8080, matching Config.Port's own PORT default.
+.PHONY: smoke
+smoke:
+	go run ./cmd/smoke
