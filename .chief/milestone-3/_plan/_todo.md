@@ -41,7 +41,11 @@ plans the work; it doesn't authorize starting it.
       GETTING-STARTED.md`: Node prerequisite stated before the first
       command that needs it, React-app rename step written as its own
       step (package name, API base, domain nouns in components) distinct
-      from the existing Go rename checklist.
+      from the existing Go rename checklist. **These two docs items
+      (Done-when 8) are among the six Decisions rows Clara flagged to
+      มายด์ as cuttable** — if he cuts them, this task needs a trim, not
+      a restructure (the cost is a docs edit, not rework of anything
+      already built).
       **Verify the embed isn't stale, not just that the build succeeds**:
       change a visible string in a placeholder page, run `make build`,
       confirm the binary serves the new string — the same discipline
