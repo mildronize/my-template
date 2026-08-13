@@ -323,12 +323,13 @@ HTTP adapter that exposes them lives separately in
 **`internal/transport/publicapi/todo_handler.go`** (+ its test), alongside
 every other domain's own handler and the identity actor-resolution
 middleware. There is no longer one directory that holds "the todo domain"
-whole. **A third file — `internal/transport/bff/view_handler.go` (plus its
-own test files) — depends on the domain directly without living in either
-location above**, so "two locations" describes where the domain is
-*defined*, not everywhere it's *used*; see step 1 and step 8 below for
-what that third file means at delete time. **Study all three fully before
-you delete anything.** The first two are the only worked example this
+whole. **A third place — `internal/transport/bff/todo_handler.go` (plus
+its own test files), and the SPA screens under `web/src/app/` that call it
+— depends on the domain directly without living in either location
+above**, so "two locations" describes where the domain is *defined*, not
+everywhere it's *used*; see step 1 and step 8 below for what that third
+place means at delete time. **Study all three fully before you delete
+anything.** The first two are the only worked example this
 repo has of several patterns nothing else documents — deleting either
 first, then trying to reconstruct those patterns from scratch, is what a
 second blind fork test called *"the single worst instruction in the
@@ -424,12 +425,19 @@ Do it in this order:
    `cmd/server/main.go` wires all of it in (`buildHandler`, `wireIdentity`,
    `wirePublicAPI`), with "Patterns worth preserving" above in mind — those
    are the specific things here that are easy to miss and hard to
-   reconstruct if you skip straight to deleting. **A third file also
+   reconstruct if you skip straight to deleting. **A third place also
    depends on this domain directly and is easy to miss because it isn't
-   under either location above:** `internal/transport/bff/view_handler.go`
-   imports `internal/domain/todo` and renders its data on the owner's `GET
-   /` view. See the note at the end of step 8 below for what this means at
-   delete time.
+   under either location above:** `internal/transport/bff/todo_handler.go`
+   (the session-authenticated JSON CRUD surface at `/api/bff/todos`)
+   imports `internal/domain/todo` directly, and the SPA's own todos
+   screens (`web/src/app/{TodosPage,TodosList,TodoRow,NewTodoDialog}.tsx`,
+   `web/src/lib/todos.ts`) reference the same domain's shape through
+   generated types. This is what the owner actually sees and edits after
+   `GET /login` — an earlier version of this document pointed here at a
+   Go-`html/template` view (`internal/transport/bff/view_handler.go`),
+   retired by milestone-3's SPA; the file changed, the "there's a third
+   place, don't miss it" fact didn't. See the note at the end of step 8
+   below for what this means at delete time.
 2. **Copy both locations to your new module's homes and rename them** —
    `internal/domain/todo/` → `internal/domain/<new>/` (new package name,
    new file/type/identifier names, new table name) **and**
@@ -471,13 +479,17 @@ Do it in this order:
    already know them.
 
    *Optional, and separate from the `api.ServerInterface` wiring above:*
-   if you also want your fork's BFF view (`internal/transport/bff/
-   view_handler.go`, `GET /`) to show your new domain instead of todos,
-   `wireBFF`'s own `todoSvc` argument and `NewViewHandler` need the same
-   swap. Nothing requires this before step 8 — but step 8 requires
-   resolving it one way or another, since deleting `internal/domain/todo`
-   breaks `view_handler.go`'s import regardless of whether you've adapted
-   it yet.
+   if you also want the owner-facing BFF surface
+   (`internal/transport/bff/todo_handler.go`'s `/api/bff/todos`, and the
+   SPA screens that call it) to show your new domain instead of todos,
+   `wireBFF`'s own `todoSvc` argument and `NewTodoServer` need the same
+   swap, plus the equivalent rename pass through
+   `web/src/app/{TodosPage,TodosList,TodoRow,NewTodoDialog}.tsx` and
+   `web/src/lib/todos.ts` (Step 3b above covers the SPA-side domain-noun
+   sweep in general). Nothing requires this before step 8 — but step 8
+   requires resolving it one way or another, since deleting
+   `internal/domain/todo` breaks `internal/transport/bff/todo_handler.go`'s
+   import regardless of whether you've adapted it yet.
 5. `make generate`.
 6. **This is the real checkpoint** — the previous version of this
    instruction claimed one existed a step earlier than it actually could:
@@ -555,56 +567,68 @@ Do it in this order:
    ```
 
    **A third place also imports the todo domain directly:
-   `internal/transport/bff/view_handler.go`** (`NewViewHandler(todoSvc
-   *todo.Service)`, `viewData{Todos []todo.Todo}`, and the template's
-   `{{.Todos}}`/`{{.Title}}`/`{{.Done}}` references) — the owner-facing
-   `GET /` view renders this domain by name, not through the
-   shared-service-layer indirection the other wiring above uses. Deleting
+   `internal/transport/bff/todo_handler.go`** (`NewTodoServer(svc
+   *todo.Service)`, `toBFFTodo(t todo.Todo) bffapi.Todo`, and every
+   `ListTodos`/`CreateTodo`/`GetTodo`/`UpdateTodo`/`DeleteTodo` method
+   calling `s.Service.*Todo(...)`) — the session-authenticated
+   `/api/bff/todos` surface the owner's SPA calls after `GET /login`, not
+   through the shared-service-layer indirection alone but through this
+   file naming the domain type directly, same as
+   `internal/transport/publicapi/todo_handler.go` already does. **This is
+   structurally the same file you already adapted once, in step 2 above —
+   `internal/transport/bff/todo_handler.go` is `internal/transport/
+   publicapi/todo_handler.go`'s session-authenticated twin, generated from
+   a second OpenAPI spec (`bff-openapi.yaml`) into a second package
+   (`internal/bffapi`) instead of `internal/api`.** Deleting
    `internal/domain/todo` without touching this file is a guaranteed
    `go build ./...` failure (`no required module provides package
    .../internal/domain/todo`) — loud, not silent.
 
-   **Adapt it to your new domain — that's the default here, not stripping
-   it down to something that merely compiles.** An earlier version of this
-   section offered "update it" and "strip it down to just the signed-in
-   line" as roughly equal options; they aren't, and presenting them as
-   equal is exactly what let a test agent read only the doc and miss the
-   cost. `internal/transport/bff/view_handler_test.go` carries **two**
-   things stripping silently drops: Done-when 9's rendering tests
-   (`TestAuthenticatedViewRendersOwnersOwnTodos`,
-   `TestAuthenticatedViewOnlyShowsOwnersOwnTodos`) and
-   `TestI12_BFFSessionNeverResolvesToAgent_ViewMiddleware` — I12's
-   defense-in-depth proof that a session resolving to an agent role never
-   renders anything, checked directly rather than assumed unreachable.
-   Strip the view down to compile and both are gone with it, and nothing
-   catches that: the invariants check (`internal/invariants_test.go`) only
-   confirms a `TestI12_...`-named test exists *somewhere*, not that this
-   specific one still does, and `go build`/`go test ./...` only fail on
-   code that's still there, never on a test that quietly isn't. Update
-   `view_handler.go` (its `NewViewHandler` parameter, `viewData`, and the
-   template) to render your new domain instead, and carry
-   `view_handler_test.go`'s tests over the same way you'd carry over
-   `internal/domain/todo`'s own tests in step 2 above. Only strip the view
-   down as a deliberate, acknowledged trade — accepting the lost coverage
-   on purpose, not by default because it was offered as the easier of two
-   equal-looking options. Either way, `cmd/server/main.go`'s `wireBFF`
-   call passes `todoSvc` as an argument — that call site has to match
-   whatever `NewViewHandler` ends up expecting.
+   **Adapt it to your new domain, the same rename-in-place you already did
+   for the `publicapi` handler in step 2** — new `bffapi.<New>`-shaped
+   request/response types (from your own `bff-openapi.yaml` edits and
+   `make generate`, mirroring step 3's `openapi.yaml` work), the same
+   method bodies calling your renamed service's own methods.
+   `internal/transport/bff/todo_handler_test.go` carries three things a
+   sloppy rename can silently break rather than catch:
+   `TestBFFHandler_FullCRUDRoundTrip_RealSessionCookie` (the real-cookie
+   round trip this document's own Step 5 checklist and task-5's own final
+   verification both rely on), `TestI3_BFFHandlerOwnershipScoping_
+   ReturnsNotFoundNotForbidden` (I3 at this specific layer — a dedicated
+   check, not inherited from `publicapi`'s own I3 test), and
+   `TestBFFHandler_ListTodos_Unauthenticated_Returns401NotRedirect` (I12's
+   "answer 401, never redirect" behavior on this JSON surface). Carry all
+   three over the same way you carried `internal/domain/todo`'s own tests
+   in step 2. `cmd/server/main.go`'s `wireBFF` call passes `todoSvc` as an
+   argument to `bff.NewTodoServer` — that call site has to keep matching
+   whatever your renamed constructor ends up expecting.
+
+   **The SPA side needs the same rename, and it's easy to treat as
+   optional because nothing in `go build`/`go test ./...` will ever ask
+   for it.** `web/src/app/{TodosPage,TodosList,TodoRow,
+   NewTodoDialog}.tsx` and `web/src/lib/todos.ts` reference "todo"/
+   `title`/`done` by name (Step 3b above already flags this file set for
+   the general domain-noun sweep). `web/src/app/TodosList.test.tsx`
+   ("renders the mocked todo's title, and never a title absent from the
+   mock" — Done-when 7's negative-control render check) and
+   `web/src/lib/todos.test.tsx` (the create/update/delete hook tests) are
+   this rename's own regression guard on that side — carry them over the
+   same way, not just the Go tests.
 
    **`internal/transport/bff`'s own test files hit the same build-vs-test
    trap the `compositeServer` warning above describes for
    `publicapi` — extend that warning to this package too.**
-   `view_handler_test.go` and `bff_testutil_test.go` (`newTestRouter`'s
+   `todo_handler_test.go` and `bff_testutil_test.go` (`newTestRouter`'s
    `todoSvc *todo.Service` parameter, `seedTodo`) both import
-   `internal/domain/todo` directly, same as `view_handler.go` itself.
+   `internal/domain/todo` directly, same as `todo_handler.go` itself.
    `go build ./...` never compiles `_test.go` files at all, so getting
-   `view_handler.go` itself to compile cleanly proves nothing about either
+   `todo_handler.go` itself to compile cleanly proves nothing about either
    of these two — a stale `todo.Service`/`todo.Todo` reference left behind
    in either one only surfaces once you run `go test ./...` (or
    `go vet ./...`), exactly the way `compositeServer`'s stale `*TodoServer`
    embed only surfaced there for `publicapi_testutil_test.go`. Update both
    test files' own domain references (and rename `seedTodo` if you're
-   keeping that fixture) in the same pass you adapt `view_handler.go`, not
+   keeping that fixture) in the same pass you adapt `todo_handler.go`, not
    after a green `go build ./...` makes it look finished.
 9. **Deal with the invariants this deletes.** `internal/domain/todo/
    repo_test.go` carried the `TestI3_...`/`TestI4_...` tests for
@@ -1087,12 +1111,14 @@ count in prose twice, and both times the actual number had drifted by the
 next fix round without anyone noticing until the next blind test. Run the
 grep at the end of this section yourself; that output is the only
 trustworthy count, excluding everything a correct Step 5 already deletes
-or edits (`internal/domain/todo/` and `internal/transport/publicapi/
-todo_handler.go` themselves, its migration and query file, the two
-generated outputs `internal/db`/`internal/api/openapi.gen.go`,
-`openapi.yaml`'s own `/todos` content per Step 5's now-corrected delete
-list, `cmd/server/main.go`'s registration, and — if you adapted it per
-Step 5's BFF note — `internal/transport/bff/view_handler.go`) and this
+or edits (`internal/domain/todo/`, `internal/transport/publicapi/
+todo_handler.go`, and `internal/transport/bff/todo_handler.go` themselves,
+its migration and query file, the two generated outputs
+`internal/db`/`internal/api/openapi.gen.go`/`internal/bffapi/
+bffapi.gen.go`, `openapi.yaml`'s and `bff-openapi.yaml`'s own `/todos`
+content per Step 5's now-corrected delete list, `cmd/server/main.go`'s
+registration, and the SPA screens under `web/src/app/` and
+`web/src/lib/todos.ts` (Step 5's BFF note above covers this set) and this
 repo's unrelated
 `.chief`-planning-framework use of the word "todo" in `_todo.md`,
 `AGENTS.md`, `.agents/`, which has nothing to do with the domain. **This
