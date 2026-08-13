@@ -116,14 +116,23 @@ agreed to expect):
       Done-when item.
       **A cheap reachability check, at the end of this task specifically
       — not deferred to task-9's walkthrough.** Real running binary, a
-      real owner session (the same `bff.Signer.NewSessionCookie` fixture
-      this project's own tests already use), confirm the SPA shell still
-      loads at `/` and at least one authenticated BFF endpoint (e.g.
-      `GET /api/bff/me`) still answers correctly. Not the walkthrough —
-      just proof the login door still opens, at the point the schema
-      rename (task-1) has had the most opportunity to have broken session
-      or user resolution without anyone noticing. If this breaks, the
-      cause is at most two tasks back, not eight.
+      real **minted** owner session (`bff.Signer.NewSessionCookie`, the
+      same fixture this project's own tests already use), confirm the SPA
+      shell still loads at `/` and at least one authenticated BFF endpoint
+      (e.g. `GET /api/bff/me`) still answers correctly. **Named precisely,
+      not as "the login door still opens"**: this proves session
+      *consumption* and user resolution survived the schema rename (task-1)
+      — given a valid session, does it still resolve to the right actor
+      and serve the right data. **It does not touch session
+      *establishment*** — the SSO redirect, the callback, the scope, the
+      cookie actually being set by a real login — which stays browser-only
+      until task-9. ENG-13's three faults were all upstream of the cookie
+      existing (an auth-gate misread, a scope mismatch, a stale cached
+      bundle) and every one of them would pass this check, because every
+      one of them lives in establishment, not consumption. Still worth
+      having exactly here — it catches the specific risk it was added for
+      (the rename breaking resolution), two tasks after the rename instead
+      of eight — just not a substitute for what it doesn't reach.
       **Green gate: `go build ./...` and `go test ./...` both clean — the
       first point the full Go suite is green again.** From here on, any
       red Go package is a real regression, not an expected gap.
