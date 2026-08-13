@@ -1,5 +1,31 @@
 # syntax=docker/dockerfile:1
 
+# --- web-build stage ------------------------------------------------------
+# node:22-alpine — matches docs/GETTING-STARTED.md's Prerequisites section
+# (Node, stated there for the same reason Go's own toolchain is). This
+# stage builds web/dist *before* the Go build stage even starts, milestone-3
+# /task-1's "make build ordering" requirement carried into Docker too:
+# cmd/server's //go:embed (web/embed.go) bakes in whatever's on disk under
+# web/dist at Go compile time, so a Docker build that skipped this stage
+# (or ran it after the Go build) would silently ship the tracked
+# dist/.gitkeep placeholder — or a stale layer-cached build — instead of a
+# real SPA. Kept as its own stage (not `RUN npm ...` inside the Go build
+# stage) so its layer cache only invalidates on web/'s own changes, not on
+# every Go source edit.
+FROM node:22-alpine AS web-build
+
+WORKDIR /src/web
+
+# package.json + package-lock.json first, same reasoning as the Go build
+# stage's own go.mod/go.sum-first layer: `npm ci` (reproducible, fails on
+# drift — see Makefile's web-build target) only needs these two files, so
+# this layer is cached across rebuilds that don't touch dependencies.
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+
+COPY web/ ./
+RUN npm run build
+
 # --- build stage --------------------------------------------------------
 # golang:1.26-alpine, not the full golang:1.26 image, purely to keep the
 # build stage's own layer cache small — none of it ships in the final
@@ -16,6 +42,17 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
+
+# Overwrites the tracked dist/.gitkeep placeholder (copied in by `COPY . .`
+# above) with web-build's real Vite output — this has to happen after
+# `COPY . .`, not before, or the plain copy would win. This is the one
+# line that actually closes the stale-embed gap for `docker compose up`
+# (.chief/milestone-3/_goal/GOAL.md Done-when 1 and 11): without it, this
+# stage would go build a binary that embeds nothing but the placeholder,
+# same as an un-built local `go build ./...` does, and it would do so
+# silently — no error, no missing-file warning, just a binary that serves
+# an empty SPA.
+COPY --from=web-build /src/web/dist ./web/dist
 
 # CGO_ENABLED=0: this template's only DB driver is modernc.org/sqlite, a
 # pure-Go/CGO-free SQLite implementation (see internal/platform/db.go) —

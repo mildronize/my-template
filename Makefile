@@ -35,8 +35,28 @@ generate:
 	$(BIN_DIR)/sqlc generate
 	$(BIN_DIR)/oapi-codegen -generate types,gin,spec -package api -o internal/api/openapi.gen.go openapi.yaml
 
+# web-build runs Vite's production build (web/dist) — split out of
+# `build` below so it's independently invokable (e.g. from the Dockerfile
+# stage that builds the frontend separately from the Go binary).
+# `npm ci` (not `npm install`) for the same reproducibility reason
+# `tools` pins exact tool versions via go.mod/go.sum: web/package-lock.json
+# is the source of truth for exactly which dependency versions this
+# build uses, and `npm ci` refuses to proceed if it and web/package.json
+# have drifted apart, rather than silently resolving something new.
+.PHONY: web-build
+web-build:
+	cd web && npm ci && npm run build
+
+# build's ordering is deliberate, not incidental: cmd/server embeds
+# web/dist at Go compile time (web/embed.go's //go:embed directive), so
+# whatever's on disk under web/dist *when go build runs* is what ships —
+# running `go build` before `npm run build` (or not at all) would bake in
+# a stale or placeholder-only SPA silently, no error, no warning
+# (.chief/milestone-3/_goal/GOAL.md Done-when 1). web-build must finish
+# before go build starts every time, hence one target listing both rather
+# than two independent ones a caller might reorder or skip.
 .PHONY: build
-build:
+build: web-build
 	go build ./...
 
 .PHONY: vet

@@ -2,12 +2,14 @@
 // config, logging, the SQLite connection, and two gin engines together and
 // starts listening on one port: internal/transport/publicapi's routes
 // (todo CRUD, GET /me, /keys, mounted under /api/v1 plus /healthz) and
-// internal/transport/bff's routes (GET /login, GET /callback, GET / —
-// task-4) share one *sql.DB and one *identity.Repo/*todo.Service, but each
-// gets its own *gin.Engine (and its own copy of platform's cross-cutting
-// middleware — see buildHandler) since they're different transport
-// surfaces per ARCHITECTURE.md. A stdlib http.ServeMux in front dispatches
-// by path prefix to whichever engine owns it — this keeps the "one port"
+// internal/transport/bff's routes (GET /login, GET /callback, plus the
+// embedded Vite SPA — web/embed.go, cmd/server/spa.go — serving "/" and
+// everything else bff doesn't explicitly claim, milestone-3/task-1) share
+// one *sql.DB and one *identity.Repo/*todo.Service, but each gets its own
+// *gin.Engine (and its own copy of platform's cross-cutting middleware —
+// see buildHandler) since they're different transport surfaces per
+// ARCHITECTURE.md. A stdlib http.ServeMux in front dispatches by path
+// prefix to whichever engine owns it — this keeps the "one port"
 // deployment model docker-compose.yml and DEPLOY-REQUIREMENTS.md already
 // document, rather than needing a second listener for bff.
 package main
@@ -111,7 +113,8 @@ func buildHandler(ctx context.Context, cfg *platform.Config, db *sql.DB, logger 
 
 	// Both engines share one port — a stdlib mux dispatches by path prefix.
 	// "/api/v1/" and "/healthz" are publicapi's; everything else (bff's
-	// "/", "/login", "/callback") falls through to the "/" pattern, which
+	// "/login", "/callback", and — via NoRoute, wireBFF — the embedded SPA
+	// at "/" and every other path) falls through to the "/" pattern, which
 	// net/http.ServeMux treats as the catch-all for anything not matched
 	// by a more specific registered pattern. Neither engine strips a
 	// prefix — each still sees the request's full original path, which is
@@ -209,12 +212,13 @@ func wirePublicAPI(apiV1 *gin.RouterGroup, todoSvc *todo.Service, identitySvc *i
 }
 
 // wireBFF builds internal/transport/bff's session signer and its
-// owner-login flow's id-token verifier, then registers GET /login,
-// GET /callback, and the session-gated GET / on router (task-4.md,
-// _contract/API.md's BFF section) — completing task-1's Done-when 3
-// (platform's middleware wired into both engines): router here already
-// carries platform.NewRouter's RequestID/RequestLogging/Recovery, applied
-// by buildHandler exactly the way it's applied to publicapi's own router.
+// owner-login flow's id-token verifier, then registers GET /login and
+// GET /callback on router (task-4.md, _contract/API.md's BFF section),
+// plus the embedded SPA (cmd/server/spa.go) as router's NoRoute handler
+// (milestone-3/task-1) — completing task-1's Done-when 3 (platform's
+// middleware wired into both engines): router here already carries
+// platform.NewRouter's RequestID/RequestLogging/Recovery, applied by
+// buildHandler exactly the way it's applied to publicapi's own router.
 //
 // Neither cfg.SessionSecret being auto-generated nor
 // SSOClientID/SSOClientSecret being unset stop this from wiring routes —
@@ -223,6 +227,24 @@ func wirePublicAPI(apiV1 *gin.RouterGroup, todoSvc *todo.Service, identitySvc *i
 // GET /login and GET /callback mount unconditionally and check
 // oauth.go's configured() themselves at request time, returning a clear
 // error page instead of a working flow when the config is incomplete.
+//
+// milestone-3/task-1 note on GET /: internal/transport/bff/view_handler.go
+// (the old Go-html/template owner view) and its test are deliberately NOT
+// touched here or anywhere in this task — that file's removal is task-3's,
+// per this task's own "what NOT to do" list. What *does* change here is
+// which route claims the exact path "/": this function no longer
+// registers view_handler.go's GET / on router at all, so the embedded SPA
+// (below, via NoRoute) can actually serve "/" — leaving the old
+// registration in place would have made "/" permanently unreachable for
+// the SPA, since gin always prefers an explicit route over NoRoute.
+// NewViewHandler itself is untouched and still fully covered by its own
+// package's tests (internal/transport/bff/view_handler_test.go builds its
+// own router directly, independent of this function — see that package's
+// bff_testutil_test.go's newTestRouter) — it's just not wired into the
+// live binary's routing table from this call site anymore. todoSvc is
+// still accepted here (unused by this function now) so task-3 has an
+// obvious place to reintroduce a todos-backed route at this layer if the
+// SPA ever needs one.
 func wireBFF(ctx context.Context, router *gin.Engine, cfg *platform.Config, repo *identity.Repo, todoSvc *todo.Service, logger *slog.Logger) error {
 	secret := []byte(cfg.SessionSecret)
 	if len(secret) == 0 {
@@ -260,7 +282,12 @@ func wireBFF(ctx context.Context, router *gin.Engine, cfg *platform.Config, repo
 
 	router.GET("/login", bff.NewLoginHandler(cfg, signer, logger))
 	router.GET("/callback", bff.NewCallbackHandler(cfg, signer, idVerifier, repo, logger))
-	router.GET("/", bff.RequireSession(signer, repo, logger), bff.NewViewHandler(todoSvc))
+
+	spaHandler, err := newSPAHandler()
+	if err != nil {
+		return fmt.Errorf("building embedded SPA handler: %w", err)
+	}
+	router.NoRoute(gin.WrapH(spaHandler))
 
 	return nil
 }
