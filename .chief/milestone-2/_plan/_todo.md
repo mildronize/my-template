@@ -62,7 +62,7 @@ before this milestone started.
       `TestI14_` still don't exist. Not this task's regression; don't
       touch `invariants_test.go` to silence it.
       **Owns: Done-when 4, 5.**
-- [ ] task-3: JWKS rotation fix — `internal/identity/jwt.go`: on `kid`
+- [x] task-3: JWKS rotation fix — `internal/identity/jwt.go`: on `kid`
       not found in the cached set, force exactly one `Cache.Refresh()` +
       retry, then fail (not zero, not a loop — a random-`kid` probe must
       not be able to force repeated issuer calls). Test against a fake
