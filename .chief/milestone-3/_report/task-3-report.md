@@ -312,3 +312,56 @@ New `git clone`, `milestone-2/close-parity-gap` @ `541202e`,
 - `6c38c84` — `fix(milestone-3/task-3): close AuthGate's untested first-load transient-failure gap`
 - `5557095` — `fix(milestone-3/task-3): delete dead RequireSession middleware`
 - `541202e` — `fix(milestone-3/task-3): set web/package.json's engines.node to a verified floor`
+
+## Fix-round note #2 (post-verification, 2026-08-13)
+
+A second verification pass found one more issue, separate from the three
+above: `web/src/App.tsx`'s own `"/login"` react-router route
+(`web/src/app/login/page.tsx`) is dead code in **both** production and
+dev mode, not just production as this report's earlier "Dev-mode
+divergence" note (line ~204) had already flagged. Production was already
+known — Go's `cmd/server` registers an explicit `GET /login` that always
+wins over the SPA's `NoRoute` fallback. What was missing: `web/
+vite.config.ts`'s dev-server `proxy` config also forwards `/login` (and
+`/callback`) straight to the Go backend, so even `npm run dev`'s
+react-router never sees a `/login` navigation either. The route was
+therefore reachable in *no* configuration this project has — worse than
+"only broken in prod," genuinely unreachable code that risked misleading
+a forker into thinking `app/login/page.tsx` is where login logic lives.
+
+- Deleted `web/src/App.tsx`'s `<Route path="/login" .../>` and its
+  `LoginPage` import, and deleted `web/src/app/login/page.tsx` (and the
+  now-empty `web/src/app/login/` directory with it). Confirmed via
+  `grep -rn "LoginPage\|app/login\|login/page"` that no other file
+  (imports, tests, docs) referenced either.
+- Added a load-bearing comment to `vite.config.ts` at the `proxy` block:
+  spells out that the `/login`/`/callback` entries are the entire reason
+  the SPA doesn't need its own login route, and that removing either
+  would silently turn `/login` into a dead dev-mode path with no real UI
+  behind it — so a future edit trimming this proxy list doesn't do that
+  by accident.
+- Checked whether a visible "Sign in" fallback link/button needed to move
+  somewhere else first: `AuthGate.tsx`'s `window.location.replace(...)`
+  redirect already fires automatically for any logged-out user (a real
+  browser navigation, not client-side routing), and `grep -rn "Sign in"`
+  across `web/src` turned up nothing else depending on the deleted page.
+  Nothing to preserve — removing the dead route was sufficient on its
+  own.
+- Verified: `npx tsc -b` clean (confirms nothing else imports the deleted
+  file), `npm run build` clean, `npx vitest run` — still **3 files, 7
+  tests, all passing** (unchanged from the prior fix-round; no test
+  referenced the deleted route). `go build ./...` and `go test ./...`
+  unaffected (no Go files touched). Manually built the real SPA, ran the
+  real `cmd/server` binary against a fresh SQLite DB (no SSO configured),
+  and compared `curl -i http://localhost:<port>/login` against
+  `curl http://localhost:<port>/some-random-path`: `/login` returned Go's
+  own `bff.NewLoginHandler` response (`401`, `"Login failed"` HTML body —
+  the "owner login not configured" error page, since no Hydra client was
+  registered for this manual check) while the random path returned the
+  SPA's `index.html` via `NoRoute` — confirming the explicit Go route
+  still wins over the SPA fallback exactly as before the deletion, and
+  that nothing about routing depended on the now-removed React route.
+
+### Commit pushed (branch `milestone-2/close-parity-gap`)
+
+- `708daec` — `fix(milestone-3/task-3): delete the SPA's dead /login route`
