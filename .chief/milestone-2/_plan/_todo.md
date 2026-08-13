@@ -26,7 +26,7 @@ where `go test ./...` fully green becomes the real check, and a still-red
 I1–I10 at that point is a genuine regression, since those were green
 before this milestone started.
 
-- [ ] task-1: Architecture restructure — `internal/todo` → `internal/
+- [x] task-1: Architecture restructure — `internal/todo` → `internal/
       domain/todo`; `internal/identity`'s `handler.go` → `internal/
       transport/publicapi` (identity's `service.go`/`repo.go`/`jwt.go`
       stay in `internal/identity`); rewrite `internal/architecture_test.go`
