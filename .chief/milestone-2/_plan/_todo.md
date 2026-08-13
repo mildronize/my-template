@@ -74,7 +74,7 @@ before this milestone started.
       `TestI11_`…`TestI14_` still don't exist. Not this task's
       regression; don't touch `invariants_test.go` to silence it.
       **Owns: Done-when 6.**
-- [ ] task-4: Owner login (BFF) — see `task-4.md` (spec below; this is
+- [x] task-4: Owner login (BFF) — see `task-4.md` (spec below; this is
       the milestone's densest task, same reasoning milestone-1 gave task-2
       a spec: a library integration with no Go reference on this fleet to
       copy, several judgment calls already made during planning that need
