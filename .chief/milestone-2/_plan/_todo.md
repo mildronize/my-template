@@ -50,7 +50,7 @@ before this milestone started.
       pass** — verify only this task's own tests plus I1–I10 (already
       green before this milestone) still hold.
       **Owns: Done-when 1, 2, 16.**
-- [ ] task-2: Fork-safe client registration — `register-<service>.sh`
+- [x] task-2: Fork-safe client registration — `register-<service>.sh`
       placeholder template (`<SERVICE_NAME>`, `<PORT>`, …, envsubst-style,
       mirrors `hydra.yml.template`'s pattern). `docs/GETTING-STARTED.md`:
       make running it Step 1 (not optional-by-omission — a service with
