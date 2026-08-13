@@ -124,9 +124,18 @@ Machine-checkable stopping conditions, one task owner each (assigned in
 1. `internal/architecture_test.go` rewritten for the 5-rule layout (domain
    never imports transport, only repo.go imports sqlc, no sibling-domain
    imports, transport never imported by domain/identity, platform imports
-   nothing above it) and passes — verified the same way every prior
-   guardrail change in this repo has been: a scratch-clone violation
-   actually caught, not just green.
+   nothing above it) and passes. **Not satisfied by green alone — attack
+   the rewritten discovery logic specifically before moving on**, the same
+   discipline that's caught two silent guardrail failures already this
+   project (the hardcoded `domainDirs` giving a new module zero coverage;
+   the invariants check unioning a superseded document). At minimum:
+   plant a fake new domain module with a file that imports `gin`
+   incorrectly, confirm it's caught by the *dynamically discovered* module
+   list (not a name that happened to already be known); make
+   `internal/platform` import a domain module and confirm rule 5 catches
+   it; make a domain file import `internal/transport/*` and confirm rule
+   4 catches it. Green on a correct layout proves nothing about a
+   rewritten discovery function — only a caught violation does.
 2. Every milestone-1 test still passes after the code move (no regression
    from relocation alone).
 3. `platform/middleware.go`'s recovery/logging/request-ID wired into both
@@ -175,6 +184,15 @@ Machine-checkable stopping conditions, one task owner each (assigned in
     fix (already landed during planning, see commit `4eac2c0`) still
     passes with the full I1–I14 set once every task above has landed its
     tests.
+16. **`docker compose up` still works after the restructure.** Not
+    inherited from milestone-1 — Clara's milestone-1 verification pass
+    deliberately deferred this check (a port conflict with a running
+    blind-fork-test agent) and never came back to it, so **the last
+    confirmed-working state was Luna's manual check before four rounds of
+    fixes landed on top**, not anything re-verified since. The restructure
+    moves every package `Dockerfile`/`docker-compose.yml` implicitly
+    reference by path — check it directly rather than assuming relocation
+    alone didn't break the container build.
 
 ### Human acceptance — after the loop, not part of it
 

@@ -37,9 +37,19 @@ before this milestone started.
       gin." `platform/middleware.go`: recovery, request logging, request
       ID — wire into the existing `publicapi` engine now (wiring into
       `bff` happens in task-4, once that engine exists). Verify the
-      rewritten guardrail the same way every prior one has been: scratch
-      clone, construct the specific violation, confirm it's caught.
-      **Owns: Done-when 1, 2.**
+      rewritten guardrail by attacking it, not by reading it green (see
+      `_goal/GOAL.md` Done-when 1 for the three specific violations to
+      construct — a fake new module with a bad import, platform importing
+      a domain, a domain file importing transport). Also verify `docker
+      compose up` still works post-restructure — not assumed, the last
+      person to actually check this was Luna, before four rounds of fixes
+      landed on top; nobody has re-verified it since.
+      **Expected failing at this point:** `TestI11_`…`TestI14_` don't
+      exist yet — those land in tasks 4/5. **Do not modify
+      `internal/invariants_test.go` or write stub tests to make them
+      pass** — verify only this task's own tests plus I1–I10 (already
+      green before this milestone) still hold.
+      **Owns: Done-when 1, 2, 16.**
 - [ ] task-2: Fork-safe client registration — `register-<service>.sh`
       placeholder template (`<SERVICE_NAME>`, `<PORT>`, …, envsubst-style,
       mirrors `hydra.yml.template`'s pattern). `docs/GETTING-STARTED.md`:
@@ -48,6 +58,9 @@ before this milestone started.
       explicit key-path/env-var rename line to the existing rename
       checklist (the fork-collision Clara found — two forks that both
       skip it silently overwrite each other's key files).
+      **Expected failing at this point:** same as task-1 — `TestI11_`…
+      `TestI14_` still don't exist. Not this task's regression; don't
+      touch `invariants_test.go` to silence it.
       **Owns: Done-when 4, 5.**
 - [ ] task-3: JWKS rotation fix — `internal/identity/jwt.go`: on `kid`
       not found in the cached set, force exactly one `Cache.Refresh()` +
@@ -57,6 +70,9 @@ before this milestone started.
       DEPLOY-REQUIREMENTS.md`: state the rotation behavior explicitly, so
       a forker knows they don't need `sso-consumer-contract.md` §7.4's
       restart-after-rebuild expectation anymore.
+      **Expected failing at this point:** same as task-1/2 —
+      `TestI11_`…`TestI14_` still don't exist. Not this task's
+      regression; don't touch `invariants_test.go` to silence it.
       **Owns: Done-when 6.**
 - [ ] task-4: Owner login (BFF) — see `task-4.md` (spec below; this is
       the milestone's densest task, same reasoning milestone-1 gave task-2
@@ -71,6 +87,10 @@ before this milestone started.
       an owner session + a todo, hits `GET /`, and asserts the todo's
       title is in the response body, not just that the route returns
       200) — see `task-4.md`'s "the minimal view itself" section.
+      **Expected failing at this point:** this task lands I11/I12 —
+      `TestI13_`/`TestI14_` (rotate ordering, resolver) still won't exist
+      until task-5. Confirm I11/I12 now pass; I13/I14 remaining red is
+      not this task's regression.
       **Owns: Done-when 3, 7, 8, 9.**
 - [ ] task-5: Key lifecycle finish — `rotate` CLI command
       (issue-new-then-disable-old ordering, I13), key-file + resolver
