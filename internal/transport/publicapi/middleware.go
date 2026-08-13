@@ -1,3 +1,22 @@
+// Package publicapi is the REST transport surface for agents/skills,
+// key-authenticated (_contract/API.md) — the public API distinct from the
+// owner-facing internal/transport/bff surface a later task adds. It holds
+// every HTTP-facing piece for both the todo domain and identity: the
+// generated-interface adapters (todo_handler.go, me_handler.go,
+// keys_handler.go) and the actor-resolution middleware (this file, moved
+// here from internal/identity's old handler.go/middleware_handler.go —
+// ARCHITECTURE.md: "Why transport is not inside a domain module
+// anymore"). No domain module or internal/identity may import this
+// package back (ARCHITECTURE.md rule 4) — dependencies point one way,
+// from here down into internal/domain/* and internal/identity, never the
+// reverse.
+//
+// This doc comment lives here, not on a per-domain handler file like
+// todo_handler.go, deliberately (task-9, Blocker B): every file that
+// implements a `<Domain>Server` is expected to be deleted whole on fork
+// (docs/GETTING-STARTED.md Step 8), and Go's package doc convention reads
+// from whichever file happens to declare it — this file is the one that
+// survives that deletion.
 package publicapi
 
 import (
@@ -9,8 +28,43 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/mildronize/my-template/internal/api"
 	"github.com/mildronize/my-template/internal/identity"
 )
+
+// newAPIError builds an internal/api.Error-shaped response body — the
+// generated type the openapi-validated handlers (todo_handler.go and any
+// domain handler modeled on it) write directly, as opposed to this file's
+// own hand-rolled errorEnvelope. Shared here (task-9, Blocker B/C) so a
+// fork copying a domain handler file into this package never redeclares
+// it — it previously lived inside todo_handler.go, a file Step 8 of
+// docs/GETTING-STARTED.md deletes on fork, and which a same-package copy
+// (e.g. quote_handler.go) would otherwise redeclare.
+func newAPIError(code, message string) api.Error {
+	e := api.Error{}
+	e.Error.Code = code
+	e.Error.Message = message
+	return e
+}
+
+// actorID reads the actor RequireActor (this file) already resolved onto
+// the gin context (ActorFromContext) and returns its id — every handler in
+// this package that needs to know who's calling uses this instead of
+// querying users/api_keys itself (I4), and never looks a row up by id
+// alone without also knowing whose it must be (I3). The !ok branch is
+// defensive, mirroring handleMe: it should be unreachable given the
+// intended middleware order (RejectActorFields, RequireActor, then the
+// handler), and is here only in case a route is ever wired without that
+// chain. Shared here for the same reason as newAPIError above — it
+// previously lived inside todo_handler.go, a file Step 8 deletes on fork.
+func actorID(c *gin.Context) (string, bool) {
+	user, ok := ActorFromContext(c)
+	if !ok {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, unauthorizedBody)
+		return "", false
+	}
+	return user.ID, true
+}
 
 // actorContextKey is the gin context key RequireActor stores the
 // resolved identity.User under. todo_handler.go/me_handler.go/

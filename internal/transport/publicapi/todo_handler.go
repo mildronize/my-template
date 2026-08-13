@@ -1,15 +1,3 @@
-// Package publicapi is the REST transport surface for agents/skills,
-// key-authenticated (_contract/API.md) — the public API distinct from the
-// owner-facing internal/transport/bff surface a later task adds. It holds
-// every HTTP-facing piece for both the todo domain and identity: the
-// generated-interface adapters (todo_handler.go, me_handler.go,
-// keys_handler.go) and the actor-resolution middleware (middleware.go,
-// moved here from internal/identity's old handler.go/middleware_handler.go
-// — ARCHITECTURE.md: "Why transport is not inside a domain module
-// anymore"). No domain module or internal/identity may import this
-// package back (ARCHITECTURE.md rule 4) — dependencies point one way,
-// from here down into internal/domain/* and internal/identity, never the
-// reverse.
 package publicapi
 
 import (
@@ -39,37 +27,19 @@ func NewTodoServer(svc *todo.Service) *TodoServer {
 	return &TodoServer{Service: svc}
 }
 
-// notFoundError, unauthorizedError are the two error bodies this handler
-// ever writes on its own (validation_error responses come from
-// internal/api's openapi request validator instead, before a request even
-// reaches here — API.md).
-var notFoundError = newAPIError("not_found", "no such todo")
-
-var unauthorizedError = newAPIError("unauthorized", "authentication required")
-
-func newAPIError(code, message string) api.Error {
-	e := api.Error{}
-	e.Error.Code = code
-	e.Error.Message = message
-	return e
-}
-
-// actorID reads the actor RequireActor (middleware.go, this package)
-// already resolved onto the gin context (ActorFromContext) — this handler
-// never queries users/api_keys itself, nor does it ever look a todo up by
-// id alone without also knowing whose it must be (I4). The !ok branch is
-// defensive, mirroring handleMe: it should be unreachable given the
-// intended middleware order (RejectActorFields, RequireActor, then this
-// handler), and is here only in case a route is ever wired without that
-// chain.
-func actorID(c *gin.Context) (string, bool) {
-	user, ok := ActorFromContext(c)
-	if !ok {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, unauthorizedError)
-		return "", false
-	}
-	return user.ID, true
-}
+// todoNotFoundError is the one error body GetTodo/UpdateTodo/DeleteTodo
+// ever write for an unknown or not-this-caller's id (validation_error
+// responses come from internal/api's openapi request validator instead,
+// before a request even reaches here — API.md). Named with a todo- prefix,
+// not the bare notFoundError this file used before task-9, so that a fork
+// copying this file to <new>_handler.go and renaming Todo -> <New>
+// throughout ends up with its own distinctly-named value instead of
+// redeclaring this one — mirrors keys_handler.go's own notFoundBody, one
+// per handler file, never shared. The unauthorized case has no equivalent
+// per-file value: its message never varies by domain, so actorID
+// (middleware.go) writes the package's one shared unauthorizedBody
+// instead of a second, todo-specific copy of the same text.
+var todoNotFoundError = newAPIError("not_found", "no such todo")
 
 func toAPITodo(t todo.Todo) api.Todo {
 	return api.Todo{
@@ -142,7 +112,7 @@ func (s *TodoServer) GetTodo(c *gin.Context, id string) {
 	found, err := s.Service.GetTodo(c.Request.Context(), ownerID, id)
 	if err != nil {
 		if errors.Is(err, todo.ErrNotFound) {
-			c.AbortWithStatusJSON(http.StatusNotFound, notFoundError)
+			c.AbortWithStatusJSON(http.StatusNotFound, todoNotFoundError)
 			return
 		}
 		c.AbortWithStatus(http.StatusInternalServerError)
@@ -168,7 +138,7 @@ func (s *TodoServer) UpdateTodo(c *gin.Context, id string) {
 	updated, err := s.Service.UpdateTodo(c.Request.Context(), ownerID, id, req.Title, req.Done)
 	if err != nil {
 		if errors.Is(err, todo.ErrNotFound) {
-			c.AbortWithStatusJSON(http.StatusNotFound, notFoundError)
+			c.AbortWithStatusJSON(http.StatusNotFound, todoNotFoundError)
 			return
 		}
 		c.AbortWithStatus(http.StatusInternalServerError)
@@ -188,7 +158,7 @@ func (s *TodoServer) DeleteTodo(c *gin.Context, id string) {
 
 	if err := s.Service.DeleteTodo(c.Request.Context(), ownerID, id); err != nil {
 		if errors.Is(err, todo.ErrNotFound) {
-			c.AbortWithStatusJSON(http.StatusNotFound, notFoundError)
+			c.AbortWithStatusJSON(http.StatusNotFound, todoNotFoundError)
 			return
 		}
 		c.AbortWithStatus(http.StatusInternalServerError)

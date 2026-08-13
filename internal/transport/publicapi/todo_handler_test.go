@@ -1,113 +1,23 @@
 package publicapi
 
 import (
-	"bytes"
-	"context"
-	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/mildronize/my-template/internal/api"
-	"github.com/mildronize/my-template/internal/domain/todo"
-	"github.com/mildronize/my-template/internal/identity"
 )
 
-func init() {
-	gin.SetMode(gin.TestMode)
-}
-
-// compositeServer mirrors cmd/server's apiServer — MeServer contributes
-// GetMe, *KeysServer contributes ListKeys/RevokeKey, *TodoServer
-// contributes the todo CRUD methods — so these integration tests exercise
-// the exact same generated-interface/openapi-validated wiring production
-// uses, not a hand-rolled subset of it.
-type compositeServer struct {
-	MeServer
-	*KeysServer
-	*TodoServer
-}
-
-// newIntegrationRouter builds a full /api/v1 stack — RejectActorFields,
-// RequireActor, the openapi.yaml request validator, then
-// api.RegisterHandlers — against a real temp-file SQLite database (not a
-// mock), for todo CRUD + ownership-scoping integration tests.
-func newIntegrationRouter(t *testing.T) (*gin.Engine, *sql.DB) {
-	t.Helper()
-	conn := newTestDB(t)
-
-	identityRepo := identity.NewRepo(conn)
-	identitySvc := identity.NewService(identityRepo, identityRepo, nil, nil)
-
-	todoSvc := todo.NewService(todo.NewRepo(conn))
-
-	validator, err := api.RequestValidator()
-	require.NoError(t, err)
-
-	router := gin.New()
-	group := router.Group("/api/v1")
-	group.Use(RejectActorFields(), RequireActor(identitySvc), validator)
-	api.RegisterHandlers(group, compositeServer{
-		KeysServer: NewKeysServer(identitySvc),
-		TodoServer: NewTodoServer(todoSvc),
-	})
-
-	return router, conn
-}
-
-// createAgentWithKey seeds a users row (role=agent) and a live api_keys
-// row for it, returning the user's id and the raw key a test can present
-// as `Authorization: Bearer <rawKey>`. Shared by every handler test file
-// in this package (todo, keys, middleware) — one definition, not one per
-// file, now that they all live in the same package.
-func createAgentWithKey(t *testing.T, conn *sql.DB, handle string) (userID, rawKey string) {
-	t.Helper()
-	ctx := context.Background()
-	repo := identity.NewRepo(conn)
-
-	user, err := repo.CreateUser(ctx, handle, "agent", nil)
-	require.NoError(t, err)
-
-	rawKey = "tpl_" + handle + "0123456789abcdef0123456789abcdef"
-	hash := identity.HashAPIKey(rawKey)
-	_, err = repo.CreateAPIKey(ctx, user.ID, hash, rawKey[:12], time.Now().Add(time.Hour))
-	require.NoError(t, err)
-
-	return user.ID, rawKey
-}
-
-func doJSONRequest(t *testing.T, router *gin.Engine, method, path, rawKey string, body any) *httptest.ResponseRecorder {
-	t.Helper()
-	var buf bytes.Buffer
-	if body != nil {
-		require.NoError(t, json.NewEncoder(&buf).Encode(body))
-	}
-	req := httptest.NewRequest(method, path, &buf)
-	req.Header.Set("Content-Type", "application/json")
-	if rawKey != "" {
-		req.Header.Set("Authorization", "Bearer "+rawKey)
-	}
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-	return rec
-}
-
+// decodeTodo decodes an api.Todo-shaped response body — todo-specific
+// (unlike decodeError, publicapi_testutil_test.go), so it stays in this
+// file rather than the shared testutil.
 func decodeTodo(t *testing.T, rec *httptest.ResponseRecorder) api.Todo {
 	t.Helper()
 	var got api.Todo
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
-	return got
-}
-
-func decodeError(t *testing.T, rec *httptest.ResponseRecorder) api.Error {
-	t.Helper()
-	var got api.Error
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	return got
 }
@@ -257,7 +167,15 @@ func TestHandler_CreateTodo_TitleTooLongRejectedByOpenAPIValidator(t *testing.T)
 // TestHandler_Me_RunsThroughSameGeneratedInterfaceAsTodos — task-3:
 // GET /api/v1/me is no longer a bespoke route; it's registered through
 // the same api.RegisterHandlers call as the todo endpoints, so it's
-// validated the same way as everything else.
+// validated the same way as everything else. NOTE: this is currently the
+// only test proving that — middleware_test.go's own handleMe coverage
+// wires "/me" directly with router.GET, not through compositeServer/
+// api.RegisterHandlers. It lives in this file (not a me_handler_test.go
+// of its own) only because it needs the full compositeServer/
+// newIntegrationRouter harness; deleting this file whole on fork (Step 8)
+// silently drops this specific coverage unless it's copied into your new
+// module's own handler test file first, the same way the actual
+// CRUD/I3 tests below are meant to be.
 func TestHandler_Me_RunsThroughSameGeneratedInterfaceAsTodos(t *testing.T) {
 	router, conn := newIntegrationRouter(t)
 	_, rawKey := createAgentWithKey(t, conn, "luna")

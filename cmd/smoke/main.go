@@ -71,7 +71,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -81,6 +80,77 @@ import (
 	"strings"
 	"time"
 )
+
+// ============================================================================
+// ==== EDIT THIS FOR YOUR DOMAIN ============================================
+// ============================================================================
+//
+// Everything between this banner and the matching one below is specific to
+// this template's example domain (todos: title/done) — the resource path,
+// the request/response shapes, and the literal request bodies every check
+// further down builds from. Forking this file onto a different domain
+// (docs/GETTING-STARTED.md's fork checklist) means editing this block and
+// nothing else — the 16 checks in main() below call these names, not
+// literals of their own, specifically so "did I update this file for my
+// domain" is answerable by reading this one block, not the whole file.
+//
+// docs/GETTING-STARTED.md spells out the cost of skipping this: this
+// program is the ONLY real-HTTP check of I1 (actor-field rejection) and I3
+// (ownership scoping) in the entire test suite — every other I1/I3 test
+// runs in-process. Fork without touching this block and every check below
+// keeps compiling and keeps hitting /todos against a server that has no
+// such endpoint anymore — but `go build ./...` and `go test ./...` both
+// stay green regardless, because this program has no test file of its own
+// and nothing else in the suite runs it. Skipping this update doesn't
+// leave a stale test; it leaves zero working verification of I1/I3 over a
+// real network path, with nothing to say so.
+
+// resourcePath is the collection endpoint under apiBase this smoke run
+// exercises — every check below builds its URL from this, never a literal
+// "/todos" of its own.
+const resourcePath = "/todos"
+
+// resource is this domain's response shape (_contract/API.md).
+type resource struct {
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Done      bool   `json:"done"`
+	CreatedAt string `json:"createdAt"`
+	UpdatedAt string `json:"updatedAt"`
+}
+
+// resourceListResponse is GET resourcePath's list envelope.
+type resourceListResponse struct {
+	Items []resource `json:"todos"`
+}
+
+// newCreateBody builds a POST resourcePath request body carrying this
+// domain's one required field (title).
+func newCreateBody(title string) []byte {
+	return []byte(fmt.Sprintf(`{"title":%q}`, title))
+}
+
+// newCreateBodyWithForbiddenField is newCreateBody plus one forbidden
+// actor-shaped field, for the I1 rejection checks below.
+func newCreateBodyWithForbiddenField(title, field string) []byte {
+	return []byte(fmt.Sprintf(`{"title":%q,%q:"someone-else"}`, title, field))
+}
+
+// newUpdateDoneBody builds a PATCH resourcePath/:id request body toggling
+// this domain's one mutable field (done).
+func newUpdateDoneBody(done bool) []byte {
+	return []byte(fmt.Sprintf(`{"done":%v}`, done))
+}
+
+// missingRequiredFieldBody is a create body missing this domain's
+// required field(s) entirely — `{}` works for todos because title is its
+// only required field; a domain with more than one required field should
+// still send a body missing at least one of them here.
+var missingRequiredFieldBody = []byte(`{}`)
+
+// ============================================================================
+// ==== END DOMAIN-SPECIFIC BLOCK ============================================
+// ============================================================================
 
 // --- check bookkeeping -------------------------------------------------
 
@@ -186,23 +256,15 @@ func mergeHeaders(a, b map[string]string) map[string]string {
 }
 
 // --- response shapes (_contract/API.md) -----------------------------------
+// meResponse and errorEnvelope are identity-shaped/generic, not this
+// domain's — they stay here rather than in the edit-zone banner above.
+// This domain's own response shapes (resource, resourceListResponse) live
+// in that banner, alongside the rest of what a fork needs to touch.
 
 type meResponse struct {
 	Handle string `json:"handle"`
 	Role   string `json:"role"`
 	Active bool   `json:"active"`
-}
-
-type todoResponse struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	Done      bool   `json:"done"`
-	CreatedAt string `json:"createdAt"`
-	UpdatedAt string `json:"updatedAt"`
-}
-
-type todoListResponse struct {
-	Todos []todoResponse `json:"todos"`
 }
 
 type errorEnvelope struct {
@@ -311,13 +373,13 @@ func main() {
 	// ---- 2. actor-field rejection (I1) ----------------------------------
 
 	for _, field := range []string{"actor", "actorId", "ownerId"} {
-		body := []byte(fmt.Sprintf(`{"title":"smoke — should be rejected","%s":"someone-else"}`, field))
-		status, respBody, err := doRequest(client, http.MethodPost, apiBase+"/todos", auth1, body)
+		body := newCreateBodyWithForbiddenField("smoke — should be rejected", field)
+		status, respBody, err := doRequest(client, http.MethodPost, apiBase+resourcePath, auth1, body)
 		if err != nil {
 			fatalErr(err)
 		}
 		env := decode[errorEnvelope](respBody)
-		record(fmt.Sprintf("POST /todos with %q in the body is rejected, not silently ignored", field),
+		record(fmt.Sprintf("POST %s with %q in the body is rejected, not silently ignored", resourcePath, field),
 			status == http.StatusBadRequest && env.Error.Code == "actor_field_present",
 			fmt.Sprintf("%d %s", status, env.Error.Code), "I1")
 	}
@@ -334,59 +396,59 @@ func main() {
 
 	// ---- 3. real CRUD round-trip -----------------------------------------
 
-	createStatus, createBody, err := doRequest(client, http.MethodPost, apiBase+"/todos", auth1,
-		[]byte(`{"title":"smoke crud round-trip — disposable"}`))
+	createStatus, createBody, err := doRequest(client, http.MethodPost, apiBase+resourcePath, auth1,
+		newCreateBody("smoke crud round-trip — disposable"))
 	if err != nil {
 		fatalErr(err)
 	}
-	created := decode[todoResponse](createBody)
-	record("POST /todos creates a todo owned by the caller",
+	created := decode[resource](createBody)
+	record(fmt.Sprintf("POST %s creates a resource owned by the caller", resourcePath),
 		createStatus == http.StatusCreated && created.ID != "" && created.Title == "smoke crud round-trip — disposable" && !created.Done,
 		fmt.Sprintf("%d id=%s title=%q done=%v", createStatus, created.ID, created.Title, created.Done), "")
 	if created.ID == "" {
-		fatalErr(errors.New("cannot continue the CRUD check: POST /todos did not return an id"))
+		fatalErr(fmt.Errorf("cannot continue the CRUD check: POST %s did not return an id", resourcePath))
 	}
 	id := created.ID
 
-	listStatus, listBody, err := doRequest(client, http.MethodGet, apiBase+"/todos", auth1, nil)
+	listStatus, listBody, err := doRequest(client, http.MethodGet, apiBase+resourcePath, auth1, nil)
 	if err != nil {
 		fatalErr(err)
 	}
-	list := decode[todoListResponse](listBody)
+	list := decode[resourceListResponse](listBody)
 	foundInList := false
-	for _, t := range list.Todos {
+	for _, t := range list.Items {
 		if t.ID == id {
 			foundInList = true
 			break
 		}
 	}
-	record("GET /todos includes the created todo",
+	record(fmt.Sprintf("GET %s includes the created resource", resourcePath),
 		listStatus == http.StatusOK && foundInList,
-		fmt.Sprintf("%d found=%v of %d todo(s)", listStatus, foundInList, len(list.Todos)), "")
+		fmt.Sprintf("%d found=%v of %d item(s)", listStatus, foundInList, len(list.Items)), "")
 
-	patchStatus, patchBody, err := doRequest(client, http.MethodPatch, apiBase+"/todos/"+id, auth1,
-		[]byte(`{"done":true}`))
+	patchStatus, patchBody, err := doRequest(client, http.MethodPatch, apiBase+resourcePath+"/"+id, auth1,
+		newUpdateDoneBody(true))
 	if err != nil {
 		fatalErr(err)
 	}
-	patched := decode[todoResponse](patchBody)
-	record("PATCH /todos/:id updates it",
+	patched := decode[resource](patchBody)
+	record(fmt.Sprintf("PATCH %s/:id updates it", resourcePath),
 		patchStatus == http.StatusOK && patched.Done,
 		fmt.Sprintf("%d done=%v", patchStatus, patched.Done), "")
 
-	deleteStatus, _, err := doRequest(client, http.MethodDelete, apiBase+"/todos/"+id, auth1, nil)
+	deleteStatus, _, err := doRequest(client, http.MethodDelete, apiBase+resourcePath+"/"+id, auth1, nil)
 	if err != nil {
 		fatalErr(err)
 	}
-	record("DELETE /todos/:id removes it",
+	record(fmt.Sprintf("DELETE %s/:id removes it", resourcePath),
 		deleteStatus == http.StatusNoContent,
 		fmt.Sprintf("%d", deleteStatus), "")
 
-	getGoneStatus, _, err := doRequest(client, http.MethodGet, apiBase+"/todos/"+id, auth1, nil)
+	getGoneStatus, _, err := doRequest(client, http.MethodGet, apiBase+resourcePath+"/"+id, auth1, nil)
 	if err != nil {
 		fatalErr(err)
 	}
-	record("GET /todos/:id confirms it's gone after delete",
+	record(fmt.Sprintf("GET %s/:id confirms it's gone after delete", resourcePath),
 		getGoneStatus == http.StatusNotFound,
 		fmt.Sprintf("%d", getGoneStatus), "")
 
@@ -396,59 +458,59 @@ func main() {
 	// belongs to key1's caller — and the failure must be 404, indistinguishable
 	// from a nonexistent id, never 403 (which would confirm the row exists).
 
-	probeStatus, probeBody, err := doRequest(client, http.MethodPost, apiBase+"/todos", auth1,
-		[]byte(`{"title":"smoke ownership probe — disposable"}`))
+	probeStatus, probeBody, err := doRequest(client, http.MethodPost, apiBase+resourcePath, auth1,
+		newCreateBody("smoke ownership probe — disposable"))
 	if err != nil {
 		fatalErr(err)
 	}
-	probe := decode[todoResponse](probeBody)
+	probe := decode[resource](probeBody)
 	if probeStatus != http.StatusCreated || probe.ID == "" {
-		fatalErr(fmt.Errorf("cannot continue the ownership-scoping check: creating the probe todo returned %d", probeStatus))
+		fatalErr(fmt.Errorf("cannot continue the ownership-scoping check: creating the probe resource returned %d", probeStatus))
 	}
 	probeID := probe.ID
 
-	crossGetStatus, crossGetBody, err := doRequest(client, http.MethodGet, apiBase+"/todos/"+probeID, auth2, nil)
+	crossGetStatus, crossGetBody, err := doRequest(client, http.MethodGet, apiBase+resourcePath+"/"+probeID, auth2, nil)
 	if err != nil {
 		fatalErr(err)
 	}
 	crossGetEnv := decode[errorEnvelope](crossGetBody)
-	record("a second key's caller cannot GET the first caller's todo (404, not 403)",
+	record("a second key's caller cannot GET the first caller's resource (404, not 403)",
 		crossGetStatus == http.StatusNotFound,
 		fmt.Sprintf("%d %s", crossGetStatus, crossGetEnv.Error.Code), "I3")
 
-	crossPatchStatus, _, err := doRequest(client, http.MethodPatch, apiBase+"/todos/"+probeID, auth2,
-		[]byte(`{"done":true}`))
+	crossPatchStatus, _, err := doRequest(client, http.MethodPatch, apiBase+resourcePath+"/"+probeID, auth2,
+		newUpdateDoneBody(true))
 	if err != nil {
 		fatalErr(err)
 	}
-	record("a second key's caller cannot PATCH the first caller's todo (404, not 403)",
+	record("a second key's caller cannot PATCH the first caller's resource (404, not 403)",
 		crossPatchStatus == http.StatusNotFound,
 		fmt.Sprintf("%d", crossPatchStatus), "I3")
 
-	crossDeleteStatus, _, err := doRequest(client, http.MethodDelete, apiBase+"/todos/"+probeID, auth2, nil)
+	crossDeleteStatus, _, err := doRequest(client, http.MethodDelete, apiBase+resourcePath+"/"+probeID, auth2, nil)
 	if err != nil {
 		fatalErr(err)
 	}
-	record("a second key's caller cannot DELETE the first caller's todo (404, not 403)",
+	record("a second key's caller cannot DELETE the first caller's resource (404, not 403)",
 		crossDeleteStatus == http.StatusNotFound,
 		fmt.Sprintf("%d", crossDeleteStatus), "I3")
 
 	// The rejected cross-owner attempts above must not have snuck through —
 	// checked from the real owner's own key, not assumed from the 404s alone.
-	stillOwnedStatus, stillOwnedBody, err := doRequest(client, http.MethodGet, apiBase+"/todos/"+probeID, auth1, nil)
+	stillOwnedStatus, stillOwnedBody, err := doRequest(client, http.MethodGet, apiBase+resourcePath+"/"+probeID, auth1, nil)
 	if err != nil {
 		fatalErr(err)
 	}
-	stillOwned := decode[todoResponse](stillOwnedBody)
-	record("the owner's todo is untouched by the rejected cross-owner attempts",
+	stillOwned := decode[resource](stillOwnedBody)
+	record("the owner's resource is untouched by the rejected cross-owner attempts",
 		stillOwnedStatus == http.StatusOK && !stillOwned.Done,
 		fmt.Sprintf("%d done=%v", stillOwnedStatus, stillOwned.Done), "I3")
 
 	// Cleanup — unlike my-task's tasks (I12 forbids hard delete there), this
 	// domain's DELETE is real, so leaving the probe behind would just be
 	// litter, not a documented limitation worth preserving.
-	if _, _, err := doRequest(client, http.MethodDelete, apiBase+"/todos/"+probeID, auth1, nil); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to clean up probe todo %s: %v\n", probeID, err)
+	if _, _, err := doRequest(client, http.MethodDelete, apiBase+resourcePath+"/"+probeID, auth1, nil); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to clean up probe resource %s: %v\n", probeID, err)
 	}
 
 	// ---- 5. spec validation — rejected before handler logic ---------------
@@ -462,12 +524,12 @@ func main() {
 	// and the handler's own defensive fallback caught it instead" — the
 	// exact distinction this check exists to prove, not just get a 400.
 
-	specStatus, specBody, err := doRequest(client, http.MethodPost, apiBase+"/todos", auth1, []byte(`{}`))
+	specStatus, specBody, err := doRequest(client, http.MethodPost, apiBase+resourcePath, auth1, missingRequiredFieldBody)
 	if err != nil {
 		fatalErr(err)
 	}
 	specEnv := decode[errorEnvelope](specBody)
-	record("POST /todos missing the required title is rejected by the openapi validator before handler logic",
+	record(fmt.Sprintf("POST %s missing a required field is rejected by the openapi validator before handler logic", resourcePath),
 		specStatus == http.StatusBadRequest && len(specBody) > 0 && specEnv.Error.Code == "validation_error",
 		fmt.Sprintf("%d %s %q", specStatus, specEnv.Error.Code, specEnv.Error.Message), "")
 
