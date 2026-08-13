@@ -13,10 +13,22 @@ BIN_DIR := $(CURDIR)/bin
 # Harmless today because that file happens to compile/vet cleanly, but
 # `npm install` should never be able to introduce code that affects the
 # Go build, vet, or test surface — use $(GO_PKGS) instead of ./... in
-# build/vet/test below. Do not "simplify" this back to ./... — that
-# silently reopens the exposure the moment some transitive npm package
-# ships a .go file that doesn't compile/vet/pass cleanly.
+# vet/test below. Do not "simplify" this back to ./... — that silently
+# reopens the exposure the moment some transitive npm package ships a
+# .go file that doesn't compile/vet/pass cleanly.
 GO_PKGS = $(shell go list ./... | grep -v '/node_modules/')
+
+# GO_BUILD_PKGS is GO_PKGS with one more filter, needed only for `go
+# build`: internal/ itself holds nothing but _test.go files
+# (architecture_test.go, invariants_test.go), so it has no non-test Go
+# files to build. `go build ./...` silently skips a test-only package
+# when the package set comes from pattern expansion, but once GO_PKGS
+# materializes that set into an explicit list of import paths, `go
+# build` treats each one as a directly-named target and errors with
+# "no non-test Go files in ..." instead of skipping it — `go vet` and
+# `go test` don't have this quirk (they both want test files), so
+# GO_PKGS is fine as-is for vet/test.
+GO_BUILD_PKGS = $(shell go list -f '{{if .GoFiles}}{{.ImportPath}}{{end}}' ./... | grep -v '/node_modules/')
 
 .PHONY: tools
 tools:
@@ -83,7 +95,7 @@ web-build:
 # than two independent ones a caller might reorder or skip.
 .PHONY: build
 build: web-build
-	go build $(GO_PKGS)
+	go build $(GO_BUILD_PKGS)
 
 .PHONY: vet
 vet:
