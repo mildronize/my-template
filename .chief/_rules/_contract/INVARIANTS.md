@@ -148,3 +148,108 @@ per `_goal/GOAL.md`'s Key resolver decision, not rewritten from
 description). Without this, I13's "no grace period" design is only true in
 theory — recovery from rotation must be one command, not a copy-paste from
 a terminal scrollback.
+
+**I15 — One write path (todo domain).** `scope: per-domain-module`
+*(New, milestone-4.)* Only the todo domain's service module writes to
+`todos` or `todo_events`; no handler, script, or other module touches
+those tables directly. Mirrors my-task's I4 exactly, including its
+enforcement shape: a module-import boundary (only the service/query files
+in `internal/domain/todo` import the generated table types) plus code
+review, not a language-level access modifier — Go has no package-private
+field the way this boundary would need to be airtight. *Enforced by:*
+import-site convention, checked by not exporting the sqlc-generated table
+types outside the domain module's own package. **Verified by test** for
+the transaction property: a failure mid-write leaves neither the event
+row nor the `todos` state change.
+
+**I16 — `created` is never client-specifiable.** `scope: per-domain-module`
+*(New, milestone-4.)* No request body, on either `publicapi` or `bff`,
+may set `type: "created"` directly — a `created` event only ever happens
+as a side effect of `POST /todos` itself. Mirrors my-task's
+`buildAppendInput` switch, which has no `created` case at all
+(`~/gits/my-task/src/app/api/v1/tasks/[id]/events/route.ts:45-181`). A
+security property, not a style choice: a client that could post
+`type: "created"` could forge a creation event under any actor and
+timestamp, in the log that exists specifically to establish who did what.
+*Enforced by:* the write path's dispatch has no case that accepts a
+client-supplied `created` type — the same shape I1 already uses for actor
+identity, applied here to event type instead. **Verified by test**: a
+`POST` with `type: "created"` is rejected (400), not silently accepted or
+silently ignored.
+
+**I17 — `todo_events` is append-only, for everyone.** `scope: per-domain-module`
+*(New, milestone-4.)* No `UPDATE`, no `DELETE`, no exceptions for the
+owner. Corrections are new events. Mirrors my-task's I3 exactly, including
+its enforcement shape and its explicit limit: application-level only (no
+service method, handler, or route exists that updates or deletes an
+event) — **no database trigger or CHECK constraint**, matching the named
+source, not exceeding it. If evidence ever surfaces that convention-only
+enforcement is insufficient here, that's a question to raise, not
+something to unilaterally strengthen (`milestone-4/_goal/GOAL.md`'s
+Append-only enforcement decision). *Enforced by:* no code path exists
+that updates or deletes a `todo_events` row. **Verified by test** — the
+same distinction my-task's own I3 test draws: the test asserts state
+changes always add a row, not merely that "no update method exists on the
+repo."
+
+**I18 — Only the owner may move a todo to `closed`.** `scope: per-domain-module`
+*(New, milestone-4.)* Any agent may comment, assign, change fields, or
+change status to anything except `closed`, on any shared todo. Only a
+session-authenticated owner may set `status: closed`. Mirrors my-task's
+I10 (`can()`'s `task:status_change` rule refusing an agent's move into the
+`closed` group) applied to a single terminal status rather than a status
+group, since this domain's enum has one `closed` value where my-task has
+a `closed` group that can (in principle) hold more than one status.
+*Enforced by:* the permission layer (`can(actor, action)`, role-based, not
+per-todo-identity-based) checked before the write path's dispatch, same
+shape as my-task's `can()`. **Verified by test**, paired: the same agent,
+against the same todo, has a `status: closed` attempt rejected and a
+non-closed action succeed in the same test — a permission layer that
+rejects everything would pass a reject-only assertion just as well as a
+correct one.
+
+**I19 — Writes are idempotent when the client request id is reused (todo domain).** `scope: per-domain-module`
+*(New, milestone-4.)* A repeat `POST` carrying the same `clientRequestId`
+returns the original event, unchanged, and creates nothing — checked
+inside the same transaction as the write itself, before dispatch. Mirrors
+my-task's I5 exactly. `_rules/_contract/API.md`'s own Conventions text
+already named this exact case ("No Idempotency-Key requirement... re-add
+it if a fork adds one [an event log]") — this is that fork. *Enforced
+by:* the unique constraint on `todo_events.client_request_id` plus a
+lookup at the top of the write path. **Verified by test** — the same key
+twice yields one row and two identical responses.
+
+**I20 — Comment bodies never render as raw HTML.** `scope: global`
+*(New, milestone-4.)* A comment's `body` is written as plain text and
+rendered, client-side, through a Markdown-to-React-elements path — never
+`dangerouslySetInnerHTML`, never a raw-HTML string reaching the DOM.
+Mirrors my-task's I8 exactly, including its stated reason: the activity
+log is a cross-agent channel, and an unescaped body is an injection
+surface into whatever reads it next, human or agent. *Enforced by:* the
+rendering component's implementation — there is exactly one place a
+comment body is rendered (mirrors my-task's shared `TimelineEventRow`),
+so there is exactly one place this can be gotten wrong. **Verified by
+test**: a body containing raw HTML tags renders as literal text/escaped
+elements in the rendered output, not as unescaped markup.
+
+**I21 — The owner's key-listing spans every agent's keys; an agent's own key-listing stays self-scoped.** `scope: per-domain-module`
+*(New, milestone-4. Correction to milestone-2/3's `bff` key-listing,
+which scoped to the session owner's own `user_id` — a set that can never
+be non-empty, since `cmd/issue-key` never issues to `role='owner'` and I2
+forecloses it structurally. That endpoint's semantics are replaced, not
+kept alongside a new one — see `milestone-4/_goal/GOAL.md`'s decision.)*
+`GET /api/bff/keys` (owner session) returns every `role='agent'` user's
+non-revoked keys; `DELETE /api/bff/keys/:id` (owner session) may revoke
+any of them. `GET /api/v1/keys` (agent Bearer credential) is unchanged —
+still scoped to the caller's own keys only, I3 unchanged for this half of
+the identity domain. This is the first case where the owner is
+deliberately given visibility into another user's private resource, by
+design — I3's "absence, not permission" framing does not apply to the
+owner's half of this endpoint pair, on purpose. *Enforced by:* the BFF
+handler's query joins on `role='agent'` rather than filtering by the
+session's own `user_id`; the public API handler is untouched. **Verified
+by test**: the owner-facing query returns keys seeded through
+`cmd/issue-key`'s real path (not a direct repo insert on a convenient
+role — the exact trap `keys_handler_test.go`'s pre-milestone-4 fixture
+fell into), and a separate test proves the agent-facing endpoint stays
+self-scoped.
