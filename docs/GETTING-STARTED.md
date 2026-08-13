@@ -466,12 +466,20 @@ Do it in this order:
    `TodoServer: publicapi.NewTodoServer(todoSvc)` entry in
    `wirePublicAPI`'s composite literal (see "Patterns worth preserving"
    above for what that struct is doing before you touch it).
-   **Also remove the `*TodoServer` embed from
+   **Also remove every `TodoServer` reference in
    `internal/transport/publicapi/publicapi_testutil_test.go`'s shared
-   `compositeServer`** — see "Two modules, briefly, at once" above: this
-   does not happen on its own, and `go build ./...` passing does not mean
-   you got it, since the stale reference only shows up in
-   `go test ./...`. Before moving on, run both:
+   `compositeServer` — that's two live edits, not one: the `*TodoServer`
+   embed in the struct definition, AND the `TodoServer:
+   NewTodoServer(todoSvc)` entry in `newIntegrationRouter`'s own
+   `compositeServer{...}` literal** (a separate composite literal from
+   `wirePublicAPI`'s in `cmd/server/main.go`, addressed above — this one's
+   test-only and easy to miss precisely because the production one already
+   got fixed). Doing only the embed and stopping there still fails:
+   `go vet ./...` reports `undefined: NewTodoServer` for the
+   now-orphaned initializer. See "Two modules, briefly, at once" above:
+   none of this happens on its own, and `go build ./...` passing does not
+   mean you got it, since the stale reference only shows up in
+   `go test ./...`/`go vet ./...`. Before moving on, run both:
    ```sh
    go build ./...   # passing here is NOT sufficient evidence step 8 is done
    go test ./...    # this is the check that actually catches a leftover

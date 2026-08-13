@@ -292,5 +292,43 @@ before this milestone started.
   `publicapi_testutil_test.go` (Blocker A) actually survives that deletion
   rather than breaking `keys_handler_test.go` again, and (b) whether the
   package still compiles without `newAPIError`/`actorID` vanishing with
-  the deleted file (Blocker B). Results recorded in this file once
-  reported.
+  the deleted file (Blocker B).
+
+  **Results (2026-08-13, two independent runs — Clara's and Luna's,
+  reconciled):**
+  - **Blocker B: fixed, confirmed.** `go build
+    ./internal/transport/publicapi/...` compiles clean after deleting
+    `todo_handler.go`. `newAPIError`/`actorID`/the package doc comment
+    now live in `middleware.go` and survive the delete.
+  - **Blocker A: fixed in substance, one real doc gap found and closed.**
+    The harness (`compositeServer`, `newIntegrationRouter`,
+    `createAgentWithKey`) is genuinely in `publicapi_testutil_test.go`
+    now — blind test 5's core complaint (the doc named a location that
+    didn't hold the harness) no longer applies. But Step 8's instruction
+    named only the `*TodoServer` embed removal, not the separate
+    `TodoServer: NewTodoServer(todoSvc)` initializer line inside
+    `newIntegrationRouter`'s own `compositeServer{...}` literal — doing
+    only the named edit still fails `go vet` with `undefined:
+    NewTodoServer`. Clara caught this first; her first attempt (embed
+    only) nearly got reported as "Blocker A not fixed," which would have
+    been false — it was an incomplete attack blaming the instruction for
+    the half of it she'd skipped. **Fixed**: `docs/GETTING-STARTED.md`
+    Step 8 now names both edits explicitly and states the `go vet`
+    symptom if only one is done.
+  - **Luna's independent extension**: continued the same scratch-clone
+    attack one step further — after applying Clara's fix (both
+    `TodoServer` references removed) the build still failed with
+    `compositeServer does not implement api.ServerInterface (missing
+    method CreateTodo)`, from not yet having done Step 8's *separate*,
+    already-documented instruction to strip `/todos` from `openapi.yaml`
+    and regenerate. Completed that too (stripped the paths + Todo/
+    TodoList/CreateTodoRequest/UpdateTodoRequest schemas, ran
+    `oapi-codegen`) — `go build`, `go vet`, and `go test -v` on
+    `internal/transport/publicapi/...` all passed clean. Confirms this
+    was an artifact of an incomplete simulation, not a further gap: Step
+    8 as now written, followed in full, produces a clean fork with no
+    remaining trap.
+  - **Net**: one real, narrow doc gap found and fixed. Nothing else
+    surfaced. Scratch clone (`m2-delete-check`) attack complete, results
+    reconciled between both independent runs, no disagreement between
+    them once each was carried to completion.
