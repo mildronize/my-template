@@ -145,23 +145,33 @@ Machine-checkable stopping conditions, one task owner each (assigned in
    just that the library supports one.
 8. I12: a test proves a `bff` session resolving to `role='agent'` is
    rejected identically to a missing session.
-9. I13: a test proves `rotate` issues the new key before disabling the
-   old one(s) — ordering, not just eventual consistency.
-10. I14: a test proves the ported resolver refuses a present-but-empty
+9. **The authenticated view renders scoped domain data, not just a 200.**
+   `GET /` returning success satisfies nothing on its own — Done-when 3,
+   7, and 8 are all auth mechanics a dead, empty page would also satisfy.
+   An integration test seeds an owner session and a todo belonging to
+   that owner, requests `GET /`, and asserts the response body contains
+   that todo's title. This is what actually checks the one deliverable
+   มายด์'s validation path depends on (found by Clara: the login flow had
+   four criteria and the page it logs into had none — same shape as
+   milestone-1's original "easy to get started" being the least
+   instrumented item because it was the least mechanical to check).
+10. I13: a test proves `rotate` issues the new key before disabling the
+    old one(s) — ordering, not just eventual consistency.
+11. I14: a test proves the ported resolver refuses a present-but-empty
     argument (the exact guard from `~/.my-task/bin/key`), and that
     `issue`/`rotate` leave a working key file + resolver behind.
-11. An e2e smoke script runs real HTTP against a live instance with a real
+12. An e2e smoke script runs real HTTP against a live instance with a real
     minted key — auth negatives (no credential, spoofed actor field),
     real CRUD round-trip — the credential-resolution path actually
     exercised end to end, not just unit-injected.
-12. Seed script is idempotent — running it twice leaves exactly one owner
+13. Seed script is idempotent — running it twice leaves exactly one owner
     row, checked directly, not assumed from "it uses check-then-insert."
-13. `<service>-api` skill doc exists with the sections `_goal/GOAL.md`'s
+14. `<service>-api` skill doc exists with the sections `_goal/GOAL.md`'s
     Decisions table names (base URL, auth, invariant rules, endpoint
     table + examples, `references/` split), plus both required warnings
     (indistinguishable-401, `0600`-is-a-rule) present as identifiable
     sections, not buried in prose.
-14. `internal/invariants_test.go`'s promoted-contract-is-sole-authority
+15. `internal/invariants_test.go`'s promoted-contract-is-sole-authority
     fix (already landed during planning, see commit `4eac2c0`) still
     passes with the full I1–I14 set once every task above has landed its
     tests.
@@ -169,16 +179,18 @@ Machine-checkable stopping conditions, one task owner each (assigned in
 ### Human acceptance — after the loop, not part of it
 
 **มายด์ logs in through the owner-login flow against a real, registered
-Hydra client, on a real deployment.** This is explicitly his own
-validation path for the template ("this is my test... to look at UI and
-validate logic"), not a formality — and it can't be a stopping condition
-for the same reason milestone-1's original JWT human-acceptance criterion
-couldn't: no unattended loop can complete a real interactive login,
-and — per this milestone's client-registration decision — no fork has a
-registered Hydra client until `register-<service>.sh` is run once by a
-human against a real issuer. Done-when 7's PKCE test and Done-when 12's
-seed-script check are the machine-checkable half; whether the flow
-actually works against live Hydra (including whatever `sso-uat.thadaw.com`
-surfaces, if that's the issuer used — see `_goal/GOAL.md` Context for why
-that specific path is untested fleet-wide) is checked once, by a human,
+Hydra client, on a real deployment, and sees his own todos.** Not "logs
+in" alone — his own words were "this is my test... to look at UI and
+validate logic," and a completed login landing on a page that renders
+nothing would satisfy "logs in" without validating anything. This is
+explicitly his own validation path for the template, not a formality —
+and it can't be a stopping condition for the same reason milestone-1's
+original JWT human-acceptance criterion couldn't: no unattended loop can
+complete a real interactive login, and — per this milestone's
+client-registration decision — no fork has a registered Hydra client
+until `register-<service>.sh` is run once by a human against a real
+issuer. Done-when 7's PKCE test, Done-when 9's scoped-data-rendering test,
+and Done-when 13's seed-script check are the machine-checkable half; that
+last stretch — a real browser, real Hydra, real consent screen — is
+checked once, by a human,
 afterward.

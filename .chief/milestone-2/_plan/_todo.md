@@ -4,7 +4,7 @@ See `../_goal/GOAL.md` for objective/scope/decisions/done-when and
 `../_contract/API.md` + `.chief/_rules/_contract/{API,DATA_MODEL,
 INVARIANTS}.md` for the contract. Order matters — later tasks depend on
 the restructure landing first. Every Done-when item is owned by exactly
-one task. (Done-when 14's underlying *mechanism* — the invariants-
+one task. (Done-when 15's underlying *mechanism* — the invariants-
 authority fix — already landed during planning; task-8 owns *re-checking*
 it holds once every other task's tests exist, not rebuilding it.)
 
@@ -66,7 +66,12 @@ before this milestone started.
       bff`: `GET /login`, `GET /callback`, `GET /` (minimal authenticated
       todo view) per `_contract/API.md`. Wire `platform/middleware.go`
       into the `bff` engine too, completing task-1's Done-when 3.
-      **Owns: Done-when 3, 7, 8.**
+      **Also owns Done-when 9** (Clara's finding: auth mechanics alone
+      don't prove the view renders anything — an integration test seeds
+      an owner session + a todo, hits `GET /`, and asserts the todo's
+      title is in the response body, not just that the route returns
+      200) — see `task-4.md`'s "the minimal view itself" section.
+      **Owns: Done-when 3, 7, 8, 9.**
 - [ ] task-5: Key lifecycle finish — `rotate` CLI command
       (issue-new-then-disable-old ordering, I13), key-file + resolver
       script ported verbatim from `~/.my-task/bin/key` (I14 — the
@@ -78,7 +83,7 @@ before this milestone started.
       green for the first time this milestone. Confirm it, but the
       binding final-suite gate is task-8's (below), since three more
       tasks still touch the repo after this one and could regress it.
-      **Owns: Done-when 9, 10.**
+      **Owns: Done-when 10, 11.**
 - [ ] task-6: e2e smoke script — real HTTP against a live instance with a
       real minted key (`cmd/smoke` or similar, mirrors my-task's
       `smoke-api-v1.ts` in purpose, not in its task-specific assertion
@@ -87,13 +92,13 @@ before this milestone started.
       field in body/query/header), real CRUD round-trip. This is what
       finally exercises `resolveActor`-equivalent → key lookup →
       database for real — every existing test injects the actor directly.
-      **Owns: Done-when 11.**
+      **Owns: Done-when 12.**
 - [ ] task-7: Seed script — idempotent (check-then-insert per natural
       key, not blind upsert), creates the owner row (`SEED_OWNER_
       SSO_SUBJECT` from config — see `_rules/_contract/DATA_MODEL.md`'s
       "Owner provisioning" note, no JIT) and nothing speculative beyond
       what the contract mandates.
-      **Owns: Done-when 12.**
+      **Owns: Done-when 13.**
 - [ ] task-8: Companion `<service>-api` skill doc — scaffolded from
       `my-task-api`'s shape (base URL, auth, invariant rules, endpoint
       table + worked examples, `references/` split for endpoints vs
@@ -102,9 +107,9 @@ before this milestone started.
       at what the key command itself printed") and the `0600`-is-a-rule-
       not-isolation note (every crew on this host shares a uid). **Last
       task in the milestone — also runs the final `go test ./...`,
-      confirming the full I1–I14 set holds (Done-when 14) with nothing
+      confirming the full I1–I14 set holds (Done-when 15) with nothing
       from tasks 6/7 having regressed what task-5 landed.**
-      **Owns: Done-when 13, 14.**
+      **Owns: Done-when 14, 15.**
 
 ## Open items, not owned by any task above
 

@@ -99,6 +99,22 @@ app.
   agent's `users.id` — defense in depth, test it directly rather than
   assuming step 2 makes it unreachable).
 
+## Done-when 9 — the view must prove it renders, not just that it answers
+
+Not an invariant (no `TestI<N>_` naming needed), but load-bearing anyway —
+Clara's finding: Done-when 3/7/8 are all auth mechanics an empty `GET /`
+returning 200 would also satisfy, and this view is มายด์'s entire reason
+for wanting one. Write an integration test — plain name is fine, e.g.
+`TestAuthenticatedViewRendersOwnersOwnTodos` — that: seeds a `users` row
+(owner) and a `todos` row belonging to it directly against a test DB
+(no HTTP round-trip needed to set this up), establishes a valid session
+cookie for that owner (call `session.go`'s signing function directly, no
+need to drive it through `/callback`), issues `GET /` with that cookie,
+and asserts the seeded todo's title appears in the response body. This is
+what actually proves the BFF's `GET /` calls into `internal/domain/todo`'s
+service correctly and renders what it gets back — not provable by any of
+the auth-focused tests above.
+
 ## Verification
 
 `go build ./...`, `go vet ./...`, `go test ./...` (this task's own tests —
