@@ -168,6 +168,57 @@ func TestRepo_RevokeAPIKeyScopedToOwner(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 
+// TestRepo_DisableOtherAPIKeys_RevokesEverythingExceptKeepID_ScopedToOwner
+// exercises DisableOtherAPIKeys against the real schema: every one of
+// owner's live keys except keepID gets revoked, a key already revoked
+// beforehand is neither double-counted nor errored on, and another
+// owner's key is never touched.
+func TestRepo_DisableOtherAPIKeys_RevokesEverythingExceptKeepID_ScopedToOwner(t *testing.T) {
+	ctx := context.Background()
+	repo := NewRepo(newTestDB(t))
+
+	owner, err := repo.CreateUser(ctx, "owner-of-keys", "agent", nil)
+	require.NoError(t, err)
+	other, err := repo.CreateUser(ctx, "someone-else", "agent", nil)
+	require.NoError(t, err)
+
+	keep, err := repo.CreateAPIKey(ctx, owner.ID, HashAPIKey("tpl_keep"), "tpl_keepkeep1", time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	old1, err := repo.CreateAPIKey(ctx, owner.ID, HashAPIKey("tpl_old1"), "tpl_old1old1", time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	old2, err := repo.CreateAPIKey(ctx, owner.ID, HashAPIKey("tpl_old2"), "tpl_old2old2", time.Now().Add(time.Hour))
+	require.NoError(t, err)
+
+	alreadyRevoked, err := repo.CreateAPIKey(ctx, owner.ID, HashAPIKey("tpl_already"), "tpl_alreadyre", time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	_, err = repo.RevokeAPIKey(ctx, alreadyRevoked.ID, owner.ID)
+	require.NoError(t, err)
+
+	_, err = repo.CreateAPIKey(ctx, other.ID, HashAPIKey("tpl_others"), "tpl_othersoth", time.Now().Add(time.Hour))
+	require.NoError(t, err)
+
+	count, err := repo.DisableOtherAPIKeys(ctx, owner.ID, keep.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, count, "only old1 and old2 were live and not keepID — alreadyRevoked must not be double-counted")
+
+	keptAfter, err := repo.GetAPIKeyByHash(ctx, HashAPIKey("tpl_keep"))
+	require.NoError(t, err)
+	assert.Nil(t, keptAfter.RevokedAt, "keepID must not be touched")
+
+	for _, id := range []string{old1.ID, old2.ID} {
+		list, err := repo.ListAPIKeysByOwner(ctx, owner.ID)
+		require.NoError(t, err)
+		for _, k := range list {
+			assert.NotEqual(t, id, k.ID, "revoked key must no longer show up as live")
+		}
+	}
+
+	othersAfter, err := repo.GetAPIKeyByHash(ctx, HashAPIKey("tpl_others"))
+	require.NoError(t, err)
+	assert.Nil(t, othersAfter.RevokedAt, "a different owner's key must never be touched")
+	assert.Equal(t, other.ID, othersAfter.UserID)
+}
+
 // --- I4: this repo only ever queries users/api_keys ----------------------
 
 // TestI4_IdentityRepoOnlyQueriesUsersAndAPIKeysTables — I4 ("one seam reads
