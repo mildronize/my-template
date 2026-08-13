@@ -24,7 +24,7 @@ instance, a registered Hydra client, one command or as close to it as
 possible) is part of what "ready" means, not a separate concern to
 assemble afterward — see task-5.
 
-- [ ] task-1: Vite/React scaffold + design-system carry — `web/`:
+- [x] task-1: Vite/React scaffold + design-system carry — `web/`:
       `package.json`, `vite.config.ts`, `tsconfig.json`, Tailwind config.
       Port bucket 1 verbatim from my-task (`origin/main @ fdceb8b` — see
       `_goal/GOAL.md`'s inventory table): `components/ui/*` (16),
@@ -52,7 +52,7 @@ assemble afterward — see task-5.
       confirm the binary serves the new string — the same discipline
       task-1 in milestone-2 applied to its own guardrail rewrite.
       **Owns: Done-when 1, 8.**
-- [ ] task-2: `bff-openapi.yaml` + generated BFF JSON handlers — **starts
+- [x] task-2: `bff-openapi.yaml` + generated BFF JSON handlers — **starts
       only once มายด์ has gated the goal; if the two-spec split is cut,
       re-scope this task before starting it, not after.** Author
       `bff-openapi.yaml` per `_contract/API.md`'s endpoint list: `GET
@@ -88,7 +88,7 @@ assemble afterward — see task-5.
       check, not new prose). Negative check: no `POST /api/bff/keys`, no
       rotate endpoint exists anywhere on this surface.
       **Owns: Done-when 2, 3, 4, 5.**
-- [ ] task-3: Wire the SPA for real — `openapi-typescript` generates
+- [x] task-3: Wire the SPA for real — `openapi-typescript` generates
       types from `bff-openapi.yaml`; a thin `fetch` wrapper + TanStack
       Query hooks replace task-1's placeholder pages. `AuthGate.tsx`'s
       data-source swap (bucket 2, deferred from task-1): `useSession()`
@@ -116,7 +116,7 @@ assemble afterward — see task-5.
       other half — session-check hook's test is the same test as
       Done-when 6's).
       **Owns: Done-when 6, 7, 10.**
-- [ ] task-4: `make test` runs both suites — wires the JS test runner
+- [x] task-4: `make test` runs both suites — wires the JS test runner
       (Vitest, matching my-task's own choice) into `make test` alongside
       `go test ./...`, or `docs/GETTING-STARTED.md` states plainly it
       doesn't and what a forker must run instead. Trivial once task-1's
@@ -127,7 +127,7 @@ assemble afterward — see task-5.
       wording: two specific hooks, not full coverage) — that's a
       decision, not a gap to close here or in task-5's final report.**
       **Owns: Done-when 9.**
-- [ ] task-5: Final verification — **last task, full-suite gate, same
+- [x] task-5: Final verification — **last task, full-suite gate, same
       shape as milestone-2's task-8.** `docker compose up` still works
       with `web/`+`embed.FS` in the build (Done-when 11 — not inherited,
       checked directly, same discipline as milestone-2's own Done-when
