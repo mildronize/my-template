@@ -206,7 +206,15 @@ code, the service name is what it's called everywhere else:
   example are `/todos`-shaped and need the same domain swap as
   `openapi.yaml` itself. An agent (or crew) calling your fork by following
   this skill instead of reading the real `openapi.yaml` gets 404s against
-  paths that don't exist if this pass is skipped.
+  paths that don't exist if this pass is skipped. **Keep the `-api` suffix
+  on whatever you rename this directory to** (e.g. `my-delivery-api`, not
+  `my-delivery-skill`) — `internal/skill_doc_test.go`'s own coverage check
+  discovers this directory by scanning `.claude/skills/` for exactly one
+  `*-api` entry rather than hardcoding a name (found via DLV-1, the first
+  real fork), so a rename that drops the suffix fails that check loudly
+  (`found []`) rather than silently — loud, but still a rule this document
+  has to actually state, not one a fork should have to discover from a red
+  test.
 - **The key path (`~/.my-template/keys/`) and the resolver's env var
   (`MY_TEMPLATE_CREW`)** — both still carry the literal `my-template` name
   today, the same as everything else on this list, and skipping this line
