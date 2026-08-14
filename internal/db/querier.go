@@ -122,11 +122,18 @@ type Querier interface {
 	// placeholder inside sqlc's own numbering (no bare anonymous placeholder)
 	// and avoiding sqlc.embed here keeps the numbering contiguous from the
 	// start, matching ListTodoEventsFeedParams field order exactly.
-	// (Also: plain ASCII hyphens only in this comment block, never an em
-	// dash, immediately above a SELECT line - task-1's own report already
-	// found that an em dash there corrupts sqlc v1.31.1's star-expansion byte
-	// offsets; this query hit a variant of the same corruption during task-2
-	// until this comment's em dashes were replaced.)
+	// (Also: plain ASCII only in this comment block, never an em dash or any
+	// other non-ASCII byte, immediately above a SELECT line - task-1's own
+	// report found that an em dash there corrupts sqlc v1.31.1's
+	// star-expansion byte offsets; this query hit a variant of the same
+	// corruption during task-2 until this comment's em dashes were replaced.
+	// Wider than em dashes specifically: DLV-1's first real fork hit the
+	// identical corruption with a section-sign character and with Thai prose
+	// in a different db/queries/*.sql file. internal/db_queries_ascii_test.go
+	// is the actual floor now - it fails loudly on any non-ASCII byte
+	// anywhere under db/queries/, not just here, so this paragraph is
+	// historical context for why the rule exists, not the only thing
+	// enforcing it.)
 	ListTodoEventsFeed(ctx context.Context, arg ListTodoEventsFeedParams) ([]ListTodoEventsFeedRow, error)
 	// milestone-4: no owner filter - todos are a shared collection (I3 no
 	// longer applies to this domain). Reads every row.
