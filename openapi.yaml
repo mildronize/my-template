@@ -173,10 +173,13 @@ paths:
         never as a direct client-specifiable write (I16) — the same
         rejection applies to any other value this endpoint doesn't
         recognise, `created` included, not a special case. A
-        `status: closed` write from an agent caller is rejected as
-        `unauthorized` (I18 — this project has never had a 403).
-        Idempotent on `clientRequestId` (I19): a repeated id returns the
-        original event and creates nothing.
+        `status: closed` write from an agent caller is rejected as `403
+        invalid_transition`, with a hint (I18) — a genuine permission
+        refusal, distinct from `401 unauthorized`, since the credential
+        itself is valid here; matches my-task's own equivalent check
+        exactly rather than the generic 401 this endpoint's first pass
+        used. Idempotent on `clientRequestId` (I19): a repeated id returns
+        the original event and creates nothing.
       requestBody:
         required: true
         content:
@@ -194,6 +197,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
   /keys:
@@ -529,6 +534,19 @@ components:
         Missing, malformed, expired, revoked, wrong-role, or
         inactive-user credential — same shape regardless of which check
         failed (I5).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: >
+        A genuine permission refusal for an authenticated, valid
+        credential — distinct from Unauthorized, which means the
+        credential itself failed. This surface's only case today: an
+        agent key attempting to move a todo to status: closed (I18),
+        code `invalid_transition`, matching my-task's own equivalent
+        check exactly (`~/gits/my-task/src/server/api/v1/errors.ts:130`)
+        rather than the generic 401 this endpoint's first pass used.
       content:
         application/json:
           schema:

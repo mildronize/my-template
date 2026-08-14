@@ -292,6 +292,55 @@ func TestDoneWhen13_CreateTodoEvent_TypeCreatedRejected(t *testing.T) {
 	}
 }
 
+// TestI18_Handler_AgentClosedTransitionRejected_Returns403WithHintAndCode
+// is I18's own rejection, verified at the HTTP layer on the public API —
+// no equivalent existed before this test (the domain layer's own
+// TestI18_Append_SameAgentSameTodo_ClosedRejected_NonClosedSucceeds in
+// internal/domain/todo/service_test.go only proves the sentinel error,
+// not what a real HTTP caller sees). This project's first pass mapped
+// the rejection to the generic 401 unauthorized every credential failure
+// produces; that was found to be a narrowing of my-task rather than a
+// deliberate choice — my-task returns a distinct 403 invalid_transition
+// with a hint, and a bare 401 here would tell a correctly-authenticated
+// agent that its key is the problem, which is false. Asserts all three
+// of status, code, and the hint's presence (not just the status code —
+// a check that stopped at 403 could not tell "the right kind of 403"
+// from "some other, unrelated permission refusal"), then proves the
+// rejection did not leave a half-applied write (no event row added, the
+// todo's own status untouched) — the same "not silently accepted and
+// dropped" shape TestDoneWhen13 uses for I16 above.
+func TestI18_Handler_AgentClosedTransitionRejected_Returns403WithHintAndCode(t *testing.T) {
+	router, conn := newIntegrationRouter(t)
+	_, rawKey := createAgentWithKey(t, conn, "agent-a")
+
+	createRec := doJSONRequest(t, router, http.MethodPost, "/api/v1/todos", rawKey, map[string]any{
+		"title":           "a todo",
+		"clientRequestId": "req-1",
+	})
+	require.Equal(t, http.StatusCreated, createRec.Code)
+	created := decodeTodo(t, createRec)
+
+	before := countTodoEventRows(t, conn, created.Id)
+
+	rec := doJSONRequest(t, router, http.MethodPost, "/api/v1/todos/"+created.Id+"/events", rawKey, map[string]any{
+		"type":            "status_changed",
+		"to":              "closed",
+		"clientRequestId": "close-attempt-1",
+	})
+	require.Equal(t, http.StatusForbidden, rec.Code)
+	errBody := decodeError(t, rec)
+	assert.Equal(t, "invalid_transition", errBody.Error.Code)
+	require.NotNil(t, errBody.Error.Hint, "the rejection must carry a hint telling the agent what to do next")
+	assert.NotEmpty(t, *errBody.Error.Hint)
+
+	after := countTodoEventRows(t, conn, created.Id)
+	assert.Equal(t, before, after, "the rejected write must not have added any row")
+
+	getRec := doJSONRequest(t, router, http.MethodGet, "/api/v1/todos/"+created.Id, rawKey, nil)
+	require.Equal(t, http.StatusOK, getRec.Code)
+	assert.Equal(t, api.Open, decodeTodo(t, getRec).Status, "the rejected close attempt must not have changed the todo's status")
+}
+
 // TestHandler_EventsRoundTrip_CreateReadAppendFieldChangedReadTimeline —
 // a real wiring sanity check beyond the negative test above: create a
 // todo with the new fields, read it back, append a field_changed event

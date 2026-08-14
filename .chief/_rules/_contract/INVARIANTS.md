@@ -286,6 +286,24 @@ non-closed action succeed in the same test — a permission layer that
 rejects everything would pass a reject-only assertion just as well as a
 correct one.
 
+**Wire mapping: `403 invalid_transition`, with a hint — not `401
+unauthorized`.** *Clarification, found post-launch (Clara, running
+`cmd/smoke` for the first time against a live milestone-4 instance), not
+the original design.* The first pass mapped this rejection to the
+generic `401` every credential failure produces (I5), reasoned at the
+time as "no distinct forbidden/403 code, this project has never had
+one." That was a narrowing of my-task rather than a decision: my-task's
+own equivalent check returns a distinct `403 invalid_transition` with a
+hint (`~/gits/my-task/src/server/api/v1/errors.ts:130`), and a bare `401`
+here misleads a correctly-authenticated agent into thinking its
+credential is the problem. I3's "absence, not permission" reasoning does
+not apply — todos are shared now, so the agent can already see this
+todo, and there is nothing left for a `403` to leak that a `404` would
+otherwise have hidden. Enforced at the same point as the permission check
+itself (`internal/transport/publicapi/todo_handler.go`'s
+`invalidTransitionErrorBody`, mirrored in `internal/transport/bff` for
+consistency though unreachable there in practice, I12).
+
 **I19 — Writes are idempotent when the client request id is reused (todo domain).** `scope: domain:todo`
 *(New, milestone-4.)* A repeat `POST` carrying the same `clientRequestId`
 returns the original event, unchanged, and creates nothing — checked

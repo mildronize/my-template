@@ -142,13 +142,28 @@ Bearer) is unchanged** — still the caller's own keys only. Still no
 `POST` on either surface — issuance stays CLI-only, unchanged from
 TPL-1/milestone-2.
 
-## Error shape — unchanged
+## Error shape — one new code, post-launch correction
 
-Same envelope, same codes (`unauthorized`, `not_found`,
-`actor_field_present`, `validation_error`) as `_rules/_contract/API.md`.
-No new codes this milestone — `type: "created"` and a stray `done` field
-both map to the existing `validation_error` shape (`hint` names the
-field), the same way an unrecognized `type` value already does. A
-`status: closed` attempt from an agent (I18) is `unauthorized` (I5 — same
-body regardless of which check failed), not a distinct `forbidden` code;
-this project has never had a 403.
+Same envelope as `_rules/_contract/API.md`. `type: "created"` and a stray
+`done` field both map to the existing `validation_error` shape (`hint`
+names the field), the same way an unrecognized `type` value already does
+— no new code needed for either.
+
+**A `status: closed` attempt from an agent (I18) is `403 invalid_transition`,
+with a hint — this project's first `forbidden`-shaped code.** The
+original plan mapped this to `unauthorized` (I5 — same body regardless of
+which check failed), reasoned at the time as "no distinct forbidden/403
+code, this project has never had one." That reasoning did not survive
+contact with the named source: my-task's own equivalent check
+(`~/gits/my-task/src/server/api/v1/errors.ts:130`) returns a distinct
+`403 invalid_transition` with a hint (`"Ask the owner to close this
+task."`), and a bare `401` here tells a correctly-authenticated agent the
+one thing that is false — that its credential is the problem — inviting
+it to rotate a key that was never wrong instead of asking the owner to
+close the todo. I3's "absence, not permission" reasoning (why a `403`
+would otherwise leak that a row exists) does not apply here either: todos
+are shared now, so the agent can already see this todo — there is
+nothing left for a `403` to leak that a `404` would have hidden. Found
+and fixed post-launch (Clara, running `cmd/smoke` for the first time
+against a live milestone-4 instance); code and hint text match my-task's
+own exactly.

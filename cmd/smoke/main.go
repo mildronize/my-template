@@ -356,6 +356,18 @@ func mergeHeaders(a, b map[string]string) map[string]string {
 
 func strPtr(s string) *string { return &s }
 
+// strOrNil renders a *string for a report line — %v on a *string prints
+// a memory address, not the value, which is unreadable evidence in a
+// report a human reads (a check that passes for the right reason still
+// needs to show what it saw). "<nil>" for a genuinely absent value keeps
+// the distinction from an empty string visible.
+func strOrNil(s *string) string {
+	if s == nil {
+		return "<nil>"
+	}
+	return *s
+}
+
 // --- response shapes (_contract/API.md) -----------------------------------
 // meResponse and errorEnvelope are identity-shaped/generic, not this
 // domain's — they stay here rather than in the edit-zone banner above.
@@ -661,7 +673,7 @@ func main() {
 	record("POST .../events type: commented appends a real comment event, attributed to the caller",
 		commentStatus == http.StatusCreated && commentEvent.Type == "commented" &&
 			commentEvent.ActorHandle == handle1 && commentEvent.Body != nil && *commentEvent.Body == "smoke says hello",
-		fmt.Sprintf("%d type=%s actorHandle=%s body=%v", commentStatus, commentEvent.Type, commentEvent.ActorHandle, commentEvent.Body), "I15")
+		fmt.Sprintf("%d type=%s actorHandle=%s body=%s", commentStatus, commentEvent.Type, commentEvent.ActorHandle, strOrNil(commentEvent.Body)), "I15")
 
 	// status_changed
 	statusChangeStatus, statusChangeBody, err := doRequest(client, http.MethodPost, flowEventsURL, auth1,
@@ -695,7 +707,7 @@ func main() {
 	record("the todo's own assigneeId/assigneeHandle reflect the assignment (handle-exposure fix-round's own field)",
 		afterAssignStatus == http.StatusOK && afterAssign.AssigneeID != nil && *afterAssign.AssigneeID == flow.CreatedBy &&
 			afterAssign.AssigneeHandle != nil && *afterAssign.AssigneeHandle == handle1,
-		fmt.Sprintf("%d assigneeId=%v assigneeHandle=%v", afterAssignStatus, afterAssign.AssigneeID, afterAssign.AssigneeHandle), "")
+		fmt.Sprintf("%d assigneeId=%s assigneeHandle=%s", afterAssignStatus, strOrNil(afterAssign.AssigneeID), strOrNil(afterAssign.AssigneeHandle)), "")
 
 	// assigned — to an id that syntactically could be a user but resolves
 	// to nobody (ErrUnknownAssignee -> 400 validation_error hint "to").
@@ -723,7 +735,7 @@ func main() {
 	record(`type: assigned with "to": null clears the assignment`,
 		unassignStatus == http.StatusCreated && afterUnassignStatus == http.StatusOK &&
 			afterUnassign.AssigneeID == nil && afterUnassign.AssigneeHandle == nil,
-		fmt.Sprintf("unassign=%d get=%d assigneeId=%v assigneeHandle=%v", unassignStatus, afterUnassignStatus, afterUnassign.AssigneeID, afterUnassign.AssigneeHandle), "")
+		fmt.Sprintf("unassign=%d get=%d assigneeId=%s assigneeHandle=%s", unassignStatus, afterUnassignStatus, strOrNil(afterUnassign.AssigneeID), strOrNil(afterUnassign.AssigneeHandle)), "")
 
 	// field_changed — priority
 	priorityStatus, _, err := doRequest(client, http.MethodPost, flowEventsURL, auth1,
@@ -739,7 +751,7 @@ func main() {
 	record("field_changed field: priority actually changes the todo's priority",
 		priorityStatus == http.StatusCreated && afterPriorityStatus == http.StatusOK &&
 			afterPriority.Priority != nil && *afterPriority.Priority == "high",
-		fmt.Sprintf("post=%d priority=%v", priorityStatus, afterPriority.Priority), "")
+		fmt.Sprintf("post=%d priority=%s", priorityStatus, strOrNil(afterPriority.Priority)), "")
 
 	// field_changed — dueDate
 	dueDate := "2026-09-01T00:00:00Z"
@@ -756,21 +768,25 @@ func main() {
 	record("field_changed field: dueDate actually changes the todo's due date",
 		dueDateStatus == http.StatusCreated && afterDueDateStatus == http.StatusOK &&
 			afterDueDate.DueDate != nil && *afterDueDate.DueDate == dueDate,
-		fmt.Sprintf("post=%d dueDate=%v", dueDateStatus, afterDueDate.DueDate), "")
+		fmt.Sprintf("post=%d dueDate=%s", dueDateStatus, strOrNil(afterDueDate.DueDate)), "")
 
 	// I18: an agent key may not move a todo to status: closed — the one
-	// restriction the fixed four-value status enum exists to bind. This
-	// project has never had a distinct 403, so the rejection is the same
-	// 401 unauthorized shape a bad credential would produce (I5).
+	// restriction the fixed four-value status enum exists to bind. A
+	// genuine permission refusal for a validly-authenticated caller, so
+	// it is 403 invalid_transition with a hint, not the generic 401
+	// unauthorized shape a bad credential produces (I5) — a bare 401
+	// would tell the agent its key is the problem, which is false.
+	// Asserts all three of status, code, and the hint's presence: status
+	// alone can't tell this specific rejection from any other 403.
 	closedStatus, closedBody, err := doRequest(client, http.MethodPost, flowEventsURL, auth1,
 		newStatusChangedEventBody("closed", nextCR("flow-close-attempt")))
 	if err != nil {
 		fatalErr(err)
 	}
 	closedEnv := decode[errorEnvelope](closedBody)
-	record("an agent key cannot move a todo to status: closed — owner-only, rejected as 401 unauthorized (no distinct 403 on this surface)",
-		closedStatus == http.StatusUnauthorized && closedEnv.Error.Code == "unauthorized",
-		fmt.Sprintf("%d %s", closedStatus, closedEnv.Error.Code), "I18")
+	record("an agent key cannot move a todo to status: closed — owner-only, rejected as 403 invalid_transition with a hint",
+		closedStatus == http.StatusForbidden && closedEnv.Error.Code == "invalid_transition" && closedEnv.Error.Hint != "",
+		fmt.Sprintf("%d %s hint=%q", closedStatus, closedEnv.Error.Code, closedEnv.Error.Hint), "I18")
 
 	stillNotClosedStatus, stillNotClosedBody, err := doRequest(client, http.MethodGet, apiBase+resourcePath+"/"+flowID, auth1, nil)
 	if err != nil {

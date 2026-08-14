@@ -13,6 +13,19 @@ import (
 // (I3's "absence, not permission" framing is specific to ownership
 // scoping, which this domain no longer has; a permission refusal here is
 // a real, named "you may not do this", not a manufactured 404).
+//
+// Maps to a real 403 (`invalid_transition`, with a hint), not the
+// generic 401 unauthorized every credential failure produces (I5) — a
+// post-launch correction, not the original design. The agent here is
+// genuinely authenticated; a 401 would read as "your key is bad," which
+// sends it to rotate a credential that was never the problem, instead of
+// asking the owner to close the todo (transport/publicapi/todo_handler.go,
+// transport/bff/todo_handler.go). Matches my-task's own
+// `unauthorized` -> distinct `invalid_transition` split exactly
+// (`~/gits/my-task/src/server/api/v1/errors.ts:130`), which this
+// project's first pass at I18 narrowed away by reusing 401 for both
+// "who are you" and "you may not do this" — see INVARIANTS.md's I18
+// entry for the reasoning in full.
 var ErrForbidden = errors.New("todo: forbidden")
 
 // Repository is the subset of Repo's methods Service depends on. Declared

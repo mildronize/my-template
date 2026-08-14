@@ -132,7 +132,7 @@ unchanged and writes nothing new):
 
 // status_changed — to is one of open | in_progress | done | closed.
 // Moving to "closed" is owner-only (I18): an agent key gets
-// 401 unauthorized, not a distinct 403 (this project has never had one).
+// 403 invalid_transition, with a hint — not 401, your credential is fine.
 { "type": "status_changed", "to": "in_progress", "clientRequestId": "…" }
 
 // assigned — to is the new assignee's user id, or null to unassign

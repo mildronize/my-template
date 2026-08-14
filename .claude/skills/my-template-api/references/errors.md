@@ -26,10 +26,11 @@ own error text, not a guaranteed structured field.
 
 | Code | HTTP | When | Carries |
 | --- | --- | --- | --- |
-| `unauthorized` | 401 | any credential failure at all (I2, I5, I9); also an agent key attempting `status_changed` to `closed` (I18 — owner-only, no distinct `403` exists on this surface) | — |
+| `unauthorized` | 401 | any credential failure at all (I2, I5, I9) | — |
 | `not_found` | 404 | an unknown todo id (any todo is readable/actionable by any caller, I3 no longer scopes todos — this is purely "never existed"); a key id that exists but isn't the caller's own, or never existed (I3 still scopes keys — absence, not `403`) | — |
 | `actor_field_present` | 400 | request tried to declare an actor (I1) | — |
 | `validation_error` | 400 | a malformed or missing field, caught either by the OpenAPI request validator or a handler's own fallback check; also an `assigned` event's `to` naming a user id that doesn't resolve (`hint: "to"`) | `hint` names the field, when the underlying error names exactly one |
+| `invalid_transition` | 403 | an agent key attempting `status_changed` to `closed` (owner-only, I18) — a real permission refusal, not a credential failure | `hint` says what to do instead: ask the owner |
 
 There is no `internal_error` code documented in the contract — an
 unmapped failure is a bug in the service, not a designed response; report
@@ -45,16 +46,22 @@ indistinguishable-401 trap" before assuming the credential itself is what
 failed — an empty or unset key produces the exact same response as a
 genuinely wrong one.
 
-**404 means different things for a todo and a key, and there is no `403`
-on this surface at all.** For a key: one you don't own returns exactly
-the same `not_found` a nonexistent id would (I3, unchanged) — deliberate,
-since a `403` would leak that the row exists. For a todo: there is no
-"not yours" case left to leak — every todo is every caller's to read and
-act on — so `not_found` here only ever means the id never existed.
-**Moving a todo to `closed` is the one place this surface uses `401`
-instead of a hypothetical `403`** (I18): an agent key gets the same
-credential-failure-shaped response a bad key would, not a distinct
-"forbidden" code — this project has never had one, on either surface.
+**404 means different things for a todo and a key.** For a key: one you
+don't own returns exactly the same `not_found` a nonexistent id would
+(I3, unchanged) — deliberate, since a `403` would leak that the row
+exists. For a todo: there is no "not yours" case left to leak — every
+todo is every caller's to read and act on — so `not_found` here only
+ever means the id never existed.
+
+**Moving a todo to `closed` is this surface's one `403` — read the hint,
+don't retry the same request, and don't rotate your key.** An agent key
+gets `invalid_transition`, not `unauthorized`: your credential is fine,
+you are simply not allowed to make this specific change. The `hint`
+tells you what to do instead (ask the owner). This is different from
+every other rejection on this surface, which is either "your credential
+is wrong" (`401`) or "this row doesn't exist" (`404`) — `invalid_transition`
+is the one case where you are correctly who you say you are, looking at
+a real row, and the answer is still no.
 
 **400 `actor_field_present` is a loud refusal, not a dropped field.** The
 guard checks the `X-Actor` header, and `actor` / `actorId` / `ownerId` in

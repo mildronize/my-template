@@ -50,10 +50,9 @@ func NewTodoServer(svc *todo.Service) *TodoServer {
 // has no equivalent per-file value: its message never varies by domain,
 // so actorID (middleware.go) writes the package's one shared
 // unauthorizedBody instead of a second, todo-specific copy of the same
-// text — and I18's permission rejection (a Bearer-authenticated agent
-// attempting status:closed) reuses that exact same body too
-// (_contract/API.md's error-shape section: "same body regardless of
-// which check failed", mirroring I5 — this project has never had a 403).
+// text. I18's permission rejection (a Bearer-authenticated agent
+// attempting status:closed) does NOT reuse that body — see
+// invalidTransitionErrorBody below for why.
 var todoNotFoundError = newAPIError("not_found", "no such todo")
 
 // validationErrorBody builds a validation_error-coded api.Error with a
@@ -66,6 +65,30 @@ var todoNotFoundError = newAPIError("not_found", "no such todo")
 func validationErrorBody(message, hint string) api.Error {
 	e := newAPIError("validation_error", message)
 	h := hint
+	e.Error.Hint = &h
+	return e
+}
+
+// invalidTransitionErrorBody is I18's own rejection: an agent-authenticated
+// caller attempting to move a todo to status: closed. This project's
+// first pass at I18 mapped this to the generic 401 unauthorized body
+// every credential failure produces (I5) — reasoned, at the time, as "no
+// distinct forbidden/403 code, this project has never had one." That
+// reasoning was found to be a narrowing of my-task rather than a genuine
+// design decision: my-task's own equivalent check returns a distinct
+// `403 invalid_transition` with a hint
+// (`~/gits/my-task/src/server/api/v1/errors.ts:130`), and a bare 401 here
+// tells a rejected agent the one thing that is false — that its
+// credential is the problem — inviting it to rotate a key that was never
+// wrong, instead of asking the owner to close the todo. I3's "absence,
+// not permission" reasoning does not justify hiding this either: todos
+// are shared now (GOAL.md's Ownership model decision), so the agent can
+// already see this todo — there is nothing left for a 403 to leak that a
+// 404 would otherwise have hidden. Code and hint match my-task's own
+// text exactly, not a paraphrase.
+func invalidTransitionErrorBody() api.Error {
+	e := newAPIError("invalid_transition", "Agents cannot move a task into the closed group")
+	h := "Ask the owner to close this task."
 	e.Error.Hint = &h
 	return e
 }
@@ -149,19 +172,20 @@ func policyActorFor(c *gin.Context) (todo.PolicyActor, string, bool) {
 
 // writeAppendError maps Append/CreateTodo's error results the way every
 // handler below needs: todo.ErrNotFound -> 404, todo.ErrForbidden (I18's
-// permission refusal) -> 401 unauthorized (never a distinct forbidden/403
-// code — _contract/API.md's error-shape section, this project has never
-// had one), todo.ErrUnknownAssignee (milestone-4 fix-round,
-// handle-exposure: an `assigned` event whose "to" id does not resolve to
-// any real user) -> 400 validation_error, mirroring my-task's own
-// unknownAssigneeError for the same case, anything else -> 500.
+// permission refusal, an agent attempting status:closed) -> 403
+// invalid_transition with a hint (see invalidTransitionErrorBody's own
+// doc comment for why this is not 401), todo.ErrUnknownAssignee
+// (milestone-4 fix-round, handle-exposure: an `assigned` event whose "to"
+// id does not resolve to any real user) -> 400 validation_error,
+// mirroring my-task's own unknownAssigneeError for the same case,
+// anything else -> 500.
 func writeAppendError(c *gin.Context, err error) {
 	if errors.Is(err, todo.ErrNotFound) {
 		c.AbortWithStatusJSON(http.StatusNotFound, todoNotFoundError)
 		return
 	}
 	if errors.Is(err, todo.ErrForbidden) {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, unauthorizedBody)
+		c.AbortWithStatusJSON(http.StatusForbidden, invalidTransitionErrorBody())
 		return
 	}
 	if errors.Is(err, todo.ErrUnknownAssignee) {

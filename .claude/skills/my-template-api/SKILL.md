@@ -138,8 +138,9 @@ scoped to the caller alone: a key that exists but belongs to a different
 user returns the same **404 `not_found`** — never `403`, because a `403`
 would confirm the row exists at all. Only the owner (never reachable
 through this surface — see `bff`, above) may move a todo to `closed`; an
-agent attempting it gets `401 unauthorized`, not a distinct `403` (this
-project has never had one).
+agent attempting it gets **`403 invalid_transition`, with a hint** — a
+real permission refusal, not a credential problem, so don't retry it and
+don't rotate your key (see `references/errors.md`'s own section on this).
 
 ## Endpoints
 
@@ -217,7 +218,7 @@ curl -sS -X POST "$BASE_URL/api/v1/todos/$ID/events" \
 
 **Change its status** — `to` is one of `open`/`in_progress`/`done`/
 `closed`; a key can move it to anything except `closed` (owner-only,
-I18 — `401 unauthorized`, not a distinct `403`, if a key tries):
+I18 — `403 invalid_transition`, with a hint, if a key tries):
 
 ```bash
 curl -sS -X POST "$BASE_URL/api/v1/todos/$ID/events" \

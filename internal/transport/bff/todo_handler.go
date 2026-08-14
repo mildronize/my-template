@@ -162,22 +162,34 @@ func bffPolicyActor(c *gin.Context) (todo.PolicyActor, string, bool) {
 	return todo.PolicyActor{Role: user.Role}, user.ID, true
 }
 
+// bffInvalidTransitionErrorBody mirrors publicapi's own
+// invalidTransitionErrorBody (see that function's doc comment for the
+// full reasoning) — unreachable through this surface in practice, since
+// an owner session always passes I18's can() unconditionally, but kept
+// correct rather than left as dead-but-wrong defensive code: if this
+// surface's own reachability assumption ever changes, it should already
+// say the right thing.
+func bffInvalidTransitionErrorBody() publicapi.ErrorEnvelope {
+	return publicapi.NewErrorEnvelope("invalid_transition",
+		"Agents cannot move a task into the closed group",
+		"Ask the owner to close this task.")
+}
+
 // writeBFFAppendError maps Append/CreateTodo's error results the way every
 // handler below needs — mirrors publicapi's own writeAppendError:
 // todo.ErrNotFound -> 404, todo.ErrForbidden (I18's permission refusal,
-// unreachable for an owner session in practice, I12) -> 401 unauthorized
-// (never a distinct forbidden/403 code — this project has never had one),
-// todo.ErrUnknownAssignee (milestone-4 fix-round, handle-exposure: an
-// `assigned` event whose "to" id does not resolve to any real user) -> 400
-// validation_error, mirroring my-task's own unknownAssigneeError for the
-// same case, anything else -> 500.
+// unreachable for an owner session in practice, I12) -> 403
+// invalid_transition with a hint, todo.ErrUnknownAssignee (milestone-4
+// fix-round, handle-exposure: an `assigned` event whose "to" id does not
+// resolve to any real user) -> 400 validation_error, mirroring my-task's
+// own unknownAssigneeError for the same case, anything else -> 500.
 func writeBFFAppendError(c *gin.Context, err error) {
 	if errors.Is(err, todo.ErrNotFound) {
 		c.AbortWithStatusJSON(http.StatusNotFound, bffTodoNotFoundError)
 		return
 	}
 	if errors.Is(err, todo.ErrForbidden) {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, jsonUnauthorizedBody)
+		c.AbortWithStatusJSON(http.StatusForbidden, bffInvalidTransitionErrorBody())
 		return
 	}
 	if errors.Is(err, todo.ErrUnknownAssignee) {
