@@ -16,6 +16,7 @@ package internal
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -32,10 +33,30 @@ var skillDocFiles = []string{
 	filepath.Join("references", "errors.md"),
 }
 
-// skillDocDir resolves the my-template-api skill's own directory,
-// relative to the repo root.
-func skillDocDir(root string) string {
-	return filepath.Join(root, ".claude", "skills", "my-template-api")
+// skillDocDir resolves the agent-facing API skill's own directory,
+// relative to the repo root, by scanning .claude/skills/ for exactly one
+// "*-api" directory rather than hardcoding "my-template-api" — a fork
+// renames that directory per GETTING-STARTED.md Step 3, and a hardcoded
+// name here broke this file's own coverage check the moment a fork did
+// what the doc told it to (found by the first real fork; domainModuleNames
+// in architecture_test.go is the same discover-don't-hardcode shape, one
+// level down). Failing loudly on zero or on more than one match, the same
+// as require.NoErrorf below does for a missing file — an ambiguous match
+// is not the same claim as a resolved one.
+func skillDocDir(t *testing.T, root string) string {
+	t.Helper()
+	skillsDir := filepath.Join(root, ".claude", "skills")
+	entries, err := os.ReadDir(skillsDir)
+	require.NoErrorf(t, err, "reading %s", skillsDir)
+
+	var matches []string
+	for _, entry := range entries {
+		if entry.IsDir() && strings.HasSuffix(entry.Name(), "-api") {
+			matches = append(matches, entry.Name())
+		}
+	}
+	require.Lenf(t, matches, 1, "expected exactly one *-api directory under %s, found %v", skillsDir, matches)
+	return filepath.Join(skillsDir, matches[0])
 }
 
 // readSkillDocs reads every skillDocFiles entry and returns their
@@ -45,7 +66,7 @@ func skillDocDir(root string) string {
 // found nothing" distinction I20's own static check draws.
 func readSkillDocs(t *testing.T, root string) (combined string, perFile map[string]string) {
 	t.Helper()
-	dir := skillDocDir(root)
+	dir := skillDocDir(t, root)
 
 	info, err := os.Stat(dir)
 	require.NoErrorf(t, err, "%s must exist for this check to mean anything", dir)
@@ -111,12 +132,12 @@ func TestDoneWhen6_SkillDocDocumentsTheNewEventEndpoints(t *testing.T) {
 	combined, _ := readSkillDocs(t, root)
 
 	for _, must := range []string{
-		"/todos/:id/events",  // the new endpoints exist in the doc at all
-		"status_changed",     // at least one event type is named
+		"/todos/:id/events", // the new endpoints exist in the doc at all
+		"status_changed",    // at least one event type is named
 		"commented",
 		"assigned",
 		"field_changed",
-		"clientRequestId",    // I19's idempotency key is documented as required
+		"clientRequestId", // I19's idempotency key is documented as required
 	} {
 		assert.Containsf(t, combined, must,
 			"the skill doc must document %q — a doc that removed DELETE without documenting "+
