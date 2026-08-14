@@ -15,6 +15,21 @@
 // check reaches the population the comment can't: anyone editing any
 // file under db/queries/, including a fork that never opens
 // todo_events.sql at all.
+//
+// Removal condition, stated so this doesn't outlive its own cause and
+// turn into folklore nobody can justify deleting: remove this check (and
+// widen todo_events.sql's own comment back down, or drop it) once go.mod
+// pins a github.com/sqlc-dev/sqlc release past v1.31.1 that no longer
+// corrupts star-expansion byte offsets on non-ASCII input in
+// db/queries/*.sql — verify against that release the same way this file
+// was verified against v1.31.1 (a controlled repro: add non-ASCII above a
+// star-expansion query, confirm sqlc generate no longer mangles it)
+// before deleting, not on the assumption a version bump alone fixed it.
+// Until then, this is a real, live cost worth naming plainly: no Thai, no
+// em dash, no other non-ASCII byte in any db/queries/*.sql comment, in a
+// repo whose own working language is partly Thai. That's the right trade
+// today, against a pinned, known-bad tool version — not a permanent
+// statement about what this repo's comments may say.
 package internal
 
 import (
