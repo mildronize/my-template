@@ -799,9 +799,15 @@ environment setup step, not something every run repeats:
    1–5 above:
    - Open `http://localhost:8080/login` (or your `PORT`) in a real
      browser. This redirects to Hydra and back through `GET /callback`
-     once you complete a real login there — not something any automated
-     check in this repo can do for you (no unattended loop can drive a
-     real Hydra consent screen).
+     once you complete a real login there. No automated check can drive
+     *your own* production Hydra's real consent screen for you — but
+     `e2e/` does prove this exact code path (redirect, PKCE,
+     callback, session issuance) automatically, against a real local
+     OIDC issuer it stands up and tears down itself (`make e2e`,
+     `e2e/README.md`). That's a claim about the *code*, not about
+     whether *your* production Hydra is configured correctly — this step
+     is still the one that proves the latter, and still isn't something
+     an unattended loop can do for you.
    - A successful login redirects to `/`, the SPA's todos page
      (`web/src/app/TodosPage.tsx`), session-cookie-authenticated against
      `/api/bff/me`.

@@ -1,0 +1,52 @@
+# Ory Hydra config for the e2e local OIDC issuer — TPL-3. Modeled on
+# ~/gits/prod-thw-home/sso/hydra/hydra.yml.template's real shape (read
+# for reference only, never touched, never run) but this file is genuinely
+# test infrastructure, not a copy of anything production reads: different
+# ports, a throwaway sqlite file torn down with the rest of the stack,
+# `--dev` (see docker-compose.yml's own comment on why, unlike prod).
+#
+# The two facts that make this a real proof of my-template's own login
+# code rather than a stand-in for it: `dsn: sqlite:///...` is the exact
+# same driver family prod-thw-home's own hydra.yml.template uses (Hydra
+# genuinely supports a file-backed store, this isn't a simplification),
+# and oauth2.pkce.enforced: true matches prod's own setting — the PKCE
+# code path this whole ticket exists to exercise is not weakened here.
+serve:
+  public:
+    port: 4444
+    host: 0.0.0.0
+    cors:
+      enabled: true
+  admin:
+    port: 4445
+    host: 0.0.0.0
+
+dsn: sqlite:///var/lib/sqlite/hydra.sqlite?_fk=true
+
+urls:
+  self:
+    issuer: http://127.0.0.1:24444
+  # The login/consent stub (../fixtures/oidc-login-stub.mjs), not a real
+  # UI — see that file's own header comment for why an auto-accepting
+  # stub is the right amount of realism here (my-template's own code
+  # under test never sees or cares what this looks like; it only sees
+  # the redirect Hydra sends back).
+  login: http://127.0.0.1:24446/login
+  consent: http://127.0.0.1:24446/consent
+  logout: http://127.0.0.1:24446/logout
+
+oidc:
+  subject_identifiers:
+    supported_types:
+      - public
+
+oauth2:
+  pkce:
+    enforced: true
+
+# A fixed, obviously-fake value — this instance and its data never
+# survive past one test run (docker-compose.yml's own volume is
+# unnamed/ephemeral), so there is nothing here worth a real secret.
+secrets:
+  system:
+    - e2e-only-not-a-real-secret-0123456789ab

@@ -8,3 +8,17 @@
 *.db
 *.db-journal
 .env
+
+# TPL-3 browser e2e (Playwright + a local OIDC issuer, e2e/) — its own
+# package.json/node_modules, scoped to e2e/ alone, not the SPA
+# (web/package.json is separate) and not the repo root (e2e/README.md's
+# own "Why this directory has its own package.json" section). e2e/.tmp/
+# is where the throwaway e2e-only database, the built binaries, and every
+# other run-scoped file (including the registered client's own secret,
+# passed directly as an env var to the app process, never written to
+# disk) live — deliberately never .../data/app.db's own path, see that
+# file's own header comment in global-setup.ts for why.
+/e2e/node_modules/
+/e2e/playwright-report/
+/e2e/test-results/
+/e2e/.tmp/

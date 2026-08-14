@@ -1,0 +1,97 @@
+# The e2e local OIDC issuer — TPL-3. Brought up by e2e/global-setup.ts
+# (via `docker compose -f e2e/docker-compose.yml up -d --wait`) before any
+# spec runs, torn down by e2e/global-teardown.ts (`down -v`) after —
+# never left running between runs, per gate 4 (reproducibility from the
+# scripts alone, not a container someone left up).
+#
+# Real Ory Hydra (oryd/hydra:v2.3 — the same image scripts/register.sh
+# already pins), not a mock: internal/transport/bff/oauth.go hardcodes
+# Hydra's own /oauth2/auth and /oauth2/token paths (derived from
+# SSO_ISSUER, not OIDC-discovered), so a generic mock issuer would need
+# reshaping to match — real Hydra is the smaller, more honest surface
+# here, not the heavier one.
+#
+# Ports are 24444/24445/24446 throughout this file, deliberately far from
+# 4444/4445 — this host already runs a real Hydra (prod-thw-home's
+# sso-hydra) on those, and a port collision would be either a hard
+# failure or, worse, this suite silently talking to the wrong Hydra.
+services:
+  # oryd/hydra images run as a non-root user; a freshly-created named
+  # volume is root-owned by default, which breaks Hydra opening the
+  # sqlite file. Same fix prod-thw-home's own sso/docker-compose.yml
+  # uses (read for reference), reproduced here because it's a real,
+  # necessary step, not an artifact of copying that file.
+  hydra-init:
+    image: busybox
+    user: root
+    command: chown -R 65532:65532 /var/lib/sqlite
+    volumes:
+      - hydra_data:/var/lib/sqlite
+
+  hydra-migrate:
+    image: oryd/hydra:v2.3
+    command: migrate sql up -e -y -c /etc/hydra/hydra.yml
+    depends_on:
+      hydra-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./hydra/hydra.yml:/etc/hydra/hydra.yml:ro
+      - hydra_data:/var/lib/sqlite
+
+  hydra:
+    image: oryd/hydra:v2.3
+    container_name: my-template-e2e-hydra
+    # --dev, unlike prod-thw-home's own Hydra: that file's comment
+    # explains why production avoids it (relaxed cookie flags break real
+    # HTTPS browser logins) — this stack is plain http://127.0.0.1, where
+    # the opposite is true: without --dev, Hydra's non-dev mode demands
+    # Secure cookies, which no browser will send back over plain HTTP, so
+    # the login/consent CSRF cookie would silently fail every run. Both
+    # environments make the same choice for the same reason: match the
+    # transport actually in use.
+    command: serve all --dev --config /etc/hydra/hydra.yml
+    depends_on:
+      hydra-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:24444:4444"
+      - "127.0.0.1:24445:4445"
+    volumes:
+      - ./hydra/hydra.yml:/etc/hydra/hydra.yml:ro
+      - hydra_data:/var/lib/sqlite
+    healthcheck:
+      # Verified inside this actual image before writing it, not assumed:
+      # /usr/bin/hydra exists but has no "health" subcommand worth
+      # trusting for readiness, and /usr/bin/wget IS present (checked via
+      # `docker exec ... which wget`) — a real HTTP call against Hydra's
+      # own readiness endpoint, not just "the binary can run".
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:4445/health/ready"]
+      interval: 2s
+      retries: 15
+
+  # The login/consent auto-accept stub (../fixtures/oidc-login-stub.mjs)
+  # — test-only, lives entirely under e2e/, never imported by internal/
+  # or web/src. Plain Node, no framework dependency: it's ~6 REST calls
+  # to Hydra's own admin API (documented at
+  # https://www.ory.sh/docs/hydra/reference/api#tag/oAuth2), the same
+  # shape a real login-consent provider needs, reduced to auto-accept for
+  # one fixed test subject since what's under test is my-template's own
+  # redirect/callback/PKCE handling, not whether a login form can be
+  # filled in.
+  login-stub:
+    image: node:22-alpine
+    working_dir: /app
+    volumes:
+      - ./fixtures:/app:ro
+    command: node oidc-login-stub.mjs
+    environment:
+      HYDRA_ADMIN_URL: http://hydra:4445
+      PORT: "4446"
+    ports:
+      - "127.0.0.1:24446:4446"
+    depends_on:
+      hydra:
+        condition: service_healthy
+
+volumes:
+  hydra_data:
