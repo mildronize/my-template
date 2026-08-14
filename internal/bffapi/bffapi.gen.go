@@ -19,12 +19,150 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
+// Defines values for CreateTodoRequestPriority.
+const (
+	CreateTodoRequestPriorityHigh   CreateTodoRequestPriority = "high"
+	CreateTodoRequestPriorityLow    CreateTodoRequestPriority = "low"
+	CreateTodoRequestPriorityMedium CreateTodoRequestPriority = "medium"
+	CreateTodoRequestPriorityUrgent CreateTodoRequestPriority = "urgent"
+)
+
+// Valid indicates whether the value is a known member of the CreateTodoRequestPriority enum.
+func (e CreateTodoRequestPriority) Valid() bool {
+	switch e {
+	case CreateTodoRequestPriorityHigh:
+		return true
+	case CreateTodoRequestPriorityLow:
+		return true
+	case CreateTodoRequestPriorityMedium:
+		return true
+	case CreateTodoRequestPriorityUrgent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TodoPriority.
+const (
+	TodoPriorityHigh   TodoPriority = "high"
+	TodoPriorityLow    TodoPriority = "low"
+	TodoPriorityMedium TodoPriority = "medium"
+	TodoPriorityUrgent TodoPriority = "urgent"
+)
+
+// Valid indicates whether the value is a known member of the TodoPriority enum.
+func (e TodoPriority) Valid() bool {
+	switch e {
+	case TodoPriorityHigh:
+		return true
+	case TodoPriorityLow:
+		return true
+	case TodoPriorityMedium:
+		return true
+	case TodoPriorityUrgent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TodoStatus.
+const (
+	Closed     TodoStatus = "closed"
+	Done       TodoStatus = "done"
+	InProgress TodoStatus = "in_progress"
+	Open       TodoStatus = "open"
+)
+
+// Valid indicates whether the value is a known member of the TodoStatus enum.
+func (e TodoStatus) Valid() bool {
+	switch e {
+	case Closed:
+		return true
+	case Done:
+		return true
+	case InProgress:
+		return true
+	case Open:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UserRole.
+const (
+	Agent UserRole = "agent"
+	Owner UserRole = "owner"
+)
+
+// Valid indicates whether the value is a known member of the UserRole enum.
+func (e UserRole) Valid() bool {
+	switch e {
+	case Agent:
+		return true
+	case Owner:
+		return true
+	default:
+		return false
+	}
+}
+
+// ActivityActor Carried so the UI can mark human vs agent (I20's sibling requirement, not itself an invariant — a rendering fact, not a safety one, `_contract/API.md`).
+type ActivityActor struct {
+	Handle string `json:"handle"`
+	Role   string `json:"role"`
+}
+
+// ActivityCursor Round-trips verbatim: the response's `nextCursor` and the request's `cursorCreatedAtMs`/`cursorId` query params name the same two values, mirrors my-task's own `{createdAtMs, id}` cursor object shape adapted to a flat query string.
+type ActivityCursor struct {
+	CreatedAtMs int64  `json:"createdAtMs"`
+	Id          string `json:"id"`
+}
+
+// ActivityFeed defines model for ActivityFeed.
+type ActivityFeed struct {
+	Items []ActivityItem `json:"items"`
+
+	// NextCursor Null when exhausted.
+	NextCursor *ActivityCursor `json:"nextCursor,omitempty"`
+}
+
+// ActivityItem One `todo_events` row, shaped for the feed — same underlying row `TodoEvent` (this file's own schema) represents on the per-todo timeline, so the two share a rendering component (`_goal/GOAL.md` Done-when 8): same `type`/`payload`/`body` meaning, plus `actor`/`todo` context a single-todo timeline doesn't need to repeat.
+type ActivityItem struct {
+	// Actor Carried so the UI can mark human vs agent (I20's sibling requirement, not itself an invariant — a rendering fact, not a safety one, `_contract/API.md`).
+	Actor ActivityActor `json:"actor"`
+
+	// Body The comment text for `type: commented`, `null` otherwise — same Markdown-to-React-elements rendering rule as `TodoEvent. body` (never raw HTML, I8's mirror).
+	Body      *string                 `json:"body,omitempty"`
+	CreatedAt time.Time               `json:"createdAt"`
+	Id        string                  `json:"id"`
+	Payload   *map[string]interface{} `json:"payload,omitempty"`
+	Seq       int64                   `json:"seq"`
+
+	// Todo The todo this event belongs to — enough to link/label it, not the full `Todo` shape.
+	Todo ActivityTodoRef `json:"todo"`
+
+	// Type Full read-side vocabulary, `created` included (a read value here, never a write one — I16).
+	Type string `json:"type"`
+}
+
+// ActivityTodoRef The todo this event belongs to — enough to link/label it, not the full `Todo` shape.
+type ActivityTodoRef struct {
+	Id    string `json:"id"`
+	Title string `json:"title"`
+}
+
 // ApiKey defines model for ApiKey.
 type ApiKey struct {
 	CreatedAt time.Time `json:"createdAt"`
 	ExpiresAt time.Time `json:"expiresAt"`
-	Id        string    `json:"id"`
-	Prefix    string    `json:"prefix"`
+
+	// Handle milestone-4 fix-round (handle-exposure): the owning agent's handle — my-task's own api-key-settings.tsx shows `{k.handle}` on every row and its revoke dialog names the agent by handle ("Revoke {handle}'s key?"); this endpoint (GET /api/bff/keys) already JOINs users for every row it returns (I21 — every key here belongs to a role='agent' user), so this is always present, never null.
+	Handle string `json:"handle"`
+	Id     string `json:"id"`
+	Prefix string `json:"prefix"`
 }
 
 // ApiKeyList defines model for ApiKeyList.
@@ -32,10 +170,33 @@ type ApiKeyList struct {
 	Keys []ApiKey `json:"keys"`
 }
 
-// CreateTodoRequest defines model for CreateTodoRequest.
-type CreateTodoRequest struct {
-	Title string `json:"title"`
+// CreateTodoEventRequest One shape covers all four client-postable `type` values (`_contract/API.md`) — cross-field validation (e.g. `body` required for `commented`, `to` required for `status_changed`) is the handler's job, not this schema's, mirroring the public API's own `CreateTodoEventRequest`. `type` is deliberately an open string, not an `enum`, so `"created"` and any other unrecognised value reach the handler's own dispatch and are rejected there (I16) — the same path, not a special case for one string.
+type CreateTodoEventRequest struct {
+	// Body commented — the comment text.
+	Body            *string `json:"body,omitempty"`
+	ClientRequestId string  `json:"clientRequestId"`
+
+	// Field field_changed — which field `to` changes: `title` | `priority` | `dueDate`.
+	Field *string `json:"field,omitempty"`
+
+	// To status_changed — the target status (a `Todo.status` enum value; `closed` succeeds on this surface, I18). assigned — the target assignee's user id, or `null` to unassign.
+	To   *string `json:"to,omitempty"`
+	Type string  `json:"type"`
 }
+
+// CreateTodoRequest `additionalProperties: false` so a stray `done` (milestone-1/2/3's removed field) is a `validation_error`, not silently dropped (`_contract/API.md`). No `status` field, deliberately (mirrors the public API's own `CreateTodoRequest`) — every created todo starts `open` regardless of what a caller asks for.
+type CreateTodoRequest struct {
+	AssigneeId *string `json:"assigneeId,omitempty"`
+
+	// ClientRequestId I19's idempotency key, on the `created` event this endpoint's own side effect writes — required, not optional, since `todo_events.client_request_id` is `NOT NULL UNIQUE` at the schema level for every row including `created` ones.
+	ClientRequestId string                     `json:"clientRequestId"`
+	DueDate         *time.Time                 `json:"dueDate,omitempty"`
+	Priority        *CreateTodoRequestPriority `json:"priority,omitempty"`
+	Title           string                     `json:"title"`
+}
+
+// CreateTodoRequestPriority defines model for CreateTodoRequest.Priority.
+type CreateTodoRequestPriority string
 
 // Error defines model for Error.
 type Error struct {
@@ -55,11 +216,55 @@ type Me struct {
 
 // Todo defines model for Todo.
 type Todo struct {
-	CreatedAt time.Time `json:"createdAt"`
-	Done      bool      `json:"done"`
-	Id        string    `json:"id"`
-	Title     string    `json:"title"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	// AssigneeHandle milestone-4 fix-round (handle-exposure): assigneeId's owning user's handle, for display — null exactly when assigneeId is null. my-task's own task list/detail views show a plain handle (`~/gits/my-task/src/server/modules/task/task.queries.ts`'s `assigneeHandle` LEFT JOIN, `t.assignee`/`detail.assignee` on the wire), never a bare id, and task-7's report found this repo's own Todo had no equivalent. Additive: assigneeId is unchanged, still what a caller writes back (CreateTodoRequest.assigneeId, CreateTodoEventRequest's `to` for an `assigned` event) — this is display-only, openapi.yaml's own Todo carries the identical field for the same reason (my-task's agent-facing REST shows it too, not just the owner UI).
+	AssigneeHandle *string `json:"assigneeHandle"`
+
+	// AssigneeId References a user (any role).
+	AssigneeId *string   `json:"assigneeId"`
+	CreatedAt  time.Time `json:"createdAt"`
+
+	// CreatedBy milestone-4: replaces `ownerId` — attribution only, never access-scoping (GOAL.md).
+	CreatedBy string        `json:"createdBy"`
+	DueDate   *time.Time    `json:"dueDate"`
+	Id        string        `json:"id"`
+	Priority  *TodoPriority `json:"priority"`
+
+	// Status milestone-4: replaces `done`. Fixed enum, not an owner-editable table (GOAL.md).
+	Status    TodoStatus `json:"status"`
+	Title     string     `json:"title"`
+	UpdatedAt time.Time  `json:"updatedAt"`
+}
+
+// TodoPriority defines model for Todo.Priority.
+type TodoPriority string
+
+// TodoStatus milestone-4: replaces `done`. Fixed enum, not an owner-editable table (GOAL.md).
+type TodoStatus string
+
+// TodoEvent defines model for TodoEvent.
+type TodoEvent struct {
+	// Actor Carried so the UI can mark human vs agent (I20's sibling requirement, not itself an invariant — a rendering fact, not a safety one, `_contract/API.md`).
+	Actor   ActivityActor `json:"actor"`
+	ActorId string        `json:"actorId"`
+
+	// Body The comment text for `type: commented`, `null` otherwise. Rendered client-side through a Markdown-to-React-elements path, never raw HTML (I8's mirror, GOAL.md).
+	Body            *string   `json:"body,omitempty"`
+	ClientRequestId string    `json:"clientRequestId"`
+	CreatedAt       time.Time `json:"createdAt"`
+	Id              string    `json:"id"`
+
+	// Payload JSON, shape depends on `type` — `{from, to}` pairs for `status_changed`, `null` for `commented`, `{field, from, to}` for `field_changed`. `assigned`'s own `{from, to}` pair is each either `null` or a `{id, handle}` snapshot resolved once, at write time, into the stored payload (milestone-4 fix-round, handle-exposure — matches my-task's own AssigneeSnapshot, `~/gits/my-task/src/server/modules/task/task.service.ts:139-142`, resolved the same way at the same moment: a later handle change never rewrites old history).
+	Payload *map[string]interface{} `json:"payload,omitempty"`
+	Seq     int64                   `json:"seq"`
+	TodoId  string                  `json:"todoId"`
+
+	// Type `created` | `commented` | `status_changed` | `assigned` | `field_changed` — the full read-side vocabulary (DATA_MODEL.md). `created` only ever appears here as a read value, never as something `POST .../events` accepted (I16).
+	Type string `json:"type"`
+}
+
+// TodoEventList defines model for TodoEventList.
+type TodoEventList struct {
+	Events []TodoEvent `json:"events"`
 }
 
 // TodoList defines model for TodoList.
@@ -67,10 +272,30 @@ type TodoList struct {
 	Todos []Todo `json:"todos"`
 }
 
-// UpdateTodoRequest defines model for UpdateTodoRequest.
+// UpdateTodoRequest milestone-4: `title` only — see `updateTodo`'s own description for why `status`/`assigneeId`/`priority`/`dueDate` aren't here. `additionalProperties: false` so a stray `done` is a `validation_error`, not silently dropped.
 type UpdateTodoRequest struct {
-	Done  *bool   `json:"done,omitempty"`
-	Title *string `json:"title,omitempty"`
+	// ClientRequestId I19's idempotency key — this endpoint now funnels through the same single write path (I15) as every other mutation.
+	ClientRequestId string `json:"clientRequestId"`
+	Title           string `json:"title"`
+}
+
+// User One row of GET /users' assignee-picker source. Every active user, either role — `role` rides along so a client could group/label by it, though the picker itself (`_contract/API.md`'s own reasoning for `assigneeHandle`) only ever needs `id` (to write) and `handle` (to display).
+type User struct {
+	// Active Always `true` on every row this endpoint returns (`WHERE active = true` server-side) — present on the wire anyway so this schema doesn't silently drift from `Me`'s own `{handle, role, active}` shape if that ever changes.
+	Active bool   `json:"active"`
+	Handle string `json:"handle"`
+
+	// Id The value a picker writes back — `Todo.assigneeId` / `CreateTodoEventRequest.to` for an `assigned` event both take this, never the handle.
+	Id   string   `json:"id"`
+	Role UserRole `json:"role"`
+}
+
+// UserRole defines model for User.Role.
+type UserRole string
+
+// UserList defines model for UserList.
+type UserList struct {
+	Users []User `json:"users"`
 }
 
 // BadRequest defines model for BadRequest.
@@ -82,38 +307,57 @@ type NotFound = Error
 // Unauthorized defines model for Unauthorized.
 type Unauthorized = Error
 
+// ListActivityParams defines parameters for ListActivity.
+type ListActivityParams struct {
+	Limit             *int    `form:"limit,omitempty" json:"limit,omitempty"`
+	CursorCreatedAtMs *int64  `form:"cursorCreatedAtMs,omitempty" json:"cursorCreatedAtMs,omitempty"`
+	CursorId          *string `form:"cursorId,omitempty" json:"cursorId,omitempty"`
+}
+
 // CreateTodoJSONRequestBody defines body for CreateTodo for application/json ContentType.
 type CreateTodoJSONRequestBody = CreateTodoRequest
 
 // UpdateTodoJSONRequestBody defines body for UpdateTodo for application/json ContentType.
 type UpdateTodoJSONRequestBody = UpdateTodoRequest
 
+// CreateTodoEventJSONRequestBody defines body for CreateTodoEvent for application/json ContentType.
+type CreateTodoEventJSONRequestBody = CreateTodoEventRequest
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
-	// ListKeys List the caller's own non-revoked API keys.
+	// ListActivity The cross-todo activity feed — every event, across every todo, newest first.
+	// (GET /activity)
+	ListActivity(c *gin.Context, params ListActivityParams)
+	// ListKeys List every agent's non-revoked API keys (I21).
 	// (GET /keys)
 	ListKeys(c *gin.Context)
-	// RevokeKey Revoke one of the caller's own API keys.
+	// RevokeKey Revoke any agent's API key by id (I21).
 	// (DELETE /keys/{id})
 	RevokeKey(c *gin.Context, id string)
 	// GetMe Session-check endpoint backing the SPA's AuthGate-equivalent hook.
 	// (GET /me)
 	GetMe(c *gin.Context)
-	// ListTodos List the caller's own todos.
+	// ListTodos List every todo.
 	// (GET /todos)
 	ListTodos(c *gin.Context)
-	// CreateTodo Create a todo owned by the caller.
+	// CreateTodo Create a todo, attributed to the caller.
 	// (POST /todos)
 	CreateTodo(c *gin.Context)
-	// DeleteTodo Delete one of the caller's own todos.
-	// (DELETE /todos/{id})
-	DeleteTodo(c *gin.Context, id string)
-	// GetTodo Get one of the caller's own todos.
+	// GetTodo Get a todo by id.
 	// (GET /todos/{id})
 	GetTodo(c *gin.Context, id string)
-	// UpdateTodo Update one of the caller's own todos.
+	// UpdateTodo Rename a todo.
 	// (PATCH /todos/{id})
 	UpdateTodo(c *gin.Context, id string)
+	// ListTodoEvents This todo's own timeline.
+	// (GET /todos/{id}/events)
+	ListTodoEvents(c *gin.Context, id string)
+	// CreateTodoEvent Append an event to this todo's timeline (I15's single write path).
+	// (POST /todos/{id}/events)
+	CreateTodoEvent(c *gin.Context, id string)
+	// ListUsers List every active user, either role (the assignee picker's data source).
+	// (GET /users)
+	ListUsers(c *gin.Context)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -124,6 +368,49 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(c *gin.Context)
+
+// ListActivity operation middleware
+func (siw *ServerInterfaceWrapper) ListActivity(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListActivityParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", c.Request.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter limit: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "cursorCreatedAtMs" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursorCreatedAtMs", c.Request.URL.Query(), &params.CursorCreatedAtMs, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter cursorCreatedAtMs: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "cursorId" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursorId", c.Request.URL.Query(), &params.CursorId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter cursorId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListActivity(c, params)
+}
 
 // ListKeys operation middleware
 func (siw *ServerInterfaceWrapper) ListKeys(c *gin.Context) {
@@ -202,31 +489,6 @@ func (siw *ServerInterfaceWrapper) CreateTodo(c *gin.Context) {
 	siw.Handler.CreateTodo(c)
 }
 
-// DeleteTodo operation middleware
-func (siw *ServerInterfaceWrapper) DeleteTodo(c *gin.Context) {
-
-	var err error
-	_ = err
-
-	// ------------- Path parameter "id" -------------
-	var id string
-
-	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
-		return
-	}
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		middleware(c)
-		if c.IsAborted() {
-			return
-		}
-	}
-
-	siw.Handler.DeleteTodo(c, id)
-}
-
 // GetTodo operation middleware
 func (siw *ServerInterfaceWrapper) GetTodo(c *gin.Context) {
 
@@ -277,6 +539,69 @@ func (siw *ServerInterfaceWrapper) UpdateTodo(c *gin.Context) {
 	siw.Handler.UpdateTodo(c, id)
 }
 
+// ListTodoEvents operation middleware
+func (siw *ServerInterfaceWrapper) ListTodoEvents(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListTodoEvents(c, id)
+}
+
+// CreateTodoEvent operation middleware
+func (siw *ServerInterfaceWrapper) CreateTodoEvent(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.CreateTodoEvent(c, id)
+}
+
+// ListUsers operation middleware
+func (siw *ServerInterfaceWrapper) ListUsers(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListUsers(c)
+}
+
 // GinServerOptions provides options for the Gin server.
 type GinServerOptions struct {
 	BaseURL      string
@@ -307,11 +632,14 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/me", wrapper.GetMe)
 	router.GET(options.BaseURL+"/todos", wrapper.ListTodos)
 	router.POST(options.BaseURL+"/todos", wrapper.CreateTodo)
-	router.DELETE(options.BaseURL+"/todos/:id", wrapper.DeleteTodo)
 	router.GET(options.BaseURL+"/todos/:id", wrapper.GetTodo)
 	router.PATCH(options.BaseURL+"/todos/:id", wrapper.UpdateTodo)
+	router.GET(options.BaseURL+"/todos/:id/events", wrapper.ListTodoEvents)
+	router.POST(options.BaseURL+"/todos/:id/events", wrapper.CreateTodoEvent)
+	router.GET(options.BaseURL+"/activity", wrapper.ListActivity)
 	router.GET(options.BaseURL+"/keys", wrapper.ListKeys)
 	router.DELETE(options.BaseURL+"/keys/:id", wrapper.RevokeKey)
+	router.GET(options.BaseURL+"/users", wrapper.ListUsers)
 }
 
 // Base64 encoded, compressed with deflate, json marshaled OpenAPI spec.
@@ -319,47 +647,127 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
-	"AP//",
+	"1HzbciNH0t6rZMCOICg3gOFo9vcuFX84KImSsDunf4YTDoeomC50J4ASG1Wtqmpi4Nlx+AF8uS9gP4Kv",
+	"1m+j8JM4MrP6BDRIjjSzG75hEEB3dR0yv/zy1O9Hmd2U1qAJfnT+fuTQl9Z45A9fq/wV/lKhD/Qpsyag",
+	"4X9VWRY6U0FbM/vZW0Pf+WyNG0X//XuHy9H56N/N2qFn8qufXTpn3ejDhw/JKEefOV3SIKPz0dUawcnD",
+	"4FbbQgX0oOqvJn6tSgTr4FYVOucng6sKnI4+JKPnNnxnK5N//lm+MTfGbg3oPKHJKPoPwloFwHfaBw+L",
+	"KoD25iRAWCNkqijQnXgYz7+E//vf/wZq4dFkmICxAUp0G+29tuZ0em1oIW+MqsLaOv1f8R+wmGf0cLNK",
+	"AN+V2qEsaeusWU2cLRA88uQgs/ZGI8/fqw2CnIXDlXJ5gd6DXcJ2rbM1ZGvMbmCpdIE5jOd/OJ3CBSxw",
+	"rW61dZCtlVkhLJ3dQFhrD6XKbtQKTzzQnv5w9ewppN9fXsEshVuN23O56s+vXzwHX7mlyhBUsVU7D8r4",
+	"LToPTx6dJWDwFh3LSq4dZgHGCtIlhmyd8glApuhAlrYo7LZ7HR3RVu1AwcLZrUcHRt3qlUhXbtHzmumq",
+	"1y8v4iwvqrD+XgWc4C+VvlUFmgBra29Ae9iSIITKGZLcJ4/OQJtgOw9MICs0mjDxOkc58w9JPEVWuIss",
+	"6FsddhdZsI6+6B/YN8o5jTl4y5N6M6eVwUa5G1hXG2Xg1oNa0YzG88ePTjx4vSi0WbEWaYcbNEFETweP",
+	"xZLl19wqp5UJIp/g0OTo6KalyuLVCrxaYtiBNZhA+pbE0qkszC5ezqebPOWlJKPS2RJd0AIea2XyAum/",
+	"sCtxdD7ygYYlMSfpGviBfpGJ5qPzH+sB4uU/JfXldvEzZoHGqbfrm8r5of16RaAwCU6XHm7RLVTQm3Pe",
+	"uhrmTjykBt8FGSEFZfL4O8MO/ZzxT984VAHzi/DMp7P43TxP4ZcK3Q5K5dTGgyHtoNtZTcLWElpV6BPY",
+	"aFJCD5vdJCh/E2UpfZ+1wyag8w8pyNAgi4yqpnJVBsyBhWlZqBAfKxs3tPmdcenj0rqNCqPzkTbhX56M",
+	"mq3UJuAKHe2lzu8/ke6ofMddh/IdCob1J6YDbvr/3AVd9VjzgBsaOz5MOad29Lk9OobIonixHJ3/+LAx",
+	"430fftqHxedVUcB2jQbw3VpVPmA+HSUjUxWFWpDgBlfh/tbIcu7aD17DgYi+MAhpsLl9i7c0zRSc3SZy",
+	"7jksrWN5WiLmLf5WpKHFjhXbbiG9srm9pLtTGDNiLnVRg6qs+hQclg49PQGs4TFLdBN6MAS9wUKTZkdc",
+	"IcH1a+WwBwfNVsI4fbuyqph9/+LiKak/fGsNTnjH/nh6LnNMaR/SWVqqXWFVns7Shc13KWxQGbY5ZVF5",
+	"SBUBXTrjHUiBzd07xhttVgX258eITEBuUHTBYYkqDIm/qvHzIYIgYPshGdEMD0+IiElmN4SdwLOjQ+Hl",
+	"ndffY54mkJKApGDDGt1W+469fKbcTW63ZhLs5BWqLEywYCz2ne0lMgPKd05zCrJlY7FvTm3ZRCYw/+OJ",
+	"j4gSkbcvm8kh4jaa20ODnOwYbe9o4JZBQEhG8UB5l/Nc0yap4mVn92UGR2bUqoXHXx6ITCQEDz1L2rxX",
+	"uGyxYv80vyPldqhytsFwazO1qArldgmkcZNS0CYrqpwojOJrBcZhjQ5btrF1OiBZRD7o+dm/nE4Pt3Ef",
+	"JfKRrDxemERJ7R5QXPBdUFKvclBWRWcIBhhRYIGFNStPCkMTRWOr1Zo+FdrczAq1wAJ0NPSMNbRDLIWp",
+	"wND0QL2OiEbQ4SF2nTdBrh1cZKn/grtDy/EbRFh4rf+YW1rW0t/ZjS7QB8K5J7DU7yaOqAWM5fIJviut",
+	"rxyeCruwW8I4oWInHuQi3v2+/VelntzgbuIxBG1Wfhr8O/Bru/WQvr+Zyn0fUkJsErodwz1RFM3QcWtv",
+	"EHKtCrti6uH54UIAF7v6sePr0Su59H0c8MTDDe7+0/Xo9KsoKCYvrSZkZ/atSj1bLJezG9z5U1AFqcAO",
+	"/vxi/txD5Yl2EwS2M9IBHArtHc8fn4mY8a83uGOt6QqhAuJz/3oiu8MDnkbToz2x6Ejxo72qFY4ARcDu",
+	"wUjlcKnfPVAe48VJyzq7GtkK0nGJfarFTe5LLe3hw+mOiP4B0dmbMI85NBEhqY0B6fjuh6RDmGVmb+k8",
+	"yUla2srV/klpfSD0jmY80lgy/AfUn087c9b7yVJjkXcd9DFOV1OIlr9egdjPnuUMdv9nH1So/FvxGOkp",
+	"WoRbToc86p/tosYs7SPNOWmYNqkfk5xqUegMLl7Oa8o9vEfptF6q9pBjoRfoVMBiRy6SLdFErh39IQMp",
+	"mmqTstym17WsXI/Eg1BmJzwAKuMwsyujPdZWxKHK1nuLoZnl2pcqZGsZwdGFdK7IDolDGJOJaRxSJhal",
+	"CuvGQysx04p8XY+8h2SZjjsIw1ynOZXmOV3mMx1SPpGYuI1z1sSNNk/RrMJ6dH42cAeLyeGz+ev6xPn5",
+	"ElMQqWIZkR/9OaRsPlL4K6Sl09bpsOMPeYXfqoDpEaAI9vCxfUlr1h2UW2EA+ZUDCiQyU/mcAp2+nOdX",
+	"kGaF9UQbfJVliHlk2CSVErRIYH72x9MpKO/1yhw+JH5PlJ3QsA4uRUIZLFRGLnkg2auZz92wFwnI/vnd",
+	"jSsdSBlmf0tVeNz3qNKha8+Br01JhRRJqtpBmluDKYxba3s2ezz78oSs3cbeEjqQNDAcKEhbqHmLpPWp",
+	"KIPXBZpQ7CB3tiQ3agi3pvDc1jiTyrBJX/PHtdN+H5DUGHLasXwREYSN+aBc8JASkKQHgTNF6iuRQlD+",
+	"hq3roFMTxUSU7H7Kf6iY/VOZn/3pxIPOcVPagCZjc53U7mHLhoVG9ohC7VwShcblErMgdFgCZrWUyWnY",
+	"Uk4+Iacu63u7U5nk2xhueatzBuD0+YsreP7m6VN483z+b28uU1DCTQXmocBbLPZJCHN2wv125tagl528",
+	"B5Iibhylifdudo1CNAJhAylYYbf0ZMx1tSFioVfrUTKqHPEeUrP79bjm0xv1rp7940eP7lnNvprzIA/T",
+	"c4kUH3AYHP46s/lweG+tJWR98MMGvVerB2ATD91efzjXvetlhkNLeoaHE1fkRnVnsbC2QGX6/P+TRC2T",
+	"+mFDc7uKju2wmv/wez2RFi9EXUk3yL40HknCKkS8o1A71lwSScB3KiP05IBOOwgpJpPwPSeG/oVC+zDL",
+	"MShdcOjesxsDCspCadO4Iul/m6108LM4wsy7bObR3aKbbWxeFehn/D39mf5SodNITlF64iHt70sKTy+/",
+	"u2KnhAjktP41naUyjfabGtG22uFp678viGORqeWYr/I3k//Idqa0LhAZ5kiwlm/iUunAYK1yMBba8P8U",
+	"Lti83eL53nZVJtKKBHzQHFXsgn2EzIXKbmB8YE6m7VgJDLNW2hbiRUtJRdVbVGN2zRbFrYrnPLGmIJQv",
+	"0ahST3dqU3RXl3GKQWyeztEEnakicrA6Gsnc06HyRPFbYWCHbrJUGQnaq8vXV9GV1QGCtWIMfq58qF1k",
+	"dPBm/tAAVt/47YX5cYkOTcYJQ2ZQY2LgpICn088UHYu3fL27U0HPSXoKRTNLecXzPJU8SwhOLyr2kuRA",
+	"olhmGXo/8ZktaRfHMcR6eoTQ/m67ddR1/gzmTLjWg/eLqeAUvtPvMGe+3fhevJMTzLX4qPJ3b6vqWZOc",
+	"j5KRNm9LZ1cOvR8lIxqaTSLx9g403x/KSkZVmX+crByPfjVb0hPvZN8CdI6jPfGuBPZjFe0Ej9kchpBB",
+	"s/gbguZ813xYjD5tQH0Krzhajnk3jQph7Tiiqe6Ks0dPuRdIh3EnkJ5AX35+C73+50fd+xv959cvnsdU",
+	"EuRYohHXNAY6CIbS90tnNwkE+yGFUukY2tsPvzRncRi6eR89p844fFHPm0+nHdvU5D73Hk02ikMjqDl0",
+	"Uh8/2er0PRnqJh7qjSr92gZw6G1BbqHlogoV3RBOGSWSfWeDFSxJTdzErnvZoVD1+A2FkoCtCtka9xO3",
+	"F1FDX8eJJPBRzIZ+0BlOgz8/+/JPk7Mnj9OkXUtjYrk0IbSfN5b2/RwUFCqgq1lVLKuIwo2RVdgih7Wm",
+	"le/uFunfmpI5IvPDaZfWJ/trV4Do056s0Vctj/nrviQ1sZPlsUQOjL+9uLp4++zFt5eizz2HsNiBGNqy",
+	"ROW8RKeVVBrViZ7GGHvwdoNhzV7lyxevr2A6nc7qRC3Zak7Lc2Ru0EIPYr/sXZ0HqvGzTQUdCcx04eRO",
+	"ZB8ORMusHxyKbu3EfdHoOPCxKQ3Phjbh4yZz7zxkyKFpvGGL+NvDVz2CUoceWZQ4xYsIadU8osa3zhCM",
+	"iNv1rgk3zdLW3qezNoQ5awKYoByak8DiSeD5cfGzj4qODZaP/KbYUetuNAklY7ewrIzBwjeGusEzSfJH",
+	"yCYLTZr0h1PSO4nrSAx9UwVexYMiOf/wmMkbj244w+LsFuwSOKXGabOTxj2clDq7QQfeVi7DKVzyciVU",
+	"wB5MUltBLsRjU03/peB0Tm5OYc1KDl7mCJmtihxWzlZlzOkudpzWDetm0+NDY+3XQFA0iq64dlwCRqZ8",
+	"z/E+7aCo4XB3qvMUxsHKSZ6yQ52uo5tO30fX8/RIqUYMxvR38EKygCnZqr0MaF/EmtRj+p9/uHx1We/i",
+	"v4LcKUZYKu54I2NesRsVAGV2ZGzrJGQMM9b1Jh2N0csg9YvpM2yZTB1OoSNK4gQ+xOw56GUsEKUNixmM",
+	"nrF4WPRJ58NMWpJKqj7cbkyBxYbTFh24gdmxHNj0jlACLGxYQ1A3yDtUW8g2i3XEQa1jZo07Rq4b2bra",
+	"a3yAwfyIiBop47DBYQV8sMFhpb7P4MiQA7FJOi2ztMPn9fV33534urR2oqqwliALEYlepWuHpX4J6TRb",
+	"a1zOOt/NDnMaCWTW+GrDhLjYEQTE4lVwlWGN1qYNv0T5jbWvNQrVRdjdqXmwEjQToUjghxDKF/SIfo1w",
+	"h8UudpASY3RGFbPglPGldWG2WC5rvalv3eg8L3CrHMI4XSyX01eyybQbr+WamFoh87XYkbYKJ9N1nq3E",
+	"7ByMhdRjVkk2kI8SJZ2bFYr4P3M9a6CsXGl9DH/SbnDEsxfWSrvxsXrCa1Q56XD0XVf6Fn0cQwUuujtv",
+	"5yMpauAAIm/orK45hS8YGL7oZcrTlTaTdifoLDnaUYX1FC7AY2bJRdFGHDl6Pj0wglFvtp0lDoE8XI+u",
+	"tpbn6GOGxuD1qE0tt6kuGH+NyqHri2nSi/SdxppZ7Um0W+kdlPAkxm5ikLCuuiZhPeWcd9iytfiZkb10",
+	"1i4ndjmRQGTYwQYJQLXfeJIDEvbgqkx2cP54Nj97fCrx3LqCUOoYc16tbNiWDeWiqOKxLcj3I7eBcK5r",
+	"LTObI6BZWpehBx2m1+bbXmHAgs1IW80el34eXYUZE9IUFJmeJCbxtScxJa6kva+UybinwVlhOK1Rk4w/",
+	"SbSMdYM7z/xNro2mrCOx7KIMCW3K987eS3FxV3TJkXRqy7ORCvkFRmtKO6aWtErRewM/XF29bKqmueyh",
+	"WQDtd7MCH9QOvnk65zDzYI9ALSFEUv0NRzkPhTSBtAd1x+pN/0CcouvOjw+R8slsiOgQ0hA7YOmJdVuc",
+	"rK3PwHPR0pYj4oKjBrdRniaZLQq5NVp5OquNdRgp+Fcfw/W18QFVfprASmkjR57OpBOChYhPr/E7iSRz",
+	"bf8ee+Y+DusZ/HsSCcHaqBcFgUL67eXTy6vL7uApkIa5Xtp7UJw4D6+KJlx24uF6FMeLOfrrEUGulr6W",
+	"eh/O4aBKgmW8m6HYN0wNlszP/igCX5lC3+AeSiWwFS/exNq3mF5h6JUSmmlUgzSeqS+VqZ2MtFuOltYZ",
+	"Mno+3dHWRdbmqp7heP74TGbViprUKtTQJ1jnM1uSPuFGEQx6GAtoVU4VBCPCc3FThl2dIm8gQkgjaZpU",
+	"PMe5yhTSBOaPBTZfXb58evHN5bd1iaoNcINlED+B4yOKpbeWbdoPpi8pLyOuVxpkJlWZSCFh31k58ZCr",
+	"oKLPcsopv3oP7/Rc4jbU28fZDro5ZqLagq295ggabSoV8VVAV+clI9MUP29E9+CmLFRgakXyMEpGt+i8",
+	"UK6z6aPpI6JyUZhH56Mvp4+mX5IfosKameBMxaA2fVjhQMHcoKuU9ool6zFSgtW6iYNOr1/dr7hULm4b",
+	"/UJUekt8a6mdDwmQ6YuHHQ3ImNca3ar61DhYFLn3TPyOWL0fpf9IZ9DpFF4cnEeU4v0WlbRe05SOK70z",
+	"fUvbIOfkZ9DcFzwRmbp9RUzlq5ff0NjvC70h/1S26hwOWmE+EDCWVd0DE2wP0068pJYnzJm5HWYiTgTR",
+	"Atpsbc05pPyUFMY5LlVVBPjyUSJmU+3HdOMVX8HZ5OzRI6kn8foWT2Orwp19QEk0bpvKsxn1VVkWms9x",
+	"hawO1gmhC1xsOVZQWCPl43YpgBZj4Ao2qlhaRyxexk8GYjmErN3GpcjrG46J2drGNK6wW0nhSpnw+J6m",
+	"pto1VjvQpi2Mj9fp/hW2Cqf9UIQy4JrOK9Ch6b1qI/I0dSil96/Xy9Rd1TlICmCDjNZ1M05PWtMr5W/+",
+	"jUZ4HYPqJKt1lqohQWvln1mHaexQHHN3YJQO+A9wxm03nmwk4LvgFMcZ6kiBPJ8J3IlnJI2TjwEN8jP5",
+	"bOb56Hz0tPN8RhmnNhjY+/zx/UgTnPCKR8mITmN0PuJZjJJOO+dGvdMb8pjPYugqfjqMxX9Ihsc8OODe",
+	"+PeG+O8eVsLXzWj7PvxPSb+N+PGjR5+smbXXXTbQ03rBB1PrlNQlM61bIhekdbCWW4efyNyGHtmsYdbp",
+	"g+Zbzu6/pdfJy12e1Waj3K7Of7YTq8GybfIS48AWI7nPYEx58FldZj5ovS7v4DnGmol0EuTMd2Ccxo9v",
+	"VYD5ay7Dq73RpnpjnwuRjjWVyd3fYpxobYucNIdYTY2AfS7TeiCR7XCr6fyxtAbU9RBsAULPzok/F1mU",
+	"eC81mRJI3hLS7zE0lYVKFbCoVlN41fNRuNJ/dy5AwF3Rk0UVJpXpbFIs5pHqlqqsDa8smNDPIxLsSXRU",
+	"XCOCtkuVrRlYukU2e70ibdy0bXsQFsX+FD2RU1VF7MT484v5c3KU8yrDHGIKUArMmf+KPJ4mh5MMyAVJ",
+	"5BBEsikfFri0XH1+a9k7swaPwdxfSOo+p7K3jRUDqh6D5nHj9gV5+ilUlR5dU9yB51y8nEelIV+go4rs",
+	"U4kiFhgGotuvMXjoaFo6hec2QPQVuEvmetS8PcBuzfWok2FpIwm+kqPmc5IzF7rN4tI6UI/FU1GmXQgf",
+	"eg4btRO/n6eSNM7LiiOSNMwULgxUzYsPuED3yaMnhAhvuU4uTdqczvXoyCsOrkeRyHVTO10PabLYTYzl",
+	"tUwKXIZJsPILFNbeVOWBV1t59FLF3YmRMEtuwiRtQEWZ3baO//Vr83s137EH/vdHRWZHIiLjNNvkM8a4",
+	"yQ3u0tOHxUiGNFC6uv6Cu0MVfDJUJMcH/FvVgm56cv9NzZs4+noUG9C64hd1h9NUeaNAw3yJPLWWg3BS",
+	"oA3ESzHDHWyElHKDR63jawmiRd4cG+4Hiv5bd+/2bLbBdEByiM3vjbS0Dq5H27UFtYF5cj2687yVv6kT",
+	"sv2z/h7DM/ycUPsMj72URUL+Ex0t+ifB1RjWnwgbb5R0obKbunNL3rhx7G0bEWubMoLBk+3l7flSkKb2",
+	"GBTuBPHG6VvHRTqtow+9MpJ0ltbhxxMvLrRf6xI2NseijXdJL/CXhECFNSspNCnY1kf/NbcbRU6VNXWg",
+	"JB4+MRHJZHa5XnS9iIzR4tDk3IVWmVKttFGh+16ARnYPFzMUtbg9iyHq+8ndMQJwxfv/GcWyqSA5av9p",
+	"CZ/a1jdjlnaofTJtSi/TTr9qdL8l+9UnwZy7aup7O7GQNXKPP4znZzEsUb8GYD/EmeslFzlLSqhNhIjE",
+	"yVuHPr6quG2AiovodSpN4epYI1BknBy2lWfUJZklZnqpuSSXy6py7YM2dYNQp4tRh04hwVqVJRovK7+z",
+	"0WgK6V5ZRgobdYPxxqYkJfTr6A7LtzTRtrM/nU7hG1UUvpOtFBVl5ZjWUYU2ZZ6CvMyn2PWbMWNRH0fz",
+	"m7zIBsPa5ofGJLZ+shPjO+hDt+bK5bOLV9/8ML+6/ObqzavLqLkx9RCfMynUjsh+VQyHIdoJR2uJPnwd",
+	"63E/iWoeNgV+6GfI+TUpB9hw9kmx4ZjR6rbf/bP8fNkgUBHJa+UUft96sF1T1vgN99uz6JX06gckKEyM",
+	"nosZWzDj94/dZ5NqF2Gf6+/x/Mb3uB7xu8IE465H0nlMzJ3GjQAhedMhOtNI5me0HMek4/fYjN9HhL/H",
+	"EAVCiO9noryc3MjW91GiNQoES2y4X1YVG5aknIjEINY9clHRw3ObseBJcjhNCeAAGksOFMb79cCzTi3S",
+	"bK8Y+DQ6noN1hDPOGgaOafBt/qTjjs5UlfN7K5oXo9VRoWLHgZtpp5hyRcS+TZDGHhWpcYlbERPyws/I",
+	"th2pwYRxutYmnMM1d6Fcj+rYWlNk1lAEftHHylhHk5lH41TU0aePqKo8Uk8pr8nrV1dL31gCa+RW3QNL",
+	"KxZzQKPbGtvPZG4Oi3gfZG7+MYASe27+0ebm9zrl/L46Vc+6b4VmbcH4oDF6UeRNEPrABTE5WBdfbDXo",
+	"j8BdDkmv3IFIKAd987oLs3kfGGHXV0Nxfsar4exsQu4fEuJ2o0PdjhBu0Zj84fQun+dS9uYzS1tbzT8o",
+	"du2utG9ws51T+edYuGOn9fksnT32iht2rUQiS3S9vqdOC8pY3k9zmhy2oozTYPmHthqWvzryeg66cg9P",
+	"x/JFfMmNGInDYoJp3f7We5NMp34FxgMZ4HMyMHvO2aBH1atHO/SoOu0uKvo2Q97cvv/W6QT+OUZROryy",
+	"fQWOFCj3yUVdWd28HGfo7WtDb7aZwhdfHK8o2ovtfvEFlw49pMboK5Az8QG2OqyPVRjBUD3k0aoj3vuq",
+	"o1tpv4VayuWnMG99VmuOGV2u1uMXHhK+5U3ZOy/I6ZU2qohCQPAru0k8nSPqd3uI0ujzud3E3jup/gm+",
+	"Ymxnutth5B38/8aEX5CO55yslNiMrVOkPbtwtGSwzlk11fGDpv7Xv//PX//+v3/9+//69e9/+/X//I8T",
+	"TkoQWHWrxEi0N6BNXVV4rnP40a+l2hZ/Imhxtvwxt1vzU52er+8VTV86RB6E3zV1PYILvoXuiKlUxXVj",
+	"dLfcybgkedCD1qOPKCwbp1LfJCGzoTYSePHq28tX8PV/iYGbNIHrERdWeSk3XrEDoQ2nAGi069HpFDik",
+	"SKNycbqIGBfxCl/kfyVDuPdywDixteJ8YyxnIEdGQsZJ/Z7ixhePZevBAr7LmAGFoUKvGGQMWuC+6xU0",
+	"2LwHol+1dZUyHVhUXhv0npvyGVDii0U8jLtz6oTshyrqO2XmUhJw2kbApaOI35Zx0MAyG2hPqV+E0Xhw",
+	"nTaY004VZJtdj2/iiF0zsUHJ9wuZTKfHScUS/DoZucCwRTSQra31THPl7c90ML5abDS/0VGKpGgux9jk",
+	"G9a8z0gkm5aY4xn0bvEm03ZxbWNjz6fOox8rFR330GSw5nQqi5CSQ6GQlStG56Oa548+/PTh/wUAAP//",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

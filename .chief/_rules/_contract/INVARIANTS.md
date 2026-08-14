@@ -16,13 +16,30 @@ decide *where* it looks for an invariant's `TestI<N>_...` test:
 
 - `scope: global` — greps the whole repo for the test, same as before this
   tag existed.
-- `scope: per-domain-module` — requires the test **inside every domain
-  module's own package** (`domainModuleNames()`, updated in milestone-2 to
-  enumerate `internal/domain/*` — see `_rules/_standard/ARCHITECTURE.md` —
-  not `internal/*` as milestone-1's version did, since domain modules moved
-  under `internal/domain/` this milestone). Closes the hole where one
-  domain module's test satisfied the check for every other module forever
-  (milestone-1 task-7's finding).
+- `scope: per-domain-module` — requires the test **inside every package
+  I3/I4's ownership-scoping and single-seam-identity-read properties
+  actually apply to** (`perDomainModuleScopePackages()`,
+  `internal/invariants_test.go` — a small, explicit, hand-maintained list,
+  today `internal/domain/todo` and `internal/identity`; asserted a
+  superset of `domainModuleNames()` so a new domain module never goes
+  silently unchecked). Closes the hole where one domain module's test
+  satisfied the check for every other module forever (milestone-1
+  task-7's finding). **Reserved for I3/I4 only** since milestone-4's
+  scope-tags fix-round — see `domain:<name>` below for every other
+  single-place invariant.
+- `scope: domain:<name>` — requires the test **inside the one specific
+  package `<name>` resolves to** (`domainScopePackageNames()`,
+  `internal/invariants_test.go` — an explicit name→path mapping, e.g.
+  `domain:todo` → `internal/domain/todo`, `domain:identity` →
+  `internal/identity`; not derived from a naming convention, since
+  `internal/identity` deliberately isn't under `internal/domain/` per
+  `_rules/_standard/ARCHITECTURE.md`'s milestone-2 decision). Added by
+  milestone-4's scope-tags fix-round: `per-domain-module` used to also
+  carry I15-I19 and I21, each of which belongs to exactly one specific
+  place, not a coverage sweep across every domain module — that only
+  "worked" because `domainModuleNames()` had exactly one member (`todo`)
+  at the time. An unrecognized `<name>` makes the check abort loudly, not
+  silently pass.
 
 **I1 — Actor identity never comes from the request.** `scope: global`
 No body field, query param, or header naming an actor is ever read for
@@ -38,15 +55,49 @@ comes only from the BFF's interactive session (I12), never from a Bearer
 credential on `publicapi`.
 
 **I3 — Ownership scoping is absence, not permission.** `scope: per-domain-module`
-A todo (or API key) that exists but belongs to a different owner returns
+A resource that exists but belongs to a different owner returns
 `not_found`, the same response as one that never existed. Never
 `forbidden` — that would confirm the row exists.
+
+*Scope, per domain (milestone-4 correction — generalised from the
+original `A todo (or API key)` wording to `A resource`, since this
+invariant is `scope: per-domain-module` and naming specific resources in
+its general statement was always slightly off; reach narrowed per domain
+below):* holds for the identity/API-key domain exactly as
+written — an agent's own key-listing stays scoped to itself; a wrong-id
+request there is still `not_found`, never `forbidden`. **Does not apply
+to the todo domain from milestone-4 onward**: todos are a shared
+collection every authenticated actor can see and act on
+(`milestone-4/_goal/GOAL.md`'s Ownership model decision), so there is no
+"belongs to a different owner" case left for a todo to trigger this rule
+on. A narrowing of I3's *reach*, not a reversal of what it says — noted
+here, not only in the milestone goal, because this is the file the next
+reader of I3 actually opens.
 
 **I4 — One seam reads identity.** `scope: per-domain-module`
 Only the actor-resolution middleware queries `users`/`api_keys` to
 establish who's calling. Handlers receive an already-resolved actor; they
 never do their own lookup against those tables. Practical form: "one repo,
 one table" per domain module.
+
+*Clarification (milestone-4 — of what this always meant in practice, not a
+weakening; the mechanism enforcing this changed and the text has to say
+what it actually enforces, not what a reader's own reasonable-sounding
+gloss on "one repo, one table" might otherwise assume):* **a query file
+may read (never write) a table it does not own, but only via an explicit,
+named, per-file grant** — `internal/dbquery.ReadOnlyGrants`, enforced
+mechanically (a grant does not make a table's writes legal; `INTO`/
+`UPDATE` against a granted table still fails this invariant, checked
+directly against the SQL text, not trusted to the grantor's stated
+intent) and required to be exercised (an unused grant is itself a
+failure, not a permanent dormant exemption). Today's one grant:
+`todo_events.sql` may read `users` (the cross-todo activity feed's actor
+handle/role), because it displays identity data, never decides anything
+from it. Without this clarification, a cross-module read looks equally
+forbidden under "one repo, one table" as written — the milestone-4
+mechanism that implements the distinction was found to be a *reading* of
+the text, not something the text itself said, which is a trap for
+whoever reads I4 next without also reading the mechanism.
 
 **I5 — 401 never leaks why.** `scope: global`
 Missing credential, malformed credential, expired key, revoked key,
@@ -133,3 +184,168 @@ per `_goal/GOAL.md`'s Key resolver decision, not rewritten from
 description). Without this, I13's "no grace period" design is only true in
 theory — recovery from rotation must be one command, not a copy-paste from
 a terminal scrollback.
+
+**I15 — One write path (todo domain).** `scope: domain:todo`
+*(New, milestone-4.)* Only the todo domain's service module writes to
+`todos` or `todo_events`; no handler, script, or other module touches
+those tables directly. Mirrors my-task's *intent* (its own I4), but
+**not its enforcement shape — the two are not available to this
+codebase in parity, and that gap is stated rather than closed by
+wording.** my-task's I4 works because Drizzle lets a module export table
+objects to only the files that need them; `sqlc.yaml` here emits one
+shared `db` package (`package: "db"`, `out: "internal/db"`) that every
+module can import — there is no per-table export boundary to withhold.
+*Enforced by:* `internal/architecture_test.go`'s
+`TestArchitecture_OnlyRepoFilesImportSqlc` — a real, existing,
+per-file-parsed import-graph test. **State plainly what it actually
+buys**: it's a *layer* rule (only `repo.go`/`*_repo.go` files may import
+the generated package, across every domain module and identity) — it
+does not stop a repo file in one module from querying another module's
+table by name, the way my-task's table-level export boundary would. The
+Go mechanism is coarser than the source's. **Extended this milestone**
+with a second, table-specific check: an architecture test asserting only
+`internal/domain/todo`'s own repo file references the generated
+`*TodoEvent*`-named query functions — cheaper than a second `sqlc`
+output package, and it restores the actual property (not just the
+layer-level approximation of it) without requiring a second generated
+package this template's size doesn't otherwise need. **The check must
+first assert it found at least 3 such functions** (the design's own
+floor: insert one event, list a single todo's events, list the
+cross-todo feed — the minimum operations this milestone's write/read
+paths require) **before it asserts who references them.** A name-matcher
+that matches zero functions passes trivially and enforces nothing — the
+same shape `keys_handler_test.go` already cost this project once. If the
+count ever drops below 3, that's a real signal (the design changed, or a
+rename broke the matcher) and both deserve a failing test, not a silent
+pass. **Verified by test**, two of them: the transaction property (a
+failure mid-write leaves neither the event row nor the `todos` state
+change) and the new table-specific reference check above, itself gated
+on finding a non-trivial number of functions to check.
+
+**I16 — `created` is never client-specifiable.** `scope: domain:todo`
+*(New, milestone-4.)* No request body, on either `publicapi` or `bff`,
+may set `type: "created"` directly — a `created` event only ever happens
+as a side effect of `POST /todos` itself. Mirrors my-task's
+`buildAppendInput` switch, which has no `created` case at all
+(`~/gits/my-task/src/app/api/v1/tasks/[id]/events/route.ts:45-181`). A
+security property, not a style choice: a client that could post
+`type: "created"` could forge a creation event under any actor and
+timestamp, in the log that exists specifically to establish who did what.
+*Enforced by:* the write path's dispatch has no case that accepts a
+client-supplied `created` type — the same shape I1 already uses for actor
+identity, applied here to event type instead. **Verified by test**: a
+`POST` with `type: "created"` is rejected (400), not silently accepted or
+silently ignored.
+
+**I17 — `todo_events` is append-only, for everyone.** `scope: domain:todo`
+*(New, milestone-4.)* No `UPDATE`, no `DELETE`, no exceptions for the
+owner. Corrections are new events. Mirrors my-task's I3 exactly, including
+its enforcement shape and its explicit limit: application-level only (no
+service method, handler, or route exists that updates or deletes an
+event) — **no database trigger or CHECK constraint**, matching the named
+source, not exceeding it. If evidence ever surfaces that convention-only
+enforcement is insufficient here, that's a question to raise, not
+something to unilaterally strengthen (`milestone-4/_goal/GOAL.md`'s
+Append-only enforcement decision). *Enforced by:* no code path exists
+that updates or deletes a `todo_events` row. **Verified by test** — the
+same distinction my-task's own I3 test draws: the test asserts state
+changes always add a row, not merely that "no update method exists on the
+repo."
+
+**I18 — Only the owner may move a todo to `closed`.** `scope: domain:todo`
+*(New, milestone-4.)* Any agent may comment, assign, change fields, or
+change status to anything except `closed`, on any shared todo. Only a
+session-authenticated owner may set `status: closed`. Mirrors my-task's
+I10 (`can()`'s `task:status_change` rule refusing an agent's move into the
+`closed` group) applied to a single terminal status rather than a status
+group, since this domain's enum has one `closed` value where my-task has
+a `closed` group that can (in principle) hold more than one status.
+*Enforced by:* the permission layer (`can(actor, action)`, role-based, not
+per-todo-identity-based), checked **inside I15's single write path**,
+before it dispatches to any type-specific handling — not at each
+`publicapi`/`bff` call site the way my-task's own `can()` is checked (once
+per entry point, before calling `append()`). **This is a deliberate
+strengthening past the named source, stated as one, not an accidental
+reading of an ambiguous sentence**: my-task needs a `can()` call at every
+entry point specifically *because* its `append()` itself doesn't check
+permission (survey, Part 1: *"append() itself does not check permission —
+the caller does"*) — a shape that only works if every current and future
+caller remembers to check first. I15 already centralizes every todo write
+through one function; putting the permission check there means a future
+caller cannot skip it by forgetting, the same way my-task's shape
+structurally can. **This is the opposite direction from I17's
+enforcement, on purpose, not a drift toward inconsistency**: I17
+deliberately matches my-task's append-only enforcement without exceeding
+it, because there was no existing centralization to exploit for that
+property; I18 exceeds my-task's permission enforcement because I15's
+centralization makes exceeding it nearly free, not because "stronger is
+always better" was applied uniformly. **Verified by test**, paired: the
+same agent,
+against the same todo, has a `status: closed` attempt rejected and a
+non-closed action succeed in the same test — a permission layer that
+rejects everything would pass a reject-only assertion just as well as a
+correct one.
+
+**Wire mapping: `403 invalid_transition`, with a hint — not `401
+unauthorized`.** *Clarification, found post-launch (Clara, running
+`cmd/smoke` for the first time against a live milestone-4 instance), not
+the original design.* The first pass mapped this rejection to the
+generic `401` every credential failure produces (I5), reasoned at the
+time as "no distinct forbidden/403 code, this project has never had
+one." That was a narrowing of my-task rather than a decision: my-task's
+own equivalent check returns a distinct `403 invalid_transition` with a
+hint (`~/gits/my-task/src/server/api/v1/errors.ts:130`), and a bare `401`
+here misleads a correctly-authenticated agent into thinking its
+credential is the problem. I3's "absence, not permission" reasoning does
+not apply — todos are shared now, so the agent can already see this
+todo, and there is nothing left for a `403` to leak that a `404` would
+otherwise have hidden. Enforced at the same point as the permission check
+itself (`internal/transport/publicapi/todo_handler.go`'s
+`invalidTransitionErrorBody`, mirrored in `internal/transport/bff` for
+consistency though unreachable there in practice, I12).
+
+**I19 — Writes are idempotent when the client request id is reused (todo domain).** `scope: domain:todo`
+*(New, milestone-4.)* A repeat `POST` carrying the same `clientRequestId`
+returns the original event, unchanged, and creates nothing — checked
+inside the same transaction as the write itself, before dispatch. Mirrors
+my-task's I5 exactly. `_rules/_contract/API.md`'s own Conventions text
+already named this exact case ("No Idempotency-Key requirement... re-add
+it if a fork adds one [an event log]") — this is that fork. *Enforced
+by:* the unique constraint on `todo_events.client_request_id` plus a
+lookup at the top of the write path. **Verified by test** — the same key
+twice yields one row and two identical responses.
+
+**I20 — Comment bodies never render as raw HTML.** `scope: global`
+*(New, milestone-4.)* A comment's `body` is written as plain text and
+rendered, client-side, through a Markdown-to-React-elements path — never
+`dangerouslySetInnerHTML`, never a raw-HTML string reaching the DOM.
+Mirrors my-task's I8 exactly, including its stated reason: the activity
+log is a cross-agent channel, and an unescaped body is an injection
+surface into whatever reads it next, human or agent. *Enforced by:* the
+rendering component's implementation — there is exactly one place a
+comment body is rendered (mirrors my-task's shared `TimelineEventRow`),
+so there is exactly one place this can be gotten wrong. **Verified by
+test**: a body containing raw HTML tags renders as literal text/escaped
+elements in the rendered output, not as unescaped markup.
+
+**I21 — The owner's key-listing spans every agent's keys; an agent's own key-listing stays self-scoped.** `scope: domain:identity`
+*(New, milestone-4. Correction to milestone-2/3's `bff` key-listing,
+which scoped to the session owner's own `user_id` — a set that can never
+be non-empty, since `cmd/issue-key` never issues to `role='owner'` and I2
+forecloses it structurally. That endpoint's semantics are replaced, not
+kept alongside a new one — see `milestone-4/_goal/GOAL.md`'s decision.)*
+`GET /api/bff/keys` (owner session) returns every `role='agent'` user's
+non-revoked keys; `DELETE /api/bff/keys/:id` (owner session) may revoke
+any of them. `GET /api/v1/keys` (agent Bearer credential) is unchanged —
+still scoped to the caller's own keys only, I3 unchanged for this half of
+the identity domain. This is the first case where the owner is
+deliberately given visibility into another user's private resource, by
+design — I3's "absence, not permission" framing does not apply to the
+owner's half of this endpoint pair, on purpose. *Enforced by:* the BFF
+handler's query joins on `role='agent'` rather than filtering by the
+session's own `user_id`; the public API handler is untouched. **Verified
+by test**: the owner-facing query returns keys seeded through
+`cmd/issue-key`'s real path (not a direct repo insert on a convenient
+role — the exact trap `keys_handler_test.go`'s pre-milestone-4 fixture
+fell into), and a separate test proves the agent-facing endpoint stays
+self-scoped.

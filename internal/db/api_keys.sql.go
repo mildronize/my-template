@@ -105,6 +105,76 @@ func (q *Queries) ListAPIKeysByOwner(ctx context.Context, userID string) ([]ApiK
 	return items, nil
 }
 
+const listAllAgentAPIKeys = `-- name: ListAllAgentAPIKeys :many
+SELECT api_keys.id, api_keys.user_id, api_keys.key_hash, api_keys.key_prefix, api_keys.created_at, api_keys.expires_at, api_keys.revoked_at, users.handle AS handle
+FROM api_keys
+JOIN users ON users.id = api_keys.user_id
+WHERE users.role = 'agent' AND api_keys.revoked_at IS NULL
+ORDER BY api_keys.created_at DESC
+`
+
+type ListAllAgentAPIKeysRow struct {
+	ID        string       `json:"id"`
+	UserID    string       `json:"user_id"`
+	KeyHash   string       `json:"key_hash"`
+	KeyPrefix string       `json:"key_prefix"`
+	CreatedAt time.Time    `json:"created_at"`
+	ExpiresAt time.Time    `json:"expires_at"`
+	RevokedAt sql.NullTime `json:"revoked_at"`
+	Handle    string       `json:"handle"`
+}
+
+// I21 (_contract/INVARIANTS.md): the owner-facing key-listing endpoint
+// (GET /api/bff/keys) needs every role='agent' user's non-revoked keys,
+// not one user_id's own keys - the settings page's whole reason for
+// existing (GOAL.md's "Owner-facing key visibility" decision). A JOIN on
+// users from this file is a same-module reference (both api_keys and
+// users belong to the identity module per internal/dbquery/
+// tableisolation.go's TableOwnership) so it needs no ReadOnlyGrant, unlike
+// todo_events.sql's cross-module JOIN on users.
+//
+// milestone-4 fix-round (handle-exposure): api_keys.* PLUS users.handle -
+// my-task's own src/app/(app)/settings/api-key-settings.tsx shows
+// `{k.handle}` on every row and its revoke dialog reads "Revoke
+// {handle}'s key?" (RevokeKeyButton) - the handle is the centre of that
+// whole interaction, not a nicety, so the owner-facing settings page
+// structurally cannot do its job without it. Still an explicit column
+// list, not a bare SELECT * against the join, for the same leak-prevention
+// reason as before - this query's own Go return type
+// (ListAllAgentAPIKeysRow) is scoped to this one query only; every other
+// query in this file keeps returning bare db.ApiKey, unaffected.
+func (q *Queries) ListAllAgentAPIKeys(ctx context.Context) ([]ListAllAgentAPIKeysRow, error) {
+	rows, err := q.db.QueryContext(ctx, listAllAgentAPIKeys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAllAgentAPIKeysRow
+	for rows.Next() {
+		var i ListAllAgentAPIKeysRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.KeyHash,
+			&i.KeyPrefix,
+			&i.CreatedAt,
+			&i.ExpiresAt,
+			&i.RevokedAt,
+			&i.Handle,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const revokeAPIKey = `-- name: RevokeAPIKey :one
 UPDATE api_keys
 SET revoked_at = ?
@@ -120,6 +190,40 @@ type RevokeAPIKeyParams struct {
 
 func (q *Queries) RevokeAPIKey(ctx context.Context, arg RevokeAPIKeyParams) (ApiKey, error) {
 	row := q.db.QueryRowContext(ctx, revokeAPIKey, arg.RevokedAt, arg.ID, arg.UserID)
+	var i ApiKey
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.KeyHash,
+		&i.KeyPrefix,
+		&i.CreatedAt,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+	)
+	return i, err
+}
+
+const revokeAPIKeyByID = `-- name: RevokeAPIKeyByID :one
+UPDATE api_keys
+SET revoked_at = ?
+WHERE id = ? AND revoked_at IS NULL
+RETURNING id, user_id, key_hash, key_prefix, created_at, expires_at, revoked_at
+`
+
+type RevokeAPIKeyByIDParams struct {
+	RevokedAt sql.NullTime `json:"revoked_at"`
+	ID        string       `json:"id"`
+}
+
+// The owner-facing revoke endpoint's own query (I21): session-gated to a
+// valid owner by the handler above this layer, but not scoped to any
+// particular user_id here - the owner may revoke any agent's key, and
+// there is structurally no api_keys row whose user_id ever belongs to a
+// role='owner' user (I2, cmd/issue-key only ever issues to role='agent'),
+// so no explicit role filter is needed for this to mean exactly "any
+// agent's key".
+func (q *Queries) RevokeAPIKeyByID(ctx context.Context, arg RevokeAPIKeyByIDParams) (ApiKey, error) {
+	row := q.db.QueryRowContext(ctx, revokeAPIKeyByID, arg.RevokedAt, arg.ID)
 	var i ApiKey
 	err := row.Scan(
 		&i.ID,

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -68,6 +69,19 @@ func (f *fakeUserRepo) CreateUser(_ context.Context, handle, role string, ssoSub
 	}
 	f.put(u)
 	return u, nil
+}
+
+// ListActiveUsers returns every stored user with Active set, sorted by
+// handle — mirrors the real query's WHERE active = TRUE ORDER BY handle.
+func (f *fakeUserRepo) ListActiveUsers(_ context.Context) ([]User, error) {
+	users := make([]User, 0, len(f.byID))
+	for _, u := range f.byID {
+		if u.Active {
+			users = append(users, u)
+		}
+	}
+	sort.Slice(users, func(i, j int) bool { return users[i].Handle < users[j].Handle })
+	return users, nil
 }
 
 type fakeAPIKeyRepo struct {
@@ -137,6 +151,36 @@ func (f *fakeAPIKeyRepo) DisableOtherAPIKeys(_ context.Context, userID, keepID s
 		count++
 	}
 	return count, nil
+}
+
+// ListAllAgentAPIKeys and RevokeAPIKeyByID exist only to satisfy the
+// APIKeyRepo interface for this fake's other (unrelated) Service tests —
+// this fake has no notion of a users table/role at all, so it cannot
+// reproduce the real Repo's role='agent' filter. I21's actual role-scoping
+// behavior is proven against a real SQLite schema instead: repo_test.go's
+// TestI21_... and internal/transport/bff/keys_handler_test.go's rewritten
+// suite, neither of which uses this fake.
+func (f *fakeAPIKeyRepo) ListAllAgentAPIKeys(_ context.Context) ([]APIKey, error) {
+	var keys []APIKey
+	for _, k := range f.byHash {
+		if k.RevokedAt == nil {
+			keys = append(keys, k)
+		}
+	}
+	return keys, nil
+}
+
+func (f *fakeAPIKeyRepo) RevokeAPIKeyByID(_ context.Context, id string) (APIKey, error) {
+	f.revokeCalled = true
+	for hash, k := range f.byHash {
+		if k.ID == id && k.RevokedAt == nil {
+			now := time.Now()
+			k.RevokedAt = &now
+			f.byHash[hash] = k
+			return k, nil
+		}
+	}
+	return APIKey{}, ErrNotFound
 }
 
 type fakeJWTVerifier struct {

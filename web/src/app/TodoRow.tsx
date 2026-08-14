@@ -1,30 +1,79 @@
-// TPL-1 milestone-3/task-3: one todo's row — checkbox to toggle done,
-// click-to-edit title, delete behind a confirm (mirrors
-// ApiKeySettings.tsx's own AlertDialog-confirmed revoke). Split out of
-// TodosList.tsx so that component stays a thin "render the query result"
-// component, easy to test against mocked API data (Done-when 7).
+// TPL-1 milestone-3/task-3, rewritten milestone-4/task-7: one todo's row
+// in the shared-collection list. milestone-4 replaces the done-checkbox/
+// inline-edit/delete-behind-confirm shape entirely: `done` is gone
+// (replaced by `status`), and `DELETE /api/bff/todos/:id` no longer
+// exists (`_contract/API.md`) — this row is now a status/priority/
+// assignee/due-date summary that links to TodoDetailPage.tsx for the
+// full timeline and every mutating control (GOAL.md's task-7 spec, item
+// 2: "Todos list page updated for the new fields ... including a
+// status-change control that surfaces closed as an option only for the
+// owner"). Title stays inline-editable here (still a PATCH, still the
+// only field this list itself writes) — everything else routes through
+// the detail page's own event-posting controls.
 import { useState } from "react";
-import { Pencil, Trash2 } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Pencil } from "lucide-react";
 
+import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
-import { Checkbox } from "~/components/ui/checkbox";
 import { Input } from "~/components/ui/input";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "~/components/ui/alert-dialog";
-import { useDeleteTodoMutation, useUpdateTodoMutation, type Todo } from "~/lib/todos";
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "~/components/ui/select";
+import { useSession } from "~/lib/auth-client";
+import {
+  useCreateTodoEventMutation,
+  useUpdateTodoMutation,
+  canCloseTodo,
+  TODO_STATUSES,
+  type Todo,
+  type TodoStatus,
+} from "~/lib/todos";
+
+/**
+ * The status-change control this row owns directly (rather than only on
+ * TodoDetailPage.tsx) — GOAL.md's task-7 spec names this explicitly as a
+ * list-page requirement, not just a detail-page one. `closed` is filtered
+ * out of the options unless the signed-in session may close a todo
+ * (`~/lib/todos.ts`'s `canCloseTodo` — the frontend's own reflection of
+ * I18, not its enforcement: the backend rejects an agent's own attempt
+ * regardless of what this control offers).
+ */
+function StatusControl({ todo }: { todo: Todo }) {
+  const { data: session } = useSession();
+  const createEvent = useCreateTodoEventMutation();
+  const offeredStatuses = canCloseTodo(session?.user.role)
+    ? TODO_STATUSES
+    : TODO_STATUSES.filter((s) => s !== "closed");
+
+  return (
+    <Select
+      value={todo.status}
+      onValueChange={(next) =>
+        createEvent.mutate({ id: todo.id, type: "status_changed", to: next as TodoStatus })
+      }
+      disabled={createEvent.isPending}
+    >
+      <SelectTrigger className="h-7 w-32 text-xs" aria-label={`Status for "${todo.title}"`}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {offeredStatuses.map((s) => (
+          <SelectItem key={s} value={s}>
+            {s}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
 
 export function TodoRow({ todo }: { todo: Todo }) {
   const updateTodo = useUpdateTodoMutation();
-  const deleteTodo = useDeleteTodoMutation();
   const [editing, setEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState(todo.title);
 
@@ -39,13 +88,7 @@ export function TodoRow({ todo }: { todo: Todo }) {
   }
 
   return (
-    <li className="flex items-center gap-3 border-b border-[var(--line)] py-3 last:border-0">
-      <Checkbox
-        checked={todo.done}
-        onCheckedChange={(checked) => updateTodo.mutate({ id: todo.id, done: checked === true })}
-        aria-label={todo.done ? "Mark as not done" : "Mark as done"}
-      />
-
+    <li className="flex flex-wrap items-center gap-3 border-b border-[var(--line)] py-3 last:border-0">
       {editing ? (
         <Input
           autoFocus
@@ -62,16 +105,12 @@ export function TodoRow({ todo }: { todo: Todo }) {
           className="h-8 flex-1"
         />
       ) : (
-        <button
-          type="button"
-          onClick={() => setEditing(true)}
-          className={[
-            "flex-1 truncate text-left text-sm font-medium",
-            todo.done ? "text-[var(--sea-ink-soft)] line-through" : "text-[var(--sea-ink)]",
-          ].join(" ")}
+        <Link
+          to={`/todos/${todo.id}`}
+          className="min-w-0 flex-1 truncate text-sm font-medium text-[var(--sea-ink)] hover:underline"
         >
           {todo.title}
-        </button>
+        </Link>
       )}
 
       {!editing && (
@@ -85,28 +124,31 @@ export function TodoRow({ todo }: { todo: Todo }) {
         </Button>
       )}
 
-      <AlertDialog>
-        <AlertDialogTrigger asChild>
-          <Button variant="ghost" size="icon" aria-label={`Delete "${todo.title}"`}>
-            <Trash2 className="size-4" />
-          </Button>
-        </AlertDialogTrigger>
-        <AlertDialogContent onClick={(e) => e.stopPropagation()}>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete &quot;{todo.title}&quot;?</AlertDialogTitle>
-            <AlertDialogDescription>This can&apos;t be undone.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-white hover:bg-destructive/90"
-              onClick={() => deleteTodo.mutate(todo.id)}
-            >
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <StatusControl todo={todo} />
+
+      {todo.priority && (
+        <Badge variant="outline" className="capitalize">
+          {todo.priority}
+        </Badge>
+      )}
+
+      {todo.dueDate && (
+        <span className="text-xs text-[var(--sea-ink-soft)]">
+          due {new Date(todo.dueDate).toLocaleDateString()}
+        </span>
+      )}
+
+      {/* milestone-4 handle-exposure fix-round: the handle is the
+          display text now, mirroring my-task's own task list (`t.assignee`,
+          a plain handle) — the raw id is still available (`title`, a
+          hover tooltip) rather than dropped, since it is still what a
+          caller writes back. assigneeHandle is only ever absent when
+          assigneeId itself is null (Todo's own doc comment). */}
+      {todo.assigneeId && (
+        <span className="truncate text-xs text-[var(--sea-ink-soft)]" title={todo.assigneeId}>
+          → {todo.assigneeHandle ?? todo.assigneeId}
+        </span>
+      )}
     </li>
   );
 }

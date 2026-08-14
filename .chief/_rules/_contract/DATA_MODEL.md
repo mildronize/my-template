@@ -56,23 +56,64 @@ and when changes (see `INVARIANTS.md` I13 for `rotate`'s issue-before-
 disable ordering). Issuance is still CLI-only; there is still no
 `POST /api/v1/keys`.
 
-## `todos` (example domain — moved, not changed)
+## `todos` (example domain — shared collection as of milestone-4)
 
 | Column | Type | Notes |
 | --- | --- | --- |
 | `id` | text (uuid), pk | |
-| `owner_id` | text, fk → `users.id`, not null | the actor that created it — proves the identity system is load-bearing, not decorative |
-| `title` | text, not null, 1–200 chars | the only required user-supplied field |
-| `done` | bool, not null, default false | |
-| `created_at`, `updated_at` | timestamp, not null | |
+| `created_by` | text, fk → `users.id`, not null | **milestone-4: replaces `owner_id`.** Audit/attribution only — who made it, never who may see or act on it. A todo is visible and actionable by every authenticated actor (I3 no longer applies to this domain — see `INVARIANTS.md` I3's own scope note) |
+| `title` | text, not null, 1–200 chars | the only required user-supplied field, unchanged |
+| `status` | text, not null, default `'open'` | **milestone-4: replaces `done` (bool).** Fixed enum: `open` \| `in_progress` \| `done` \| `closed`. Not an owner-editable table like my-task's `statuses` — deliberately smaller (`INVARIANTS.md` I18 for the `closed` restriction) |
+| `assignee_id` | text, fk → `users.id`, nullable | **milestone-4, new.** Any role — an owner can be assigned same as an agent |
+| `priority` | text, nullable | **milestone-4, new.** `low` \| `medium` \| `high` \| `urgent`, my-task's convention |
+| `due_date` | timestamp, nullable | **milestone-4, new.** Rendered in the reader's local timezone client-side, never compared to "now" server-side without knowing whose "now" that is — mirrors my-task's own `dueDate` handling |
+| `created_at`, `updated_at` | timestamp, not null | unchanged |
 
-Index on `owner_id` — every read is scoped to it (I3). **Table shape is
-unchanged from milestone-1** — only its code location moves, from
-`internal/todo/` to `internal/domain/todo/`, per `_rules/_standard/
-ARCHITECTURE.md`'s milestone-2 restructure. Any future domain module's
-table follows the same `owner_id TEXT NOT NULL REFERENCES users (id)`
-pattern — this is the column that makes ownership-scoping (I3) possible at
-all, and its absence would leave that domain module unable to satisfy I3.
+Indexes: `created_by` (attribution lookups, no longer access-scoping),
+`assignee_id`, `status`, `updated_at` (default list ordering). **No index
+on `owner_id`** — that column and its scoping purpose are both gone.
+
+**Migration from milestone-1/2/3's shape, on existing rows** (`INVARIANTS.md`
+I15 for the write-path this migration must not bypass): `owner_id` → `created_by`
+is a rename with a real consequence, not a no-op — every existing row
+becomes visible to every actor once this lands, where before only its
+creator could see it (`_goal/milestone-4/_goal/GOAL.md`'s Ownership model
+decision — deliberate, but a fork should know it happened, not discover
+it). `done = true` rows become `status = 'done'`, **not** `'closed'`;
+`done = false` rows become `status = 'open'` — `closed` is reachable only
+by an explicit owner action going forward (I18), never assigned by the
+migration itself, so that a fork's already-finished todos don't silently
+become locked away from every agent that could touch them yesterday.
+
+Any future domain module's table still follows the general
+`created_by`/`owner_id`-style attribution pattern from earlier milestones
+where that module's own scoping model calls for it — `todos` is the one
+domain where milestone-4 deliberately removes the access-scoping half of
+it, not a new template default.
+
+## `todo_events` (milestone-4, new — mirrors my-task's `task_events`)
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | text (uuid), pk | |
+| `todo_id` | text, fk → `todos.id`, not null | |
+| `seq` | integer, not null | monotonic per `todo_id`, starts at 1 — computed as `max(seq)+1` inside the same transaction as the insert (I15) |
+| `actor_id` | text, fk → `users.id`, not null | from the resolved credential only (I1) — never from request input |
+| `type` | text, not null | `created` \| `commented` \| `status_changed` \| `assigned` \| `field_changed` — no `moved`/`labeled`/`unlabeled` (no projects, no labels in this domain). `created` is never client-specifiable — see `_rules/_contract/API.md`'s milestone-4 section |
+| `payload` | text, nullable | JSON, shape depends on `type` — `{from, to}` pairs for `status_changed`/`assigned`/`field_changed`, mirroring my-task's own shape |
+| `body` | text, nullable | comment text, plain text at write time, Markdown-rendered at read time, never raw HTML (I20) |
+| `client_request_id` | text, not null, unique | the Idempotency-Key (I19) |
+| `created_at` | timestamp, not null | |
+
+Indexes: `(todo_id, seq)` unique, `created_at` (the activity feed reads
+this table alone, newest first, across every todo), `actor_id`.
+
+**Append-only (I17), for everyone, no exceptions.** No `UPDATE`, no
+`DELETE`, no soft-delete column — corrections are new events, mirroring
+my-task's own I3 exactly, including its enforcement shape: application-level
+(no service method/route exists that updates or deletes), not a database
+trigger or constraint. See `INVARIANTS.md` I17 for why not going further
+than the named source is itself a deliberate choice, not an oversight.
 
 ## BFF session — no new table, decided minimal on purpose
 

@@ -91,19 +91,6 @@ func seedUser(t *testing.T, conn *sql.DB, role, ssoSubject string, active bool) 
 	return identity.User{ID: id, Handle: handle, Role: role, Active: active, SSOSubject: ssoSubject, CreatedAt: now, UpdatedAt: now}
 }
 
-// seedTodo inserts a todos row directly, owned by ownerID.
-func seedTodo(t *testing.T, conn *sql.DB, ownerID, title string) string {
-	t.Helper()
-	now := time.Now().UTC()
-	id := uuid.NewString()
-	_, err := conn.Exec(
-		`INSERT INTO todos (id, owner_id, title, done, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		id, ownerID, title, false, now, now,
-	)
-	require.NoError(t, err)
-	return id
-}
-
 // --- fake Hydra: JWKS + token endpoint, no live issuer anywhere ---------
 //
 // Same reasoning internal/identity/jwt_test.go already established for its
@@ -266,9 +253,10 @@ func newTestRouter(cfg *platform.Config, signer *Signer, idVerifier identity.JWT
 	apiBFF := r.Group("/api/bff")
 	apiBFF.Use(publicapi.RejectActorFields(), RequireJSONSession(signer, repo, logger), bffValidator)
 	bffapi.RegisterHandlers(apiBFF, testBFFServer{
-		MeServer:   MeServer{},
-		KeysServer: NewKeysServer(identitySvc),
-		TodoServer: NewTodoServer(todoSvc),
+		MeServer:    MeServer{},
+		KeysServer:  NewKeysServer(identitySvc),
+		TodoServer:  NewTodoServer(todoSvc),
+		UsersServer: NewUsersServer(identitySvc),
 	})
 
 	return r
@@ -277,12 +265,13 @@ func newTestRouter(cfg *platform.Config, signer *Signer, idVerifier identity.JWT
 // testBFFServer mirrors cmd/server/main.go's own unexported bffServer
 // composite (that type lives in package main and isn't importable from
 // here) — same embedding, same reasoning: no method names collide across
-// MeServer/KeysServer/TodoServer, so plain embedding satisfies
-// bffapi.ServerInterface with no hand-written delegation.
+// MeServer/KeysServer/TodoServer/UsersServer, so plain embedding
+// satisfies bffapi.ServerInterface with no hand-written delegation.
 type testBFFServer struct {
 	MeServer
 	*KeysServer
 	*TodoServer
+	*UsersServer
 }
 
 var _ bffapi.ServerInterface = testBFFServer{}

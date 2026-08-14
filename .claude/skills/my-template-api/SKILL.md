@@ -23,7 +23,8 @@ same way `my-task-guide` sits beside `my-task-api` in this fleet.
 domain-agnostic — they describe this template's identity/API-key layer,
 which a fork keeps as-is (`docs/GETTING-STARTED.md`).** The Endpoints
 table and every worked example, though, are this template's actual example
-domain (`/todos`, `title`/`done`) — the same way `docs/GETTING-STARTED.md`
+domain (`/todos`, `title`/`status`/`assigneeId`/`priority`/`dueDate`, plus
+the `todo_events` activity log) — the same way `docs/GETTING-STARTED.md`
 itself is full of `todo` examples it expects a fork to replace. This skill
 is on `docs/GETTING-STARTED.md` Step 3's rename checklist for exactly that
 reason: update the Endpoints table, `references/endpoints.md`, and every
@@ -116,32 +117,53 @@ surface too — the invariant is about the mechanism (identity only ever
 comes from a resolved credential), not about which surface makes the
 mistake easy to try.
 
-**2. There is no `Idempotency-Key` requirement.** If you're coming from
-`my-task-api`, this is the rule you'd expect and won't find — it's an
-absence, not an oversight: this service has no append-only event log
-(every write is a direct row create/update/delete), so there's no replay
-window for a duplicate `POST` to land in. Retrying a `POST /todos` twice
-creates two todos. If a fork adds an event log later, re-add this rule
-there; don't assume it already holds.
+**2. Every write carries a `clientRequestId` — this surface has an
+append-only event log now (I19).** milestone-4 added one: todos are a
+shared collection every agent and the owner act on together, and every
+state change (create a todo, comment, change status, reassign, change a
+field) is a row in that log, not a direct update. A repeated
+`clientRequestId` returns the *original* write's result unchanged and
+creates nothing new — so retrying a request you're unsure went through is
+always safe, never a duplicate. This is the opposite of the old rule: if
+you're coming from an earlier version of this doc, or from a fork that
+predates milestone-4, the absence you'd expect here is gone — bring one
+on every `POST`/`PATCH` below, not just the ones that look like they
+need it.
 
-**3. Ownership scoping is absence, not permission (I3).** A todo or key
-that exists but belongs to a different user returns **404 `not_found`** —
-never `403`, because a `403` would confirm the row exists at all. Every
-read and write below is scoped to the caller's own rows; there is no way
-to address another user's todo or key, correctly-guessed id or not.
+**3. Todos are a shared collection; keys are not (I3's reach narrowed for
+todos, unchanged for keys).** Every todo is visible and actionable by
+every authenticated caller — there is no "wrong owner" case for a todo
+any more; an unknown id is `404 not_found`, full stop. Keys are still
+scoped to the caller alone: a key that exists but belongs to a different
+user returns the same **404 `not_found`** — never `403`, because a `403`
+would confirm the row exists at all. Only the owner (never reachable
+through this surface — see `bff`, above) may move a todo to `closed`; an
+agent attempting it gets **`403 invalid_transition`, with a hint** — a
+real permission refusal, not a credential problem, so don't retry it and
+don't rotate your key (see `references/errors.md`'s own section on this).
 
 ## Endpoints
 
 | Method | Path | |
 | --- | --- | --- |
 | `GET` | `/api/v1/me` | who this key is |
-| `GET` | `/api/v1/todos` | the caller's own todos, unpaginated |
+| `GET` | `/api/v1/todos` | every todo, unpaginated |
 | `POST` | `/api/v1/todos` | create → **201** |
-| `GET` | `/api/v1/todos/:id` | one of the caller's own todos |
-| `PATCH` | `/api/v1/todos/:id` | update title and/or done |
-| `DELETE` | `/api/v1/todos/:id` | delete → **204** |
+| `GET` | `/api/v1/todos/:id` | any todo by id |
+| `PATCH` | `/api/v1/todos/:id` | rename (title only) |
+| `POST` | `/api/v1/todos/:id/events` | append to this todo's timeline → **201** |
+| `GET` | `/api/v1/todos/:id/events` | this todo's own timeline, oldest first |
 | `GET` | `/api/v1/keys` | the caller's own non-revoked keys |
 | `DELETE` | `/api/v1/keys/:id` | revoke → **204** |
+
+**There is no `DELETE /api/v1/todos/:id`** — removed in milestone-4.
+Finishing a todo means posting a `status_changed` event to `closed`
+(owner-only) or `done` (any actor) through
+`POST /api/v1/todos/:id/events`, not deleting the row; the old path is a
+genuine `404` now, not a `405` (nothing is registered at that
+method+path, so there's no wrong method to name). Every other field
+change — assignee, priority, due date — goes through the same events
+endpoint too; `PATCH` only ever touches `title` any more.
 
 Full request/response shapes: `references/endpoints.md`. Every error code
 and what triggers it: `references/errors.md`.
@@ -154,7 +176,7 @@ Issuance and rotation are both CLI-only, always (`cmd/issue-key`).
 
 ## Worked examples
 
-**List your own todos**
+**List every todo**
 
 ```bash
 curl -sS -H "Authorization: Bearer $KEY" "$BASE_URL/api/v1/todos"
@@ -165,8 +187,12 @@ curl -sS -H "Authorization: Bearer $KEY" "$BASE_URL/api/v1/todos"
 ```bash
 curl -sS -X POST "$BASE_URL/api/v1/todos" \
   -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -d '{"title":"Export CSV endpoint"}'
+  -d '{"title":"Export CSV endpoint","clientRequestId":"'"$(uuidgen)"'"}'
 ```
+
+`assigneeId`/`priority`/`dueDate` are optional on create too — `status`
+is not accepted here (it always starts `open`; change it afterward
+through an event, below).
 
 **Read one**
 
@@ -174,18 +200,55 @@ curl -sS -X POST "$BASE_URL/api/v1/todos" \
 curl -sS -H "Authorization: Bearer $KEY" "$BASE_URL/api/v1/todos/$ID"
 ```
 
-**Mark one done**
+**Rename one**
 
 ```bash
 curl -sS -X PATCH "$BASE_URL/api/v1/todos/$ID" \
   -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -d '{"done":true}'
+  -d '{"title":"…","clientRequestId":"'"$(uuidgen)"'"}'
 ```
 
-**Delete one**
+**Comment on one**
 
 ```bash
-curl -sS -X DELETE "$BASE_URL/api/v1/todos/$ID" -H "Authorization: Bearer $KEY"
+curl -sS -X POST "$BASE_URL/api/v1/todos/$ID/events" \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"type":"commented","body":"blocked on the CSV lib","clientRequestId":"'"$(uuidgen)"'"}'
+```
+
+**Change its status** — `to` is one of `open`/`in_progress`/`done`/
+`closed`; a key can move it to anything except `closed` (owner-only,
+I18 — `403 invalid_transition`, with a hint, if a key tries):
+
+```bash
+curl -sS -X POST "$BASE_URL/api/v1/todos/$ID/events" \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"type":"status_changed","to":"in_progress","clientRequestId":"'"$(uuidgen)"'"}'
+```
+
+**Reassign it** — `to` is the new assignee's user id, or `null` to
+unassign:
+
+```bash
+curl -sS -X POST "$BASE_URL/api/v1/todos/$ID/events" \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"type":"assigned","to":"'"$ASSIGNEE_USER_ID"'","clientRequestId":"'"$(uuidgen)"'"}'
+```
+
+**Change priority or due date** — `field` is `priority` or `dueDate`
+(`title` is also valid here but `PATCH` above is the more direct path
+for a rename):
+
+```bash
+curl -sS -X POST "$BASE_URL/api/v1/todos/$ID/events" \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"type":"field_changed","field":"priority","to":"urgent","clientRequestId":"'"$(uuidgen)"'"}'
+```
+
+**Read its full timeline**
+
+```bash
+curl -sS -H "Authorization: Bearer $KEY" "$BASE_URL/api/v1/todos/$ID/events"
 ```
 
 **See your own keys, to know what needs rotating**

@@ -95,15 +95,24 @@ func TestBFF_UnmatchedAPIBFFPathAnswers404NotTheSPA(t *testing.T) {
 }
 
 // TestBFF_FullCRUDRoundTrip_ThroughAssembledMainHandler is this task's
-// verification that the real create->list->get->update->delete round
-// trip (GOAL.md Done-when 2) holds through cmd/server's actual composed
-// handler (buildHandler/wireBFF), not only internal/transport/bff's own
-// isolated test router (internal/transport/bff/todo_handler_test.go's
+// verification that the real create->list->get->update->events round trip
+// holds through cmd/server's actual composed handler (buildHandler/
+// wireBFF), not only internal/transport/bff's own isolated test router
+// (internal/transport/bff/todo_handler_test.go's
 // TestBFFHandler_FullCRUDRoundTrip_RealSessionCookie already covers that
-// layer) — the same session-seeding shortcut
-// (bff.Signer.NewSessionCookie, called directly) reused throughout this
-// repo's own tests, driven here through http.Handler.ServeHTTP so it
-// exercises main.go's actual route composition end to end.
+// layer) — the same session-seeding shortcut (bff.Signer.NewSessionCookie,
+// called directly) reused throughout this repo's own tests, driven here
+// through http.Handler.ServeHTTP so it exercises main.go's actual route
+// composition end to end.
+//
+// milestone-4: no more `done`/DELETE — a fresh todo starts `status: open`,
+// `clientRequestId` is required on every write (I19), status changes go
+// through POST .../events instead of PATCH, and a `type: "created"` write
+// on this same assembled handler is genuinely rejected (I16) — the
+// negative half task-4 owns independently of internal/transport/publicapi's
+// own equivalent (TestDoneWhen13_...) and internal/transport/bff's own
+// isolated-router equivalent (TestDoneWhen14_...): this is the third,
+// distinct proof point, against the actual wired main.go composition.
 func TestBFF_FullCRUDRoundTrip_ThroughAssembledMainHandler(t *testing.T) {
 	db := newMainTestDB(t)
 	cfg := &platform.Config{
@@ -146,9 +155,10 @@ func TestBFF_FullCRUDRoundTrip_ThroughAssembledMainHandler(t *testing.T) {
 		return v
 	}
 
-	createRec := doReq(http.MethodPost, "/api/bff/todos", []byte(`{"title":"main-handler round trip"}`))
+	createRec := doReq(http.MethodPost, "/api/bff/todos", []byte(`{"title":"main-handler round trip","clientRequestId":"main-rt-create-1"}`))
 	require.Equal(t, http.StatusCreated, createRec.Code, createRec.Body.String())
 	id := decodeField(t, createRec.Body.Bytes(), "id")
+	assert.Contains(t, createRec.Body.String(), `"status":"open"`, "a fresh todo must start open")
 
 	listRec := doReq(http.MethodGet, "/api/bff/todos", nil)
 	require.Equal(t, http.StatusOK, listRec.Code)
@@ -157,17 +167,33 @@ func TestBFF_FullCRUDRoundTrip_ThroughAssembledMainHandler(t *testing.T) {
 	getRec := doReq(http.MethodGet, "/api/bff/todos/"+id, nil)
 	require.Equal(t, http.StatusOK, getRec.Code)
 
-	patchRec := doReq(http.MethodPatch, "/api/bff/todos/"+id, []byte(`{"done":true}`))
+	patchRec := doReq(http.MethodPatch, "/api/bff/todos/"+id, []byte(`{"title":"main-handler round trip (renamed)","clientRequestId":"main-rt-patch-1"}`))
 	require.Equal(t, http.StatusOK, patchRec.Code)
-	assert.Contains(t, patchRec.Body.String(), `"done":true`)
+	assert.Contains(t, patchRec.Body.String(), `"main-handler round trip (renamed)"`)
 
 	getAfterPatchRec := doReq(http.MethodGet, "/api/bff/todos/"+id, nil)
 	require.Equal(t, http.StatusOK, getAfterPatchRec.Code)
-	assert.Contains(t, getAfterPatchRec.Body.String(), `"done":true`, "the update must actually be persisted, not just echoed by the patch response")
+	assert.Contains(t, getAfterPatchRec.Body.String(), `"main-handler round trip (renamed)"`, "the update must actually be persisted, not just echoed by the patch response")
 
+	// status: closed succeeds on this surface (I18 — the owner's own
+	// surface), through the actual assembled handler.
+	closeRec := doReq(http.MethodPost, "/api/bff/todos/"+id+"/events", []byte(`{"type":"status_changed","clientRequestId":"main-rt-close-1","to":"closed"}`))
+	require.Equal(t, http.StatusCreated, closeRec.Code, closeRec.Body.String())
+
+	getAfterCloseRec := doReq(http.MethodGet, "/api/bff/todos/"+id, nil)
+	require.Equal(t, http.StatusOK, getAfterCloseRec.Code)
+	assert.Contains(t, getAfterCloseRec.Body.String(), `"status":"closed"`, "the status write must actually be persisted")
+
+	// DELETE genuinely 404s — the route doesn't exist (GOAL.md's "DELETE
+	// removed" decision), through the actual assembled handler.
 	deleteRec := doReq(http.MethodDelete, "/api/bff/todos/"+id, nil)
-	require.Equal(t, http.StatusNoContent, deleteRec.Code)
+	assert.Equal(t, http.StatusNotFound, deleteRec.Code, "DELETE must be a genuine 404 (no route), never a 405 or a silent 204")
 
-	getAfterDeleteRec := doReq(http.MethodGet, "/api/bff/todos/"+id, nil)
-	assert.Equal(t, http.StatusNotFound, getAfterDeleteRec.Code, "the delete must actually have removed the row")
+	// type: "created" is genuinely rejected (I16), through the actual
+	// assembled handler — a third, independent proof point beyond
+	// internal/transport/publicapi's and internal/transport/bff's own
+	// isolated-router equivalents.
+	forgedRec := doReq(http.MethodPost, "/api/bff/todos/"+id+"/events", []byte(`{"type":"created","clientRequestId":"main-rt-forge-1"}`))
+	assert.Equal(t, http.StatusBadRequest, forgedRec.Code, "type: created must be rejected, not silently accepted")
+	assert.Contains(t, forgedRec.Body.String(), `"validation_error"`)
 }

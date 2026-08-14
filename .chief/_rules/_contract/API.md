@@ -51,6 +51,7 @@ milestone (nothing here — only this surface's code location moved, from
 | `not_found` | 404 | unknown resource id, or one that exists but isn't the caller's (I3 — absence, not 403) |
 | `actor_field_present` | 400 | request tried to declare an actor (I1) |
 | `validation_error` | 400 | `hint` names the field |
+| `invalid_transition` | 403 | a genuine permission refusal for a valid, authenticated credential — distinct from `unauthorized`, since the credential itself is fine. First and currently only case: an agent moving a todo to `closed` (`domain:todo`'s I18). `hint` says what to do instead. |
 
 A request that fails OpenAPI spec validation (missing required field, wrong
 type) is rejected by `gin-middleware` before reaching handler code at all —

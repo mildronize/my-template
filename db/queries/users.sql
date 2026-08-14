@@ -16,3 +16,13 @@ WHERE sso_subject = ?;
 INSERT INTO users (id, handle, role, active, sso_subject, created_at, updated_at)
 VALUES (?, ?, ?, ?, ?, ?, ?)
 RETURNING *;
+
+-- name: ListActiveUsers :many
+-- Every active user, either role -- the assignee-picker's own source
+-- (GET /api/bff/users), mirroring my-task's user.ts router exactly
+-- (WHERE active = true ORDER BY handle, "humans and agents in one
+-- list"). Inactive users are excluded so a picker never offers assigning
+-- to someone who can no longer act.
+SELECT * FROM users
+WHERE active = TRUE
+ORDER BY handle;

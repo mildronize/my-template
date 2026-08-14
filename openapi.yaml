@@ -34,13 +34,15 @@ paths:
   /todos:
     get:
       operationId: listTodos
-      summary: List the caller's own todos.
+      summary: List every todo.
       description: >
-        Returns only the caller's own todos, created_at descending,
-        unpaginated (deliberate — see `_contract/API.md` Conventions).
+        milestone-4: todos are a shared collection (GOAL.md's Ownership
+        model decision) — I3 no longer applies to this domain. Returns
+        every todo, created_at descending, unpaginated (deliberate — see
+        `_contract/API.md` Conventions), not just the caller's own.
       responses:
         "200":
-          description: The caller's own todos.
+          description: Every todo.
           content:
             application/json:
               schema:
@@ -49,10 +51,16 @@ paths:
           $ref: "#/components/responses/Unauthorized"
     post:
       operationId: createTodo
-      summary: Create a todo owned by the caller.
+      summary: Create a todo, attributed to the caller.
       description: >
-        `owner_id` is always the resolved actor — never accepted from the
-        body (I1). `done` starts false.
+        `createdBy` is always the resolved actor — never accepted from
+        the body (I1) — but is attribution only, never access-scoping
+        (GOAL.md). `status` always starts `open`. The `created` event
+        this produces is never client-specifiable as a distinct write
+        (I16) — it only ever happens as this endpoint's own side effect.
+        `clientRequestId` makes this idempotent the same way
+        `POST .../events` is (I19): a repeated id returns the todo that
+        request already created and creates nothing new.
       requestBody:
         required: true
         content:
@@ -79,10 +87,11 @@ paths:
           type: string
     get:
       operationId: getTodo
-      summary: Get one of the caller's own todos.
+      summary: Get a todo by id.
       description: >
-        Owner-scoped (I3): another owner's id, or an id that never
-        existed, both return `not_found` — never `forbidden`.
+        milestone-4: every authenticated actor may read every todo (I3 no
+        longer applies to this domain) — an unknown id is `not_found`,
+        there is no "wrong owner" case left to produce it.
       responses:
         "200":
           description: The todo.
@@ -96,8 +105,18 @@ paths:
           $ref: "#/components/responses/NotFound"
     patch:
       operationId: updateTodo
-      summary: Update one of the caller's own todos.
-      description: Owner-scoped, same 404 rule as GET.
+      summary: Rename a todo.
+      description: >
+        milestone-4: the only field this endpoint still writes is
+        `title` — `status`/`assigneeId`/`priority`/`dueDate` changes
+        route through `POST .../events` instead (`status_changed`/
+        `assigned`/`field_changed`), the single write path (I15/I18)
+        those fields' permission/audit requirements actually need.
+        `done` is gone entirely (replaced by `status`) — sending it is a
+        `validation_error` (`hint: "done"`), not silently accepted and
+        ignored. Internally still funnels through the same single write
+        path as every other mutation (a `field_changed` event), hence
+        `clientRequestId` (I19).
       requestBody:
         required: true
         content:
@@ -117,18 +136,69 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
-    delete:
-      operationId: deleteTodo
-      summary: Delete one of the caller's own todos.
+  /todos/{id}/events:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: listTodoEvents
+      summary: This todo's own timeline.
       description: >
-        Owner-scoped, same 404 rule. Deleting an already-deleted id is
-        also `not_found` (naturally idempotent, no special-casing
-        needed).
+        Oldest first (mirrors my-task's own per-task read, unlike the
+        newest-first cross-todo feed — `_contract/API.md`). No cross-todo
+        feed on this surface — that's `bff`-only (`GET /api/bff/activity`).
       responses:
-        "204":
-          description: Deleted.
+        "200":
+          description: This todo's timeline, oldest first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TodoEventList"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: createTodoEvent
+      summary: Append an event to this todo's timeline (I15's single write path).
+      description: >
+        One body shape per `type` — `commented` (`body`),
+        `status_changed` (`to`), `assigned` (`to`, or `null` to
+        unassign), `field_changed` (`field`, `to`) — `_contract/API.md`.
+        `type: "created"` is rejected (`validation_error`): a `created`
+        event only ever happens as `POST /todos`'s own side effect,
+        never as a direct client-specifiable write (I16) — the same
+        rejection applies to any other value this endpoint doesn't
+        recognise, `created` included, not a special case. A
+        `status: closed` write from an agent caller is rejected as `403
+        invalid_transition`, with a hint (I18) — a genuine permission
+        refusal, distinct from `401 unauthorized`, since the credential
+        itself is valid here; matches my-task's own equivalent check
+        exactly rather than the generic 401 this endpoint's first pass
+        used. Idempotent on `clientRequestId` (I19): a repeated id returns
+        the original event and creates nothing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTodoEventRequest"
+      responses:
+        "201":
+          description: The created event.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TodoEvent"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
   /keys:
@@ -184,14 +254,62 @@ components:
           type: boolean
     Todo:
       type: object
-      required: [id, title, done, createdAt, updatedAt]
+      required:
+        [
+          id,
+          title,
+          status,
+          assigneeId,
+          assigneeHandle,
+          priority,
+          dueDate,
+          createdBy,
+          createdAt,
+          updatedAt,
+        ]
       properties:
         id:
           type: string
         title:
           type: string
-        done:
-          type: boolean
+        status:
+          type: string
+          description: >
+            milestone-4: replaces `done`. Fixed enum, not an
+            owner-editable table (GOAL.md).
+          enum: [open, in_progress, done, closed]
+        assigneeId:
+          type: string
+          nullable: true
+          description: References a user (any role).
+        assigneeHandle:
+          type: string
+          nullable: true
+          description: >
+            milestone-4 fix-round (handle-exposure): assigneeId's owning
+            user's handle, for display — null exactly when assigneeId is
+            null. my-task's own agent-facing REST contract
+            (`GET /api/v1/tasks`, `GET /api/v1/tasks/:id` —
+            `~/gits/my-task/src/app/api/v1/tasks/route.ts:128`,
+            `serializeTaskDetail`) shows a plain handle to agents too, not
+            just the owner UI, so this field is on this surface
+            (internal/transport/publicapi), not only bff-openapi.yaml's
+            copy. Additive: assigneeId is unchanged, still what a caller
+            writes back (CreateTodoRequest.assigneeId, CreateTodoEventRequest's
+            `to` for an `assigned` event) — this is display-only.
+        priority:
+          type: string
+          nullable: true
+          enum: [low, medium, high, urgent]
+        dueDate:
+          type: string
+          format: date-time
+          nullable: true
+        createdBy:
+          type: string
+          description: >
+            milestone-4: replaces `ownerId` — attribution only, never
+            access-scoping (GOAL.md).
         createdAt:
           type: string
           format: date-time
@@ -206,6 +324,75 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Todo"
+    TodoEvent:
+      type: object
+      required: [id, todoId, seq, actorId, actorHandle, type, clientRequestId, createdAt]
+      properties:
+        id:
+          type: string
+        todoId:
+          type: string
+        seq:
+          type: integer
+          format: int64
+        actorId:
+          type: string
+        actorHandle:
+          type: string
+          description: >
+            milestone-4 fix-round (handle-exposure): the actor's handle —
+            always present, never null (every event has a real actor by
+            construction, DATA_MODEL.md). Deliberately a bare handle, no
+            role, unlike bff-openapi.yaml's own TodoEvent.actor
+            ({handle, role}): my-task's own agent-facing REST contract
+            gives an agent an event's actor as a plain handle string only
+            (`~/gits/my-task/src/server/modules/task/task.queries.ts:88-95`'s
+            `TaskTimelineEvent.actor: string`), while role-based
+            human/agent marking is resolved separately and stays owner-UI
+            only (`~/gits/my-task/src/server/api/routers/task.ts:82-101`'s
+            own `withActorRoles`, never reached from REST) — this field
+            matches that asymmetry.
+        type:
+          type: string
+          description: >
+            `created` | `commented` | `status_changed` | `assigned` |
+            `field_changed` — the full read-side vocabulary
+            (DATA_MODEL.md). `created` only ever appears here as a read
+            value, never as something `POST .../events` accepted (I16).
+        payload:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: >
+            JSON, shape depends on `type` — `{from, to}` pairs for
+            `status_changed`, `null` for `commented`, `{field, from, to}`
+            for `field_changed`. `assigned`'s own `{from, to}` pair is each
+            either `null` or a `{id, handle}` snapshot resolved once, at
+            write time, into the stored payload (milestone-4 fix-round,
+            handle-exposure — matches my-task's own AssigneeSnapshot,
+            `~/gits/my-task/src/server/modules/task/task.service.ts:139-142`,
+            resolved the same way at the same moment: a later handle
+            change never rewrites old history).
+        body:
+          type: string
+          nullable: true
+          description: >
+            The comment text for `type: commented`, `null` otherwise.
+            Rendered client-side through a Markdown-to-React-elements
+            path, never raw HTML (I8's mirror, GOAL.md).
+        clientRequestId:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    TodoEventList:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/TodoEvent"
     ApiKey:
       type: object
       required: [id, prefix, createdAt, expiresAt]
@@ -230,21 +417,97 @@ components:
             $ref: "#/components/schemas/ApiKey"
     CreateTodoRequest:
       type: object
-      required: [title]
+      additionalProperties: false
+      description: >
+        `additionalProperties: false` so a stray `done` (milestone-1/2/3's
+        removed field) is a `validation_error`, not silently dropped
+        (`_contract/API.md`). No `status` field, deliberately (Clara's
+        decision, not a residual gap): every created todo starts `open`
+        regardless of what a caller might ask for. มายด์'s own walkthrough
+        only requires *changing* a todo's status after it exists, never
+        setting one at creation, so `open` as the universal starting
+        point already satisfies the brief. The asymmetry with
+        `assigneeId`/`priority`/`dueDate` being settable here is
+        intentional — `_contract/API.md` states the same reasoning.
+      required: [title, clientRequestId]
       properties:
         title:
           type: string
           minLength: 1
           maxLength: 200
+        assigneeId:
+          type: string
+          nullable: true
+        priority:
+          type: string
+          nullable: true
+          enum: [low, medium, high, urgent]
+        dueDate:
+          type: string
+          format: date-time
+          nullable: true
+        clientRequestId:
+          type: string
+          minLength: 1
+          description: >
+            I19's idempotency key, on the `created` event this endpoint's
+            own side effect writes — required, not optional, since
+            `todo_events.client_request_id` is `NOT NULL UNIQUE` at the
+            schema level for every row including `created` ones.
     UpdateTodoRequest:
       type: object
+      additionalProperties: false
+      description: >
+        milestone-4: `title` only — see `updateTodo`'s own description
+        for why `status`/`assigneeId`/`priority`/`dueDate` aren't here.
+        `additionalProperties: false` so a stray `done` is a
+        `validation_error`, not silently dropped.
+      required: [title, clientRequestId]
       properties:
         title:
           type: string
           minLength: 1
           maxLength: 200
-        done:
-          type: boolean
+        clientRequestId:
+          type: string
+          minLength: 1
+          description: >
+            I19's idempotency key — this endpoint now funnels through
+            the same single write path (I15) as every other mutation.
+    CreateTodoEventRequest:
+      type: object
+      description: >
+        One shape covers all four client-postable `type` values
+        (`_contract/API.md`) — cross-field validation (e.g. `body`
+        required for `commented`, `to` required for `status_changed`) is
+        the handler's job, not this schema's, the same way my-task's own
+        `buildAppendInput` does it in code rather than a `oneOf`
+        discriminator. `type` is deliberately an open string, not an
+        `enum`, so `"created"` and any other unrecognised value reach the
+        handler's own dispatch and are rejected there (I16) — the same
+        path, not a special case for one string.
+      required: [type, clientRequestId]
+      properties:
+        type:
+          type: string
+        clientRequestId:
+          type: string
+          minLength: 1
+        body:
+          type: string
+          description: commented — the comment text.
+        to:
+          type: string
+          nullable: true
+          description: >
+            status_changed — the target status (a `Todo.status` enum
+            value). assigned — the target assignee's user id, or `null`
+            to unassign.
+        field:
+          type: string
+          description: >
+            field_changed — which field `to` changes: `title` |
+            `priority` | `dueDate`.
     Error:
       type: object
       required: [error]
@@ -271,6 +534,19 @@ components:
         Missing, malformed, expired, revoked, wrong-role, or
         inactive-user credential — same shape regardless of which check
         failed (I5).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: >
+        A genuine permission refusal for an authenticated, valid
+        credential — distinct from Unauthorized, which means the
+        credential itself failed. This surface's only case today: an
+        agent key attempting to move a todo to status: closed (I18),
+        code `invalid_transition`, matching my-task's own equivalent
+        check exactly (`~/gits/my-task/src/server/api/v1/errors.ts:130`)
+        rather than the generic 401 this endpoint's first pass used.
       content:
         application/json:
           schema:

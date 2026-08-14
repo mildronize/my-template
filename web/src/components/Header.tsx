@@ -8,10 +8,15 @@
 // NAV_LINKS and the logo text below are the one further edit task-1 left
 // for task-3 (its own report: "flagged in docs/GETTING-STARTED.md's new
 // Step 3b as one of the domain-noun spots ... task-3 still needs to
-// revisit") — a content fix, not a logic change: my-task's own
-// Activity/Tasks/Projects routes don't exist in this template (no
-// projects, no activity log, per GOAL.md's out-of-scope note), so the list
-// is trimmed to the one real content route this SPA actually has.
+// revisit") — a content fix, not a logic change: at task-3 time, my-task's
+// own Activity/Projects routes didn't exist in this template, so the list
+// was trimmed to the one real content route this SPA had.
+//
+// milestone-4/task-7 adds "Activity" back — this template does now have
+// an activity log (ActivityPage.tsx, "/activity"), the one my-task-shaped
+// route task-3's own comment above said didn't apply yet. Still no
+// "Projects" — that domain concept genuinely doesn't exist here
+// (GOAL.md's out-of-scope note, unchanged by this milestone).
 import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import ThemeToggle from "./ThemeToggle";
@@ -25,6 +30,7 @@ import {
 
 const NAV_LINKS: ReadonlyArray<{ href: string; label: string }> = [
   { href: "/", label: "Todos" },
+  { href: "/activity", label: "Activity" },
 ];
 
 /** Return up to two uppercase initials from a display name. */

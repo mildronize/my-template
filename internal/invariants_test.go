@@ -29,21 +29,46 @@ var testFuncNameRe = regexp.MustCompile(`(?m)^func (Test\w+)\(`)
 var invariantHeadingRe = regexp.MustCompile(`(?m)^\*\*I(\d+) —.*$`)
 
 // invariantScopeRe pulls the `scope: <value>` marker out of a single
-// heading line matched by invariantHeadingRe. Two values are recognized:
-// "global" (the check greps the whole repo for a TestI<N>_ test — the
-// only behavior this test had before task-7) and "per-domain-module" (the
-// check requires a TestI<N>_ test inside *every* domain module's own
-// package). See _contract/INVARIANTS.md's own explanation of the tag,
-// right above I1, for why per-domain-module exists: a single domain
-// module's test (e.g. internal/identity's TestI3_..._Keys) used to
-// satisfy a global grep for every other domain module forever, so a
-// forked module could ship zero ownership-scoping tests of its own and
-// stay green (task-7, Clara's second blind fork test).
-var invariantScopeRe = regexp.MustCompile("`scope: (global|per-domain-module)`")
+// heading line matched by invariantHeadingRe. Three forms are
+// recognized:
+//
+//   - "global" — the check greps the whole repo for a TestI<N>_ test
+//     (the only behavior this test had before task-7).
+//   - "per-domain-module" — the check requires a TestI<N>_ test inside
+//     *every* package I3/I4 actually apply to
+//     (perDomainModuleScopePackages, below — a small, explicit,
+//     hand-maintained list, deliberately not domainModuleNames()). See
+//     _contract/INVARIANTS.md's own explanation of the tag, right above
+//     I1, for why this exists: a single domain module's test (e.g.
+//     internal/identity's TestI3_..._Keys) used to satisfy a global grep
+//     for every other domain module forever, so a forked module could
+//     ship zero ownership-scoping tests of its own and stay green
+//     (task-7, Clara's second blind fork test).
+//   - "domain:<name>" — the check requires a TestI<N>_ test inside the
+//     one specific package <name> resolves to (domainScopePackageNames,
+//     below — an explicit name→path mapping, not a naming convention).
+//     Added by the scope-tags fix-round (sequenced before task-6) to stop
+//     conflating "applies to every domain module" (a real coverage
+//     sweep — I3/I4's actual shape) with "applies to exactly one
+//     specific place" (I15-I19, I21's actual shape). The old
+//     per-domain-module tag only "worked" for I15-I19/I21 by coincidence,
+//     because domainModuleNames() had exactly one member (todo) — the
+//     moment I21 (an internal/identity-only invariant) got tagged
+//     per-domain-module, a correctly-placed TestI21_ in internal/identity
+//     would not satisfy the check, and a wrong-location stub under
+//     internal/domain/todo would. <name> is free-form (letters, digits,
+//     "_", "-") purely so INVARIANTS.md can name a domain without this
+//     regex needing to change; the mapping from <name> to an actual
+//     package is intentionally NOT derived from it — see
+//     domainScopePackageNames.
+var invariantScopeRe = regexp.MustCompile("`scope: (global|per-domain-module|domain:[A-Za-z0-9_-]+)`")
 
 const (
 	scopeGlobal          = "global"
 	scopePerDomainModule = "per-domain-module"
+	// scopeDomainPrefix is the "domain:" half of a "domain:<name>" scope
+	// tag — strings.TrimPrefix(scope, scopeDomainPrefix) recovers <name>.
+	scopeDomainPrefix = "domain:"
 )
 
 // promotedInvariantsPath is where a project-wide INVARIANTS.md lives once
@@ -127,13 +152,14 @@ func requiredInvariantNumbers(t *testing.T, root string) []requiredInvariant {
 
 			scopeMatch := invariantScopeRe.FindStringSubmatch(heading)
 			require.NotNilf(t, scopeMatch,
-				"heading %q in %s has no `scope: global` / `scope: per-domain-module` tag — "+
-					"every invariant heading must declare one (see the `scope:` tag note in %s)",
+				"heading %q in %s has no `scope: global` / `scope: per-domain-module` / `scope: domain:<name>` "+
+					"tag — every invariant heading must declare one (see the `scope:` tag note in %s)",
 				heading, path, path)
 			scope := scopeMatch[1]
-			require.Truef(t, scope == scopeGlobal || scope == scopePerDomainModule,
-				"heading %q in %s declares unrecognized scope %q — must be %q or %q",
-				heading, path, scope, scopeGlobal, scopePerDomainModule)
+			require.Truef(t,
+				scope == scopeGlobal || scope == scopePerDomainModule || strings.HasPrefix(scope, scopeDomainPrefix),
+				"heading %q in %s declares unrecognized scope %q — must be %q, %q, or %q<name>",
+				heading, path, scope, scopeGlobal, scopePerDomainModule, scopeDomainPrefix)
 
 			invariants = append(invariants, requiredInvariant{number: n, scope: scope})
 		}
@@ -193,6 +219,104 @@ func hasTestWithPrefix(names []string, prefix string) bool {
 	return false
 }
 
+// domainScopePackageNames is the explicit, hand-maintained name→package
+// mapping a `scope: domain:<name>` tag resolves through. Deliberately not
+// derived from a naming convention (e.g. "domain:<name>" ->
+// internal/domain/<name>) because not every name lives there:
+// internal/identity is deliberately its own layer, not a domain module
+// (_rules/_standard/ARCHITECTURE.md's milestone-2 decision), so
+// "domain:identity" has to be wired to internal/identity by hand, the
+// same as "domain:todo" is wired to internal/domain/todo.
+//
+// An unrecognized name must never resolve here — TestDoneWhen12 treats a
+// lookup miss as a loud abort (require.Truef), not "no package to
+// check," because a domain:<name> tag that silently resolved to nothing
+// would make that invariant's coverage requirement a no-op that passes
+// trivially — the exact failure shape I15's own floor-of-zero bug and the
+// sqlc-ignores-Down measurement were both found and fixed for elsewhere
+// this milestone. TestDomainScopePackageNames_UnknownNameDoesNotResolve
+// below proves this by direct example, not by inspection; the full
+// end-to-end abort (TestDoneWhen12 itself failing given a bogus tag in a
+// real INVARIANTS.md) is attacked by hand once during review (builder
+// report), the same split TestI15Floor_CanActuallyFail already
+// establishes for I15's own floor check.
+func domainScopePackageNames(root string) map[string]string {
+	return map[string]string{
+		"todo":     filepath.Join(root, "internal", "domain", "todo"),
+		"identity": filepath.Join(root, "internal", "identity"),
+	}
+}
+
+// TestDomainScopePackageNames_UnknownNameDoesNotResolve proves the
+// property domainScopePackageNames' own doc comment states in prose: a
+// name nobody wired up (a typo in INVARIANTS.md, or a deliberately bogus
+// tag like a fixture's "domain:bogus-nonexistent-name") does not resolve
+// to a package — it has to come back "not found" so the caller
+// (TestDoneWhen12) is forced into its loud-abort branch instead of
+// silently treating a typo'd scope as "nothing to check."
+func TestDomainScopePackageNames_UnknownNameDoesNotResolve(t *testing.T) {
+	root := repoRoot(t)
+	_, ok := domainScopePackageNames(root)["bogus-nonexistent-name"]
+	assert.Falsef(t, ok,
+		"domain:bogus-nonexistent-name must not resolve to a package — an invariant tagged with an "+
+			"unrecognized domain name has to make TestDoneWhen12 abort loudly, not silently skip its "+
+			"coverage check")
+}
+
+// perDomainModuleScopePackages is the explicit, hand-maintained set of
+// packages I3 (ownership scoping) and I4 (one seam reads identity)
+// actually apply to — the two invariants that keep the `scope:
+// per-domain-module` tag, per the scope-tags fix-round. Deliberately NOT
+// domainModuleNames() (internal/architecture_test.go): that function
+// answers a different question — "what counts as a domain module for
+// fork-restructuring purposes" — and internal/identity correctly failing
+// that question is the existing design (identity is its own layer, not a
+// domain module, per ARCHITECTURE.md's milestone-2 decision), not a gap
+// this list should paper over by widening domainModuleNames() itself.
+//
+// Hand-maintained on purpose: when a new package needs I3/I4 coverage,
+// add it here explicitly, with a one-line reason, the same way
+// internal/identity's own entry below carries one. Nothing mechanical can
+// discover that a *non-domain* package needs I3/I4 the way it can
+// discover a missing domain module (see the superset assertion below,
+// TestPerDomainModuleScopeCoversEveryDomainModule) — a human has to
+// notice and add the line.
+func perDomainModuleScopePackages(root string) map[string]string {
+	return map[string]string{
+		// The todo domain module: I3's ownership-scoping and I4's
+		// single-seam-identity-read properties both apply to it
+		// directly.
+		"todo": filepath.Join(root, "internal", "domain", "todo"),
+		// internal/identity is deliberately not under internal/domain/
+		// (ARCHITECTURE.md's milestone-2 decision) but owns the
+		// users/api_keys tables I4 is actually about, and I3's
+		// ownership-scoping applies to its own key-listing — it belongs
+		// in this list even though it fails domainModuleNames().
+		"identity": filepath.Join(root, "internal", "identity"),
+	}
+}
+
+// TestPerDomainModuleScopeCoversEveryDomainModule asserts
+// perDomainModuleScopePackages is a superset of domainModuleNames()'s own
+// module names — a new domain module nobody remembered to add to the
+// hand-maintained I3/I4 list has to fail this loudly (a real coverage
+// gap: that module silently exempt from I3/I4), not pass silently. This
+// cannot and does not try to catch the other direction — a new
+// *non-domain* package (like internal/identity) needing I3/I4 coverage —
+// nothing mechanical can know that in advance; see
+// perDomainModuleScopePackages' own comment for what adding one requires.
+func TestPerDomainModuleScopeCoversEveryDomainModule(t *testing.T) {
+	root := repoRoot(t)
+	explicit := perDomainModuleScopePackages(root)
+	for _, module := range domainModuleNames(t, root) {
+		assert.Containsf(t, explicit, module,
+			"domain module %q (domainModuleNames, internal/architecture_test.go) is missing from "+
+				"perDomainModuleScopePackages (internal/invariants_test.go) — a domain module must never be "+
+				"silently exempt from I3/I4; add it to that map explicitly, with a one-line reason",
+			module)
+	}
+}
+
 // TestDoneWhen12_EveryInvariantHasANamedTest is GOAL.md Done-when 12's own
 // check, not just an instance of the convention it enforces: every
 // invariant _contract/INVARIANTS.md numbers must have at least one test
@@ -207,26 +331,41 @@ func hasTestWithPrefix(names []string, prefix string) bool {
 // stays green forever because it only ever knew about I1-I10 (task-5.md).
 //
 // Each invariant also carries a `scope:` tag (task-7, fixing a real
-// security hole Clara's second blind fork test found): a `global`-scope
-// invariant keeps the original behavior — a TestI<N>_ test anywhere in
-// the repo satisfies it. A `per-domain-module`-scope invariant (I3, I4)
-// instead requires a TestI<N>_ test inside *every* domain module's own
-// package (domainModuleNames, internal/architecture_test.go — the same
-// enumeration TestArchitecture_DomainFileImportRules uses, so the two
-// tests can never disagree about what counts as a domain module).
-// Without this distinction, one domain module's test (e.g.
-// internal/identity's pre-existing TestI3_..._Keys) silently satisfied
-// I3's requirement for every other domain module forever — proven by
-// Clara's agent renaming every TestI3_ test out of its new
-// internal/bookmark module and watching the suite stay green anyway.
+// security hole Clara's second blind fork test found, extended by the
+// scope-tags fix-round ahead of task-6): a `global`-scope invariant keeps
+// the original behavior — a TestI<N>_ test anywhere in the repo satisfies
+// it. A `per-domain-module`-scope invariant (I3, I4 only, as of the
+// fix-round) instead requires a TestI<N>_ test inside *every* package
+// perDomainModuleScopePackages names — a small, explicit, hand-maintained
+// list (asserted a superset of domainModuleNames() by
+// TestPerDomainModuleScopeCoversEveryDomainModule, above), deliberately
+// not domainModuleNames() itself. Without the per-domain-module
+// distinction, one domain module's test (e.g. internal/identity's
+// pre-existing TestI3_..._Keys) silently satisfied I3's requirement for
+// every other domain module forever — proven by Clara's agent renaming
+// every TestI3_ test out of its new internal/bookmark module and watching
+// the suite stay green anyway.
 //
-// task-2 supplied I1, I2, I5-I10; task-3 supplied I3, I4 (todos is the
-// last new table this milestone adds — there is no task after this one
-// that could still be missing an invariant test), so this is the first
-// point in the plan all ten should be present. This test is what
-// confirms that fact rather than assuming it — it fails loudly, naming
-// exactly which invariant (and, for per-domain-module ones, which module)
-// has no test.
+// A `domain:<name>`-scope invariant (I15-I19, I21, since the fix-round)
+// requires a TestI<N>_ test inside the one specific package <name>
+// resolves to (domainScopePackageNames, above) — not a coverage sweep
+// like per-domain-module, an address. This exists because
+// per-domain-module originally conflated the two: I15-I19/I21 each
+// belong to exactly one place (I15-I19 to internal/domain/todo, I21 to
+// internal/identity), and tagging them per-domain-module only "worked"
+// because domainModuleNames() had exactly one member (todo) — the moment
+// I21 needed a test in internal/identity specifically, per-domain-module
+// would have accepted a wrong-location stub under internal/domain/todo
+// instead of demanding the real thing.
+//
+// task-2 supplied I1, I2, I5-I10; task-3 supplied I3, I4; the fix-round
+// re-scoped I15-I19 and I21 from per-domain-module to domain:<name> so
+// this check demands their tests in the right package instead of the
+// wrong one. This test confirms the full required set has a test rather
+// than assuming it — it fails loudly, naming exactly which invariant
+// (and, for per-domain-module/domain:<name> ones, which package) has no
+// test, and aborts outright if a domain:<name> tag names a package this
+// file doesn't know about (domainScopePackageNames' own doc comment).
 //
 // Known limitation, documented for readers in docs/GETTING-STARTED.md's
 // "Invariants" section too: this only checks test *names*, not bodies. An
@@ -261,35 +400,58 @@ func TestDoneWhen12_EveryInvariantHasANamedTest(t *testing.T) {
 
 	globalNames := collectTestFuncNames(t, root)
 
-	modules := domainModuleNames(t, root)
-	perModuleNames := make(map[string][]string, len(modules))
-	for _, module := range modules {
-		// domainModuleNames (internal/architecture_test.go) enumerates
-		// internal/domain/*'s own subdirectories post-restructure — join
-		// against that same path, not internal/<module> (milestone-1's
-		// path, before the domain/transport split moved every domain
-		// module one directory deeper).
-		perModuleNames[module] = collectTestFuncNames(t, filepath.Join(root, "internal", "domain", module))
+	perModulePkgs := perDomainModuleScopePackages(root)
+	perModuleNames := make(map[string][]string, len(perModulePkgs))
+	for module, dir := range perModulePkgs {
+		perModuleNames[module] = collectTestFuncNames(t, dir)
 	}
+
+	domainPkgs := domainScopePackageNames(root)
+	domainScopeNames := make(map[string][]string, len(domainPkgs))
 
 	for _, inv := range required {
 		prefix := fmt.Sprintf("TestI%d_", inv.number)
 
-		switch inv.scope {
-		case scopeGlobal:
+		switch {
+		case inv.scope == scopeGlobal:
 			assert.Truef(t, hasTestWithPrefix(globalNames, prefix),
 				"no test named %s<something> found anywhere under %s — "+
 					"_contract/INVARIANTS.md's I%d (scope: global) has no test referencing it (GOAL.md Done-when 12)",
 				prefix, root, inv.number)
 
-		case scopePerDomainModule:
-			for _, module := range modules {
+		case inv.scope == scopePerDomainModule:
+			for module, dir := range perModulePkgs {
 				assert.Truef(t, hasTestWithPrefix(perModuleNames[module], prefix),
-					"no test named %s<something> found inside internal/domain/%s's own package — "+
+					"no test named %s<something> found inside %s's own package — "+
 						"_contract/INVARIANTS.md's I%d (scope: per-domain-module) requires a dedicated test "+
-						"in every domain module, not just somewhere in the repo (GOAL.md Done-when 12; task-7)",
-					prefix, module, inv.number)
+						"in every package I3/I4 apply to (perDomainModuleScopePackages), not just somewhere in "+
+						"the repo (GOAL.md Done-when 12; task-7)",
+					prefix, dir, inv.number)
 			}
+
+		case strings.HasPrefix(inv.scope, scopeDomainPrefix):
+			name := strings.TrimPrefix(inv.scope, scopeDomainPrefix)
+			dir, ok := domainPkgs[name]
+			// Loud abort, not a silent "nothing to check": a domain:<name>
+			// tag naming a package this file doesn't know about must never
+			// let I<N>'s coverage requirement resolve to a no-op that
+			// passes trivially — the same failure shape I15's own
+			// floor-of-zero bug and the sqlc-ignores-Down measurement were
+			// both found and fixed for elsewhere this milestone.
+			require.Truef(t, ok,
+				"_contract/INVARIANTS.md's I%d declares scope %q, but %q is not a known domain name — "+
+					"add it to domainScopePackageNames (internal/invariants_test.go) with an explicit package "+
+					"path, or fix the typo in INVARIANTS.md (GOAL.md Done-when 12)",
+				inv.number, inv.scope, name)
+
+			if _, cached := domainScopeNames[name]; !cached {
+				domainScopeNames[name] = collectTestFuncNames(t, dir)
+			}
+			assert.Truef(t, hasTestWithPrefix(domainScopeNames[name], prefix),
+				"no test named %s<something> found inside %s (scope: domain:%s) — "+
+					"_contract/INVARIANTS.md's I%d requires a dedicated test in that specific package, not "+
+					"just somewhere in the repo (GOAL.md Done-when 12)",
+				prefix, dir, name, inv.number)
 
 		default:
 			// requiredInvariantNumbers already validates scope against

@@ -50,6 +50,28 @@ type APIKey struct {
 	ExpiresAt time.Time
 	// RevokedAt is nil when the key has not been revoked.
 	RevokedAt *time.Time
+	// Handle is the owning user's handle — nil for every method that has
+	// no reason to resolve one (GetAPIKeyByHash, CreateAPIKey,
+	// ListAPIKeysByOwner, RevokeAPIKey: each already scoped to a single
+	// known userID, so a caller resolving its own identity gains nothing
+	// from a redundant handle on every row). Populated only by
+	// ListAllAgentAPIKeys (milestone-4 fix-round, handle-exposure) — the
+	// owner-facing settings page's whole reason for existing is showing
+	// WHICH agent a row belongs to (my-task's own api-key-settings.tsx:
+	// `{k.handle}` on every row, "Revoke {handle}'s key?"), and that is
+	// the one query whose own SQL (db/queries/api_keys.sql) now joins
+	// users for it.
+	//
+	// A pointer on the shared type, not a second, ListAllAgentAPIKeys-only
+	// return type: every consumer already handles APIKey as one shape
+	// (RevokeAnyAgentAPIKey takes/returns it, keys_handler.go's toBFFKey
+	// maps it), and a second parallel type would need either its own
+	// toBFFKey twin or a lossy conversion back to APIKey before reaching
+	// that mapper — more moving parts for one optional field. Every other
+	// method leaves this nil, never a guessed or empty-string value, so a
+	// caller can tell "not resolved by this method" apart from a
+	// hypothetical future empty handle.
+	Handle *string
 }
 
 func userFromRow(row db.User) User {
@@ -156,6 +178,22 @@ func (r *Repo) CreateUser(ctx context.Context, handle, role string, ssoSubject *
 	return userFromRow(row), nil
 }
 
+// ListActiveUsers returns every active user, either role, ordered by
+// handle — GET /api/bff/users' own source (the assignee-picker's data),
+// mirroring my-task's own user.ts router (`WHERE active = true ORDER BY
+// handle`, "humans and agents in one list").
+func (r *Repo) ListActiveUsers(ctx context.Context) ([]User, error) {
+	rows, err := r.q.ListActiveUsers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	users := make([]User, 0, len(rows))
+	for _, row := range rows {
+		users = append(users, userFromRow(row))
+	}
+	return users, nil
+}
+
 // GetAPIKeyByHash looks up an api_keys row by key_hash — the API-key
 // branch's lookup (task-2.md step 2).
 func (r *Repo) GetAPIKeyByHash(ctx context.Context, hash string) (APIKey, error) {
@@ -216,6 +254,60 @@ func (r *Repo) RevokeAPIKey(ctx context.Context, id, userID string) (APIKey, err
 		RevokedAt: sql.NullTime{Time: time.Now().UTC(), Valid: true},
 		ID:        id,
 		UserID:    userID,
+	})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return APIKey{}, ErrNotFound
+		}
+		return APIKey{}, err
+	}
+	return apiKeyFromRow(row), nil
+}
+
+// ListAllAgentAPIKeys returns every role='agent' user's non-revoked keys
+// (I21) — the owner-facing settings-page query, deliberately not scoped to
+// any one user_id. Unlike ListAPIKeysByOwner (which structurally can never
+// be non-empty for a session owner, since no key is ever issued to
+// role='owner' — I2), this is the query the settings page actually needs.
+//
+// milestone-4 fix-round (handle-exposure): the underlying query
+// (db/queries/api_keys.sql) now JOINs users for the owning agent's
+// handle, so every APIKey returned here has Handle set (never nil) — the
+// query's own JOIN, not LEFT JOIN, guarantees a matching users row exists
+// for every api_keys row it returns.
+func (r *Repo) ListAllAgentAPIKeys(ctx context.Context) ([]APIKey, error) {
+	rows, err := r.q.ListAllAgentAPIKeys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]APIKey, 0, len(rows))
+	for _, row := range rows {
+		k := apiKeyFromRow(db.ApiKey{
+			ID:        row.ID,
+			UserID:    row.UserID,
+			KeyHash:   row.KeyHash,
+			KeyPrefix: row.KeyPrefix,
+			CreatedAt: row.CreatedAt,
+			ExpiresAt: row.ExpiresAt,
+			RevokedAt: row.RevokedAt,
+		})
+		handle := row.Handle
+		k.Handle = &handle
+		keys = append(keys, k)
+	}
+	return keys, nil
+}
+
+// RevokeAPIKeyByID revokes the key identified by id alone (I21) — no
+// user_id scoping, since the owner-facing endpoint may revoke any agent's
+// key, not just one caller's own. Session-gating (must be an owner at all)
+// is the handler's job, not this query's; ErrNotFound covers both "no such
+// key" and "already revoked", the same "absence, not permission" shape
+// RevokeAPIKey gives the self-scoped case.
+func (r *Repo) RevokeAPIKeyByID(ctx context.Context, id string) (APIKey, error) {
+	row, err := r.q.RevokeAPIKeyByID(ctx, db.RevokeAPIKeyByIDParams{
+		RevokedAt: sql.NullTime{Time: time.Now().UTC(), Valid: true},
+		ID:        id,
 	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
