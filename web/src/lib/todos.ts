@@ -14,6 +14,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { bffFetch } from "~/lib/api/client";
 import type { components } from "~/lib/api/bff-schema.gen";
 import type { TimelineEventData } from "~/components/TimelineEventRow";
+import type { AuthRole } from "~/lib/auth-client";
 
 export type Todo = components["schemas"]["Todo"];
 export type TodoStatus = Todo["status"];
@@ -40,7 +41,7 @@ export const TODO_STATUSES: TodoStatus[] = ["open", "in_progress", "done", "clos
  * milestone gives the BFF a non-owner session shape, this is the one
  * place that has to change.
  */
-export function canCloseTodo(sessionRole: string | undefined): boolean {
+export function canCloseTodo(sessionRole: AuthRole | undefined): boolean {
   return sessionRole === "owner";
 }
 

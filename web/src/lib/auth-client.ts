@@ -15,14 +15,44 @@
 // those (there's no separate display name/email on this surface; `role`
 // rides along as the secondary line since it's the next most useful thing
 // to show in that popover).
+//
+// milestone-4 hardening: `role` is now ALSO exposed as its own,
+// properly-named, narrowly-typed field (`AuthUser.role`), not just
+// smuggled inside `email` for display. Clara found this by reading
+// `TodoRow.tsx`/`TodoDetailPage.tsx` passing `session?.user.email` into
+// `canCloseTodo` and concluded the argument must be `undefined` (no
+// `email` field on `Me`) — a reasonable read of the generated schema
+// alone, and wrong only because this file's `email: me.role` reuse is
+// exactly the kind of thing a schema read can't see. A rendering test
+// (`TodosList.test.tsx`, opening the real control) proved the reused
+// field actually carried the right value and `closed` genuinely was
+// offered for a mocked owner session — so the specific mechanism
+// suspected here was not the live bug. It is still worth fixing on its
+// own: overloading a display field to secretly carry a security-relevant
+// value is a real landmine (it fooled a careful reader once already),
+// independent of whether it caused มายด์'s observed one. `AuthRole`'s
+// union type is the actual fix Clara asked for — `string | undefined`
+// would have let `.email` compile into `canCloseTodo` without complaint;
+// this type would not.
 import { useQuery } from "@tanstack/react-query";
 
 import type { components } from "~/lib/api/bff-schema.gen";
+
+/** The only two role strings `Me.role` (or `users.role`, DATA_MODEL.md) is ever allowed to carry. */
+export type AuthRole = "owner" | "agent";
 
 export interface AuthUser {
   id: string;
   name: string;
   email: string;
+  /**
+   * `undefined` for any role string that isn't exactly "owner" or
+   * "agent" — fails closed the same direction `todo.PolicyActor`'s own
+   * doc comment does for an unrecognized role (permission.go), rather
+   * than letting a typo or a future role value silently satisfy (or
+   * silently fail to satisfy) a `=== "owner"` check either way.
+   */
+  role: AuthRole | undefined;
 }
 
 export interface AuthSession {
@@ -37,9 +67,13 @@ interface UseSessionResult {
 
 export const meQueryKey = ["bff", "me"] as const;
 
+function toAuthRole(role: string): AuthRole | undefined {
+  return role === "owner" || role === "agent" ? role : undefined;
+}
+
 function toAuthSession(me: components["schemas"]["Me"]): AuthSession {
   return {
-    user: { id: me.handle, name: me.handle, email: me.role },
+    user: { id: me.handle, name: me.handle, email: me.role, role: toAuthRole(me.role) },
   };
 }
 

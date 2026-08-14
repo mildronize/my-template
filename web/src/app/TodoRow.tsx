@@ -46,7 +46,7 @@ import {
 function StatusControl({ todo }: { todo: Todo }) {
   const { data: session } = useSession();
   const createEvent = useCreateTodoEventMutation();
-  const offeredStatuses = canCloseTodo(session?.user.email)
+  const offeredStatuses = canCloseTodo(session?.user.role)
     ? TODO_STATUSES
     : TODO_STATUSES.filter((s) => s !== "closed");
 

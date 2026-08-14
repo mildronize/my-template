@@ -48,7 +48,7 @@ function StatusControl({ todoId, status }: { todoId: string; status: TodoStatus 
   const { data: session } = useSession();
   const createEvent = useCreateTodoEventMutation();
   // I18's own frontend reflection — see this file's header comment.
-  const offeredStatuses = canCloseTodo(session?.user.email)
+  const offeredStatuses = canCloseTodo(session?.user.role)
     ? TODO_STATUSES
     : TODO_STATUSES.filter((s) => s !== "closed");
 
