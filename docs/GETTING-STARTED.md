@@ -801,7 +801,7 @@ environment setup step, not something every run repeats:
      browser. This redirects to Hydra and back through `GET /callback`
      once you complete a real login there. No automated check can drive
      *your own* production Hydra's real consent screen for you — but
-     `e2e/` (TPL-3) does prove this exact code path (redirect, PKCE,
+     `e2e/` does prove this exact code path (redirect, PKCE,
      callback, session issuance) automatically, against a real local
      OIDC issuer it stands up and tears down itself (`make e2e`,
      `e2e/README.md`). That's a claim about the *code*, not about

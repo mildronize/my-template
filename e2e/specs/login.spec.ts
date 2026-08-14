@@ -1,4 +1,5 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type TestInfo } from "@playwright/test";
+import { loginAsOwner } from "../fixtures/login-as-owner";
 
 // TPL-3's first spec — the path nothing in this project has ever
 // exercised before: a real browser navigating to /login, following the
@@ -14,19 +15,15 @@ import { test, expect } from "@playwright/test";
 // redirect, PKCE, callback, session issuance — the same contract
 // production Hydra also implements, against a local instance seeded for
 // this run alone.
-test("owner logs in through the real local OIDC issuer and lands on an authenticated page", async ({ page, baseURL }) => {
+test("owner logs in through the real local OIDC issuer and lands on an authenticated page", async ({ page, baseURL }, testInfo: TestInfo) => {
   console.log(`[login.spec] issuer under test: http://127.0.0.1:24444 (local, e2e-only — not production Hydra)`);
-
-  await page.goto("/login");
 
   // The full redirect chain — /login -> Hydra's /oauth2/auth -> the
   // login-consent stub's /login -> Hydra -> the stub's /consent -> Hydra
   // -> back to this app's own /callback -> a final redirect to "/" — all
   // happens via real HTTP 302s the browser itself follows. No step here
   // is mocked or skipped.
-  await page.waitForURL((url) => url.origin === new URL(baseURL!).origin && url.pathname === "/", {
-    timeout: 15_000,
-  });
+  await loginAsOwner(page, baseURL!);
 
   // The real proof this worked: a session cookie now exists (set by
   // internal/transport/bff/callback_handler.go's own signer, not by
@@ -47,4 +44,11 @@ test("owner logs in through the real local OIDC issuer and lands on an authentic
   // cookie exists."
   await page.getByRole("button", { name: "User menu" }).click();
   await expect(page.getByText("owner", { exact: true }).first()).toBeVisible();
+
+  // Attached on every run, pass or fail — not just Playwright's own
+  // failure-only default (playwright.config.ts's screenshot: "only-on-
+  // failure" covers unexpected crashes; this is deliberate evidence for
+  // a spot-check reading a report rather than running the suite
+  // themselves, so a passing run has to leave something to look at too).
+  await testInfo.attach("logged-in-owner-view", { body: await page.screenshot(), contentType: "image/png" });
 });

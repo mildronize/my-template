@@ -122,4 +122,79 @@ describe("TodoDetailPage's AssigneeControl", () => {
 
     expect(assignPostBody).toMatchObject({ type: "assigned", to: "user-clara" });
   });
+
+  // The jsdom half of e2e/specs/assignee-picker-real-click.spec.ts's own
+  // discrimination proof (that ticket's own required gate: a residue
+  // spec has to be shown catching something jsdom genuinely cannot,
+  // not asserted to). Same manufactured regression — a transparent,
+  // full-viewport element painted above the assignee trigger, without
+  // pointer-events: none — run here instead of in a real browser.
+  //
+  // In a real browser this element would intercept the click entirely
+  // (Playwright's own actionability checks refuse it, per that spec).
+  // Here, it doesn't: jsdom has no layout engine, so nothing in this
+  // environment can compute that the overlay visually covers the
+  // trigger — userEvent.click() dispatches straight to the DOM node
+  // it's given. This test asserts that gap directly, on purpose: it
+  // is the fact that makes the browser spec real residue rather than
+  // a redundant re-check of something already covered here.
+  it("(jsdom control) the SAME overlapping element does not block userEvent.click() — this is the gap the browser spec exists to close, not a bug in this test", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/api/bff/me")) {
+        return new Response(JSON.stringify({ handle: "owner", role: "owner", active: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/bff/users")) {
+        return new Response(JSON.stringify({ users: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/bff/todos/todo-1/events")) {
+        return new Response(JSON.stringify({ events: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/bff/todos/todo-1")) {
+        return new Response(
+          JSON.stringify({
+            id: "todo-1",
+            title: "review the pr",
+            status: "open",
+            assigneeId: null,
+            assigneeHandle: null,
+            priority: null,
+            dueDate: null,
+            createdBy: "owner-1",
+            createdAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      throw new Error(`TodoDetailPage.test.tsx: unexpected fetch to ${url}`);
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    renderDetailPage();
+    const trigger = await screen.findByRole("combobox", { name: "Assignee" });
+
+    const overlay = document.createElement("div");
+    overlay.id = "e2e-residue-overlay";
+    overlay.style.cssText = "position:fixed;inset:0;z-index:99999;background:transparent;";
+    document.body.appendChild(overlay);
+
+    // The point of this test: this does NOT throw, and the popover DOES
+    // open — jsdom never noticed the overlay. A real browser's own
+    // actionability check would have refused this exact click (see the
+    // Playwright spec this test is paired with).
+    await userEvent.click(trigger);
+    expect(await screen.findByRole("button", { name: "Unassigned" })).toBeInTheDocument();
+
+    overlay.remove();
+  });
 });

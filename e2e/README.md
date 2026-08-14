@@ -1,4 +1,4 @@
-# Browser e2e (TPL-3)
+# Browser e2e
 
 Real browser, real Hydra, real redirect/PKCE/callback chain — against a
 **local** OIDC issuer this suite stands up and tears down itself, not

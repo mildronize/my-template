@@ -13,7 +13,13 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: 0,
   workers: 1,
-  reporter: [["list"]],
+  // "list" for terminal output; "html" (open: "never" — a spot-check
+  // reads the report file, this shouldn't also try to launch a browser
+  // tab on whatever machine runs it) so every run's attachments —
+  // login.spec.ts's own logged-in-owner screenshot included — are
+  // actually saved somewhere a report can point at, not only kept for
+  // failures the way trace/screenshot below already are.
+  reporter: [["list"], ["html", { open: "never" }]],
   globalSetup: "./global-setup.ts",
   globalTeardown: "./global-teardown.ts",
   use: {
