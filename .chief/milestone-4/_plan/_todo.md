@@ -363,6 +363,28 @@ caught a missing invariant test.
       shape as milestone-3's task-5.** `go test ./...` and the JS suite
       green together, from a fresh clone, not independently at the point
       each was last touched. `docker compose up` still works.
+      **`make smoke` against a genuinely throwaway server/database, on a
+      port other than มายด์'s own walkthrough instance — permanently part
+      of this gate from here on, not a one-time addition for this round.**
+      Reasoning: `cmd/smoke` is the only check in this repo that goes
+      through the real `Authorization: Bearer` header ->
+      `identity.Service.ResolveActor` -> key-hash lookup -> database round
+      trip, against a genuinely separate running process — every test
+      under `go test ./...`, `internal/invariants_test.go` included,
+      injects the actor directly on an in-process gin context instead.
+      It sat untouched across this milestone's entire branch, still
+      speaking the pre-milestone-4 wire shape (`done: bool`,
+      `DELETE /api/v1/todos/:id`), and nothing noticed: `make test`
+      (this same gate) never runs `make smoke`, so a fully green suite
+      coexisted with zero working verification of I1 (and, it turned
+      out, I16/I18/I19) over a real network path for this entire
+      milestone. A gate nothing runs is not a gate — the fix isn't just
+      updating `cmd/smoke` once, it's making running it part of what
+      "final verification" means going forward, so the same silent drift
+      can't happen again on whatever comes after milestone-4. Run against
+      a throwaway instance, never มายด์'s own — `cmd/smoke` writes real,
+      un-deletable rows (milestone-4 removed `DELETE /api/v1/todos/:id`
+      entirely) and mints real disposable users on every run.
       **Then the walkthrough gate (Clara/มายด์'s explicit instruction,
       not optional)**: attempt มายด์'s own five-step acceptance walkthrough
       as far as this crew's tooling actually reaches — no browser
