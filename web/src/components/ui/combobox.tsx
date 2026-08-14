@@ -40,6 +40,7 @@ export function Combobox({
   className,
   triggerClassName,
   triggerLabel,
+  "aria-label": ariaLabel,
 }: {
   value: string | undefined;
   options: ComboboxOption[];
@@ -53,6 +54,8 @@ export function Combobox({
    * every select should not cost the ones that already said something extra.
    */
   triggerLabel?: ReactNode;
+  /** Distinguishes this trigger from any other combobox-role control on the same page (e.g. `~/components/ui/select`'s own trigger shares the same ARIA role). */
+  "aria-label"?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -96,6 +99,7 @@ export function Combobox({
           variant="outline"
           role="combobox"
           aria-expanded={open}
+          aria-label={ariaLabel}
           className={triggerClassName ?? "h-9 justify-between font-normal"}
         >
           <span className={selected ? "" : "text-[var(--sea-ink-soft)]"}>

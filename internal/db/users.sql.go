@@ -111,3 +111,45 @@ func (q *Queries) GetUserBySSOSubject(ctx context.Context, ssoSubject sql.NullSt
 	)
 	return i, err
 }
+
+const listActiveUsers = `-- name: ListActiveUsers :many
+SELECT id, handle, role, active, sso_subject, created_at, updated_at FROM users
+WHERE active = TRUE
+ORDER BY handle
+`
+
+// Every active user, either role -- the assignee-picker's own source
+// (GET /api/bff/users), mirroring my-task's user.ts router exactly
+// (WHERE active = true ORDER BY handle, "humans and agents in one
+// list"). Inactive users are excluded so a picker never offers assigning
+// to someone who can no longer act.
+func (q *Queries) ListActiveUsers(ctx context.Context) ([]User, error) {
+	rows, err := q.db.QueryContext(ctx, listActiveUsers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []User
+	for rows.Next() {
+		var i User
+		if err := rows.Scan(
+			&i.ID,
+			&i.Handle,
+			&i.Role,
+			&i.Active,
+			&i.SsoSubject,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

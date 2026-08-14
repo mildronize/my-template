@@ -18,7 +18,6 @@ import { useParams, Link } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 
 import { Button } from "~/components/ui/button";
-import { Input } from "~/components/ui/input";
 import { Textarea } from "~/components/ui/textarea";
 import { Spinner } from "~/components/ui/spinner";
 import { Badge } from "~/components/ui/badge";
@@ -29,6 +28,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "~/components/ui/select";
+import { Combobox } from "~/components/ui/combobox";
 import { ErrorState } from "~/components/ErrorState";
 import { TimelineEventRow } from "~/components/TimelineEventRow";
 import { useSession } from "~/lib/auth-client";
@@ -41,6 +41,7 @@ import {
   TODO_STATUSES,
   type TodoStatus,
 } from "~/lib/todos";
+import { useUsersQuery, assigneeOptions, UNASSIGNED } from "~/lib/users";
 
 const PRIORITIES = ["low", "medium", "high", "urgent"] as const;
 
@@ -105,57 +106,34 @@ function PriorityControl({ todoId, priority }: { todoId: string; priority: strin
 }
 
 /**
- * Free-text assignee-id field, not a picker. This is unchanged by the
- * milestone-4 handle-exposure fix-round on purpose: my-task's own task
- * detail page picks an assignee from a `<Combobox>` of known handles
- * (`~/gits/my-task/src/app/(app)/tasks/[ref]/page.tsx`'s `usersQuery`),
- * but building that here would mean adding a new `GET /api/bff/users`-
- * shaped endpoint this milestone's contract does not have — a real,
- * separate piece of work, noted as a possible follow-up rather than
- * built speculatively in this fix-round. What DID close: the control now
- * shows the current assignee's resolved handle as a label (below), not
- * just the raw id inside the input — `Todo.assigneeHandle`, the new field
- * this fix-round added. The input itself still reads/writes a raw id:
- * `assigned`'s wire `to` is unchanged (still an id, `_contract/API.md`),
- * so submitting the handle text here would not work — this is
- * deliberately not "solved" by quietly swapping the input's own value to
- * a handle without a real picker behind it.
+ * Assignee picker — a `<Combobox>` of known handles, matching my-task's
+ * own task detail page exactly
+ * (`~/gits/my-task/src/app/(app)/tasks/[ref]/page.tsx`'s `usersQuery` +
+ * `Combobox`). Replaces the earlier free-text id input (milestone-4
+ * handle-exposure fix-round's own note on this control: building a real
+ * picker needed a `GET /api/bff/users`-shaped endpoint the contract
+ * didn't have yet — that endpoint now exists, มายด์ asked for exactly
+ * this). The Combobox's own `value` is the user's id (what `assigned`'s
+ * wire `to` actually takes — `~/lib/users.ts`'s `assigneeOptions`), its
+ * `label` is the handle — so a caller reads a name and writes an id
+ * without ever handling one directly.
  */
-function AssigneeControl({
-  todoId,
-  assigneeId,
-  assigneeHandle,
-}: {
-  todoId: string;
-  assigneeId: string | null;
-  assigneeHandle: string | null;
-}) {
+function AssigneeControl({ todoId, assigneeId }: { todoId: string; assigneeId: string | null }) {
   const createEvent = useCreateTodoEventMutation();
-  const [draft, setDraft] = useState(assigneeId ?? "");
-
-  function commit() {
-    const trimmed = draft.trim();
-    if (trimmed === (assigneeId ?? "")) return;
-    createEvent.mutate({ id: todoId, type: "assigned", to: trimmed || null });
-  }
+  const usersQuery = useUsersQuery();
+  const options = assigneeOptions(usersQuery.data ?? []);
 
   return (
-    <div className="flex flex-col gap-0.5">
-      <Input
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") commit();
-        }}
-        placeholder="unassigned (paste a user id)"
-        className="h-8 w-56"
-        aria-label="Assignee user id"
-      />
-      {assigneeHandle && (
-        <span className="text-xs text-[var(--sea-ink-soft)]">currently: {assigneeHandle}</span>
-      )}
-    </div>
+    <Combobox
+      value={assigneeId ?? UNASSIGNED}
+      options={options}
+      onChange={(next) =>
+        createEvent.mutate({ id: todoId, type: "assigned", to: next === UNASSIGNED ? null : next })
+      }
+      placeholder={usersQuery.isPending ? "Loading…" : "Unassigned"}
+      aria-label="Assignee"
+      triggerClassName="h-8 w-56 justify-between font-normal text-sm"
+    />
   );
 }
 
@@ -236,11 +214,7 @@ export default function TodoDetailPage() {
         </div>
         <div className="flex flex-col gap-1">
           <span className="text-xs text-[var(--sea-ink-soft)]">Assignee</span>
-          <AssigneeControl
-            todoId={todo.id}
-            assigneeId={todo.assigneeId}
-            assigneeHandle={todo.assigneeHandle}
-          />
+          <AssigneeControl todoId={todo.id} assigneeId={todo.assigneeId} />
         </div>
         {todo.dueDate && (
           <Badge variant="outline" className="ml-auto">

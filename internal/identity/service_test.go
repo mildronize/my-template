@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -68,6 +69,19 @@ func (f *fakeUserRepo) CreateUser(_ context.Context, handle, role string, ssoSub
 	}
 	f.put(u)
 	return u, nil
+}
+
+// ListActiveUsers returns every stored user with Active set, sorted by
+// handle — mirrors the real query's WHERE active = TRUE ORDER BY handle.
+func (f *fakeUserRepo) ListActiveUsers(_ context.Context) ([]User, error) {
+	users := make([]User, 0, len(f.byID))
+	for _, u := range f.byID {
+		if u.Active {
+			users = append(users, u)
+		}
+	}
+	sort.Slice(users, func(i, j int) bool { return users[i].Handle < users[j].Handle })
+	return users, nil
 }
 
 type fakeAPIKeyRepo struct {

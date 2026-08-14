@@ -7,6 +7,14 @@
 // the one mocked todo's title appears AND that a title never present in
 // the mock does not — the negative control that makes the test able to
 // fail for the right reason (not rendering from stale/global state).
+//
+// This round: an optional `assigneeFilter` (a user id, or undefined for
+// "everyone" — TodosPage.tsx's own `ALL_ASSIGNEES` sentinel never
+// reaches this component, only its resolved meaning does), applied
+// client-side against the already-fetched, already-unpaginated list
+// (`_contract/API.md`) — GET /api/bff/todos returns every todo
+// regardless, so there is no server round trip a client-side filter here
+// skips.
 import { ListTodo } from "lucide-react";
 
 import { EmptyState } from "~/components/EmptyState";
@@ -15,7 +23,7 @@ import { Spinner } from "~/components/ui/spinner";
 import { useTodosQuery } from "~/lib/todos";
 import { TodoRow } from "./TodoRow";
 
-export function TodosList() {
+export function TodosList({ assigneeFilter }: { assigneeFilter?: string } = {}) {
   const query = useTodosQuery();
 
   if (query.isPending) {
@@ -30,15 +38,23 @@ export function TodosList() {
     return <ErrorState message="Couldn't load todos." onRetry={() => void query.refetch()} />;
   }
 
-  if (query.data.length === 0) {
+  const todos = assigneeFilter
+    ? query.data.filter((todo) => todo.assigneeId === assigneeFilter)
+    : query.data;
+
+  if (todos.length === 0) {
     return (
-      <EmptyState icon={ListTodo} title="No todos yet" description="Create one to get started." />
+      <EmptyState
+        icon={ListTodo}
+        title={assigneeFilter ? "No todos for this assignee" : "No todos yet"}
+        description={assigneeFilter ? "Try a different assignee, or Anyone." : "Create one to get started."}
+      />
     );
   }
 
   return (
     <ul className="rounded-2xl border border-[var(--line)] bg-[var(--chip-bg)] px-4 shadow-sm">
-      {query.data.map((todo) => (
+      {todos.map((todo) => (
         <TodoRow key={todo.id} todo={todo} />
       ))}
     </ul>

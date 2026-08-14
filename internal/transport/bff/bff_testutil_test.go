@@ -253,9 +253,10 @@ func newTestRouter(cfg *platform.Config, signer *Signer, idVerifier identity.JWT
 	apiBFF := r.Group("/api/bff")
 	apiBFF.Use(publicapi.RejectActorFields(), RequireJSONSession(signer, repo, logger), bffValidator)
 	bffapi.RegisterHandlers(apiBFF, testBFFServer{
-		MeServer:   MeServer{},
-		KeysServer: NewKeysServer(identitySvc),
-		TodoServer: NewTodoServer(todoSvc),
+		MeServer:    MeServer{},
+		KeysServer:  NewKeysServer(identitySvc),
+		TodoServer:  NewTodoServer(todoSvc),
+		UsersServer: NewUsersServer(identitySvc),
 	})
 
 	return r
@@ -264,12 +265,13 @@ func newTestRouter(cfg *platform.Config, signer *Signer, idVerifier identity.JWT
 // testBFFServer mirrors cmd/server/main.go's own unexported bffServer
 // composite (that type lives in package main and isn't importable from
 // here) — same embedding, same reasoning: no method names collide across
-// MeServer/KeysServer/TodoServer, so plain embedding satisfies
-// bffapi.ServerInterface with no hand-written delegation.
+// MeServer/KeysServer/TodoServer/UsersServer, so plain embedding
+// satisfies bffapi.ServerInterface with no hand-written delegation.
 type testBFFServer struct {
 	MeServer
 	*KeysServer
 	*TodoServer
+	*UsersServer
 }
 
 var _ bffapi.ServerInterface = testBFFServer{}

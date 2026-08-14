@@ -59,6 +59,12 @@ type Querier interface {
 	// exceptions).
 	InsertTodoEvent(ctx context.Context, arg InsertTodoEventParams) (TodoEvent, error)
 	ListAPIKeysByOwner(ctx context.Context, userID string) ([]ApiKey, error)
+	// Every active user, either role -- the assignee-picker's own source
+	// (GET /api/bff/users), mirroring my-task's user.ts router exactly
+	// (WHERE active = true ORDER BY handle, "humans and agents in one
+	// list"). Inactive users are excluded so a picker never offers assigning
+	// to someone who can no longer act.
+	ListActiveUsers(ctx context.Context) ([]User, error)
 	// I21 (_contract/INVARIANTS.md): the owner-facing key-listing endpoint
 	// (GET /api/bff/keys) needs every role='agent' user's non-revoked keys,
 	// not one user_id's own keys - the settings page's whole reason for

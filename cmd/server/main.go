@@ -234,12 +234,14 @@ func wirePublicAPI(apiV1 *gin.RouterGroup, todoSvc *todo.Service, identitySvc *i
 // one type internal/bffapi.RegisterHandlers needs — the bff-surface mirror
 // of apiServer, above. bff.MeServer contributes GetMe, *bff.KeysServer
 // contributes ListKeys/RevokeKey, *bff.TodoServer contributes the todo
-// CRUD methods. No method names collide, so plain embedding is
+// CRUD methods, *bff.UsersServer contributes ListUsers (the assignee
+// picker's data source). No method names collide, so plain embedding is
 // sufficient, same reasoning as apiServer.
 type bffServer struct {
 	bff.MeServer
 	*bff.KeysServer
 	*bff.TodoServer
+	*bff.UsersServer
 }
 
 var _ bffapi.ServerInterface = bffServer{}
@@ -349,9 +351,10 @@ func wireBFF(ctx context.Context, router *gin.Engine, cfg *platform.Config, repo
 	apiBFF := router.Group("/api/bff")
 	apiBFF.Use(publicapi.RejectActorFields(), bff.RequireJSONSession(signer, repo, logger), bffValidator)
 	bffapi.RegisterHandlers(apiBFF, bffServer{
-		MeServer:   bff.MeServer{},
-		KeysServer: bff.NewKeysServer(identitySvc),
-		TodoServer: bff.NewTodoServer(todoSvc),
+		MeServer:    bff.MeServer{},
+		KeysServer:  bff.NewKeysServer(identitySvc),
+		TodoServer:  bff.NewTodoServer(todoSvc),
+		UsersServer: bff.NewUsersServer(identitySvc),
 	})
 
 	spaHandler, err := newSPAHandler(distFS)

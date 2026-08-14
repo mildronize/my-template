@@ -466,3 +466,56 @@ caught a missing invariant test.
   gap to มายด์ as its own, separate ticket. Do not add a browser toolchain
   to close task-9's residue — that would be absorbing scope this
   engagement's whole process exists to keep separate.
+
+## Post-acceptance-walkthrough rounds (task-9 closed; มายด์ is live on `:8080`)
+
+Milestone-4's own tasks are done; these are real fixes/additions found
+and requested while มายด์ actually uses the running instance, worked the
+same way tasks were (independent verification, mutation-attack proof,
+full-suite gate) but outside the numbered-task structure since the plan
+itself is closed.
+
+- **`cmd/smoke` brought onto the milestone-4 surface** (`b632369`) — it
+  had zero commits against it all milestone and still spoke the
+  pre-milestone-4 wire shape; nothing in `make test` ran `make smoke` to
+  notice. `make smoke` against a throwaway instance is now a permanent
+  line in task-9's own gate above, with the reasoning inline.
+- **I18's rejection fixed to a real `403 invalid_transition` with a
+  hint** (`ac0c502`), not the generic `401` the original design used —
+  found by Clara running the rewritten `cmd/smoke` for the first time.
+  `_rules/_contract/INVARIANTS.md`'s I18 entry and both `_contract/API.md`
+  files carry the reasoning; this project's first-ever `403`.
+- **`canCloseTodo` call sites investigated and hardened** (`1fc1d30`) —
+  Clara inferred a defect from มายด์'s own walkthrough data (five owner
+  status changes, none to `closed`) and named a specific mechanism
+  (`session.user.email` undefined). A real rendering test proved that
+  mechanism wrong — `email` has carried `role` since milestone-3/task-3,
+  unchanged, and `closed` genuinely was offered. **No live bug was ever
+  found**; Clara confirmed this herself against the exact commit `:8080`
+  serves. Fixed anyway: `AuthUser` gained a properly-named, narrowly-typed
+  `role: "owner" | "agent" | undefined` field so the same field-reuse
+  landmine can't fool the next reader. Worth keeping in mind for later
+  walkthrough reports: an inference from event data ("no closed events")
+  is not the same claim as an observation of the UI, and this is the one
+  place that distinction mattered.
+- **`GET /api/bff/users` added** — มายด์'s ask: the `/todos/:id` assignee
+  field should be a picker, not freeform text (see my-task). List-only,
+  owner-session-only, mirrors my-task's own `user.ts` router exactly.
+  Closes the third of three contract gaps flagged during the
+  handle-exposure fix-round (keys and events already carried handles;
+  `Todo.assigneeId` was the one left unresolvable to a name). Wired into
+  three surfaces, not just the one มายด์ named, per Clara's explicit
+  "check my-task for which surfaces get it — it has three" instruction:
+  the detail page's picker (his literal ask), the create dialog's
+  assignee field (reopens task-7's own earlier "scope creep" call on
+  this one field, under this new instruction — noted here since it's a
+  real, deliberate reversal, not silent drift), and the list page's
+  assignee filter (task-3's own original "doesn't apply, unpaginated"
+  call, reopened the same way — filtered client-side against the
+  already-fetched, already-unpaginated list, so no new query param).
+- **`cmd/smoke` no longer leaves raw key files behind on disk** —
+  `~/.my-template/keys/` had ~35 `smoke-*`/`smoke2-*` files accumulated
+  from repeated runs (disposable in the database, permanent on disk
+  until this was noticed). `cmd/smoke` now removes its own two key files
+  at every exit path, including a hard failure. The debris was cleared
+  by hand once; going forward nothing should reaccumulate.

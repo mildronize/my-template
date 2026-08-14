@@ -128,8 +128,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List the caller's own non-revoked API keys.
-         * @description Same response shape as `_rules/_contract/API.md`'s `GET /api/v1/keys`. Calls `internal/identity.Service.ListAPIKeys` directly — same service, same method, session-resolved owner instead of Bearer-resolved actor.
+         * List every agent's non-revoked API keys (I21).
+         * @description Every `role='agent'` user's non-revoked keys (`revoked_at IS NULL`), not just the session owner's own — the session owner never holds a key at all (`role='owner'` can't be issued one, I2), so scoping this to the caller would always return empty, which was milestone-2/3's actual bug. Regardless of expiry: an expired-but-unrevoked key still shows up so the owner can see it needs rotating. Each row carries the owning agent's `handle` (never null — only rows a real users JOIN produced ever reach this response), so the owner can tell whose key is whose before revoking one.
          */
         get: operations["listKeys"];
         put?: never;
@@ -153,10 +153,30 @@ export interface paths {
         put?: never;
         post?: never;
         /**
-         * Revoke one of the caller's own API keys.
-         * @description Sets `revoked_at`. Owner-scoped, same 404 rule. Calls `internal/identity.Service.RevokeAPIKey` directly. Deliberately no `POST /keys` and no rotate endpoint anywhere on this surface — see this file's `info.description`.
+         * Revoke any agent's API key by id (I21).
+         * @description Sets `revoked_at`. Not scoped to a "caller's own" key — there is no such thing on this owner-only surface (I2) — any agent's key id may be revoked, session-gated only. An unknown id is `404 not_found`, the same "absence, not permission" shape every other owner-scoped-by-nothing-left-to-scope lookup on this surface uses. No `POST /keys` and no rotate endpoint anywhere on this surface, deliberately — a raw key can't be returned safely over an HTTP response, so issuance/rotation stay CLI-only (`cmd/issue-key`) regardless of which surface is asking.
          */
         delete: operations["revokeKey"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List every active user, either role (the assignee picker's data source).
+         * @description มายด์'s ask: "the assignee form in /todos/:id [should be] a drop[down] of the assignee, not freeform text." A dropdown needs a list of assignable users — this endpoint, mirroring my-task's own `user.ts` router (`list` only, `WHERE active = true ORDER BY handle`, "humans and agents in one list"). List only: no create, no update, no delete — my-task's router has none of those either, and there is no reason to exceed it. Owner-session only, same tier as every other endpoint on this surface; an agent has no business enumerating users (there is no equivalent on `openapi.yaml`'s public API at all). Returns `id` (what `Todo.assigneeId`/an `assigned` event's `to` actually writes back) alongside `handle` (what a picker displays) so a client never needs a second lookup between choosing a name and submitting the write.
+         */
+        get: operations["listUsers"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -270,6 +290,19 @@ export interface components {
         };
         ApiKeyList: {
             keys: components["schemas"]["ApiKey"][];
+        };
+        /** @description One row of GET /users' assignee-picker source. Every active user, either role — `role` rides along so a client could group/label by it, though the picker itself (`_contract/API.md`'s own reasoning for `assigneeHandle`) only ever needs `id` (to write) and `handle` (to display). */
+        User: {
+            /** @description The value a picker writes back — `Todo.assigneeId` / `CreateTodoEventRequest.to` for an `assigned` event both take this, never the handle. */
+            id: string;
+            handle: string;
+            /** @enum {string} */
+            role: "owner" | "agent";
+            /** @description Always `true` on every row this endpoint returns (`WHERE active = true` server-side) — present on the wire anyway so this schema doesn't silently drift from `Me`'s own `{handle, role, active}` shape if that ever changes. */
+            active: boolean;
+        };
+        UserList: {
+            users: components["schemas"]["User"][];
         };
         /** @description `additionalProperties: false` so a stray `done` (milestone-1/2/3's removed field) is a `validation_error`, not silently dropped (`_contract/API.md`). No `status` field, deliberately (mirrors the public API's own `CreateTodoRequest`) — every created todo starts `open` regardless of what a caller asks for. */
         CreateTodoRequest: {
@@ -552,7 +585,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The caller's own non-revoked keys. */
+            /** @description Every agent's non-revoked keys. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -584,6 +617,27 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    listUsers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every active user, ordered by handle. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
         };
     };
 }

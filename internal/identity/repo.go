@@ -178,6 +178,22 @@ func (r *Repo) CreateUser(ctx context.Context, handle, role string, ssoSubject *
 	return userFromRow(row), nil
 }
 
+// ListActiveUsers returns every active user, either role, ordered by
+// handle — GET /api/bff/users' own source (the assignee-picker's data),
+// mirroring my-task's own user.ts router (`WHERE active = true ORDER BY
+// handle`, "humans and agents in one list").
+func (r *Repo) ListActiveUsers(ctx context.Context) ([]User, error) {
+	rows, err := r.q.ListActiveUsers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	users := make([]User, 0, len(rows))
+	for _, row := range rows {
+		users = append(users, userFromRow(row))
+	}
+	return users, nil
+}
+
 // GetAPIKeyByHash looks up an api_keys row by key_hash — the API-key
 // branch's lookup (task-2.md step 2).
 func (r *Repo) GetAPIKeyByHash(ctx context.Context, hash string) (APIKey, error) {

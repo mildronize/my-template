@@ -35,8 +35,13 @@ info:
     `openapi.yaml`'s own removal, GOAL.md's "DELETE removed" decision).
     `status: closed` succeeds here — this is the owner's own surface
     (I18) — unlike the public API, where an agent caller is rejected.
-    `/keys` below is unchanged by milestone-4/task-4; its semantics are
-    replaced by a later task (I21).
+    `/keys` below spans every `role='agent'` user's own keys, not the
+    session owner's (I21) — milestone-2/3's session-owner-scoped
+    semantics (structurally always empty, since no key is ever issued to
+    `role='owner'`, I2) are REPLACED here, not kept alongside a new
+    endpoint. `/users` (I21's own follow-up, the assignee-picker's data
+    source) lists every active user, either role — owner-session only,
+    list-only, mirroring my-task's own `user.ts` router exactly.
 servers:
   - url: /api/bff
 paths:
@@ -285,15 +290,21 @@ paths:
   /keys:
     get:
       operationId: listKeys
-      summary: List the caller's own non-revoked API keys.
+      summary: List every agent's non-revoked API keys (I21).
       description: >
-        Same response shape as `_rules/_contract/API.md`'s
-        `GET /api/v1/keys`. Calls `internal/identity.Service.ListAPIKeys`
-        directly — same service, same method, session-resolved owner
-        instead of Bearer-resolved actor.
+        Every `role='agent'` user's non-revoked keys (`revoked_at IS
+        NULL`), not just the session owner's own — the session owner
+        never holds a key at all (`role='owner'` can't be issued one,
+        I2), so scoping this to the caller would always return empty,
+        which was milestone-2/3's actual bug. Regardless of expiry: an
+        expired-but-unrevoked key still shows up so the owner can see it
+        needs rotating. Each row carries the owning agent's `handle`
+        (never null — only rows a real users JOIN produced ever reach
+        this response), so the owner can tell whose key is whose before
+        revoking one.
       responses:
         "200":
-          description: The caller's own non-revoked keys.
+          description: Every agent's non-revoked keys.
           content:
             application/json:
               schema:
@@ -309,12 +320,17 @@ paths:
           type: string
     delete:
       operationId: revokeKey
-      summary: Revoke one of the caller's own API keys.
+      summary: Revoke any agent's API key by id (I21).
       description: >
-        Sets `revoked_at`. Owner-scoped, same 404 rule. Calls
-        `internal/identity.Service.RevokeAPIKey` directly. Deliberately
-        no `POST /keys` and no rotate endpoint anywhere on this surface —
-        see this file's `info.description`.
+        Sets `revoked_at`. Not scoped to a "caller's own" key — there is
+        no such thing on this owner-only surface (I2) — any agent's key
+        id may be revoked, session-gated only. An unknown id is
+        `404 not_found`, the same "absence, not permission" shape every
+        other owner-scoped-by-nothing-left-to-scope lookup on this
+        surface uses. No `POST /keys` and no rotate endpoint anywhere on
+        this surface, deliberately — a raw key can't be returned safely
+        over an HTTP response, so issuance/rotation stay CLI-only
+        (`cmd/issue-key`) regardless of which surface is asking.
       responses:
         "204":
           description: Revoked.
@@ -322,6 +338,33 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+  /users:
+    get:
+      operationId: listUsers
+      summary: List every active user, either role (the assignee picker's data source).
+      description: >
+        มายด์'s ask: "the assignee form in /todos/:id [should be] a
+        drop[down] of the assignee, not freeform text." A dropdown needs a
+        list of assignable users — this endpoint, mirroring my-task's own
+        `user.ts` router (`list` only, `WHERE active = true ORDER BY
+        handle`, "humans and agents in one list"). List only: no create,
+        no update, no delete — my-task's router has none of those either,
+        and there is no reason to exceed it. Owner-session only, same tier
+        as every other endpoint on this surface; an agent has no business
+        enumerating users (there is no equivalent on `openapi.yaml`'s
+        public API at all). Returns `id` (what `Todo.assigneeId`/an
+        `assigned` event's `to` actually writes back) alongside `handle`
+        (what a picker displays) so a client never needs a second lookup
+        between choosing a name and submitting the write.
+      responses:
+        "200":
+          description: Every active user, ordered by handle.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 components:
   schemas:
     Me:
@@ -592,6 +635,42 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ApiKey"
+    User:
+      type: object
+      required: [id, handle, role, active]
+      description: >
+        One row of GET /users' assignee-picker source. Every active user,
+        either role — `role` rides along so a client could group/label by
+        it, though the picker itself (`_contract/API.md`'s own reasoning
+        for `assigneeHandle`) only ever needs `id` (to write) and `handle`
+        (to display).
+      properties:
+        id:
+          type: string
+          description: >
+            The value a picker writes back — `Todo.assigneeId` /
+            `CreateTodoEventRequest.to` for an `assigned` event both take
+            this, never the handle.
+        handle:
+          type: string
+        role:
+          type: string
+          enum: [owner, agent]
+        active:
+          type: boolean
+          description: >
+            Always `true` on every row this endpoint returns (`WHERE
+            active = true` server-side) — present on the wire anyway so
+            this schema doesn't silently drift from `Me`'s own
+            `{handle, role, active}` shape if that ever changes.
+    UserList:
+      type: object
+      required: [users]
+      properties:
+        users:
+          type: array
+          items:
+            $ref: "#/components/schemas/User"
     CreateTodoRequest:
       type: object
       additionalProperties: false

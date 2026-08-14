@@ -74,7 +74,7 @@
 //     make it look like from the HTTP side alone.
 //   - Two disposable users get created as a side effect of the above
 //     (handles "smoke-<ts>" and "smoke2-<ts>", one fresh pair per run),
-//     plus every todo this run creates — nothing is cleaned up.
+//     plus every todo this run creates — neither is cleaned up.
 //     milestone-4 removed DELETE /api/v1/todos/:id entirely (GOAL.md,
 //     mirroring my-task's own I12: this domain's history is not
 //     supposed to be erasable), so unlike this file's pre-milestone-4
@@ -85,6 +85,14 @@
 //     smoke-api-v1.ts already accepts for my-task's own tasks; this is
 //     the reason a throwaway instance/database is a hard requirement
 //     above, not just a suggestion.
+//   - The raw key FILES cmd/issue-key writes for those two users
+//     (~/.my-template/keys/<handle>) are the one thing this script does
+//     clean up, at every exit path including a hard failure
+//     (cleanupKeyFiles) — those are disposable in the database (never
+//     usable again once this process exits, since the handle is never
+//     reused) but were, until this was noticed, permanent on disk: raw
+//     credential material with nowhere to go. Distinct from the
+//     database rows above, which stay by design, not oversight.
 //
 // What this program cannot check:
 //
@@ -114,6 +122,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -289,14 +298,60 @@ func printReport() int {
 }
 
 // fatalErr prints whatever was recorded so far (so a hard failure midway
-// still shows what passed before it), then the fatal error, then exits
+// still shows what passed before it), then the fatal error, cleans up
+// this run's own key files (mintedKeyFiles — see cleanupKeyFiles' own
+// doc comment for why this can't just be a deferred call), then exits
 // non-zero. Mirrors smoke-api-v1.ts's top-level `.catch()`.
 func fatalErr(err error) {
 	if len(checks) > 0 {
 		printReport()
 	}
 	fmt.Fprintf(os.Stderr, "\nSmoke run failed: %v\n", err)
+	cleanupKeyFiles()
 	os.Exit(1)
+}
+
+// mintedKeyFiles collects every raw key file path this run has written
+// to disk via issueKeyViaCmd, in minting order — cleanupKeyFiles removes
+// exactly these, nothing else.
+var mintedKeyFiles []string
+
+// homeKeysDir mirrors cmd/issue-key/keyfile.go's own myTemplateBaseDir +
+// "keys" join — the exact directory cmd/issue-key writes a raw key file
+// into (one file per handle, named for the handle). Duplicated rather
+// than imported: cmd/issue-key is its own `main` package, and Go has no
+// way to import symbols from one `main` package into another — the
+// alternative (a new shared internal package for ~10 lines of path
+// joining) would be more surface than the duplication it replaces.
+func homeKeysDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolving home directory: %w", err)
+	}
+	return filepath.Join(home, ".my-template", "keys"), nil
+}
+
+// cleanupKeyFiles removes every file this run minted via issueKeyViaCmd —
+// "disposable test keys" (this file's own package doc) means disposable
+// on disk too, not just in the database: every prior run left its raw
+// key file behind forever, and ~/.my-template/keys/ had accumulated
+// three dozen of them before this was noticed (raw credential material,
+// even for disposable test identities, has no business piling up
+// unbounded in a home directory).
+//
+// Called explicitly at every exit point (the natural end of main(), and
+// fatalErr) rather than via a single top-level `defer` in main(): every
+// hard failure in this file goes through fatalErr's own os.Exit(1),
+// which — like every os.Exit call — skips deferred functions entirely.
+// A deferred cleanup at the top of main() would silently never run on
+// the exact runs (failures) where leaving key files behind matters just
+// as much as it does on a clean pass.
+func cleanupKeyFiles() {
+	for _, path := range mintedKeyFiles {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "warning: failed to remove key file %s: %v\n", path, err)
+		}
+	}
 }
 
 // --- HTTP helpers --------------------------------------------------------
@@ -452,14 +507,23 @@ func main() {
 	handle1 := fmt.Sprintf("smoke-%d", ts)
 	handle2 := fmt.Sprintf("smoke2-%d", ts)
 
+	keysDir, err := homeKeysDir()
+	if err != nil {
+		fatalErr(fmt.Errorf("resolving where cmd/issue-key writes its key files: %w", err))
+	}
+
 	key1, err := issueKeyViaCmd(handle1)
 	if err != nil {
 		fatalErr(fmt.Errorf("minting the primary smoke key: %w", err))
 	}
+	mintedKeyFiles = append(mintedKeyFiles, filepath.Join(keysDir, handle1))
+
 	key2, err := issueKeyViaCmd(handle2)
 	if err != nil {
 		fatalErr(fmt.Errorf("minting the second smoke key (shared-collection check): %w", err))
 	}
+	mintedKeyFiles = append(mintedKeyFiles, filepath.Join(keysDir, handle2))
+
 	fmt.Printf("Minted real keys for %q and %q via cmd/issue-key.\n\n", handle1, handle2)
 
 	auth1 := authHeader(key1)
@@ -903,6 +967,7 @@ func main() {
 	fmt.Println("  - GET /api/bff/activity and every other /api/bff/* route — session-only, no Bearer-key path reaches them.")
 	fmt.Println()
 	failed := printReport()
+	cleanupKeyFiles()
 	if failed > 0 {
 		os.Exit(1)
 	}

@@ -27,6 +27,9 @@ type UserRepo interface {
 	GetUserByHandle(ctx context.Context, handle string) (User, error)
 	GetUserBySSOSubject(ctx context.Context, sub string) (User, error)
 	CreateUser(ctx context.Context, handle, role string, ssoSubject *string) (User, error)
+	// ListActiveUsers backs the owner-facing assignee-picker endpoint
+	// (GET /api/bff/users) — see repo.go's own doc comment.
+	ListActiveUsers(ctx context.Context) ([]User, error)
 }
 
 // APIKeyRepo is the subset of Repo's api_keys-facing methods Service
@@ -276,6 +279,16 @@ func (s *Service) RevokeAPIKey(ctx context.Context, ownerID, id string) (APIKey,
 // I2). GET /api/v1/keys (ListAPIKeys, above) is unchanged.
 func (s *Service) ListAllAgentAPIKeys(ctx context.Context) ([]APIKey, error) {
 	return s.APIKeys.ListAllAgentAPIKeys(ctx)
+}
+
+// ListActiveUsers returns every active user, either role — GET
+// /api/bff/users, the assignee-picker's own data source (มายด์'s ask:
+// "the assignee form ... to be a drop[down] of the assignee, not
+// freeform text, see in my-task"). Owner-session only (wired at the BFF
+// route-group level, not here) — the same tier as every other BFF-only
+// endpoint on this surface; agents have no business enumerating users.
+func (s *Service) ListActiveUsers(ctx context.Context) ([]User, error) {
+	return s.Users.ListActiveUsers(ctx)
 }
 
 // RevokeAnyAgentAPIKey revokes the key identified by id alone, with no

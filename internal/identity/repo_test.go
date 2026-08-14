@@ -61,6 +61,51 @@ func TestRepo_HandleLookupCaseInsensitive(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 
+// TestRepo_ListActiveUsers_BothRoles_ExcludesInactive_OrderedByHandle is
+// GET /api/bff/users' own source query — mirrors my-task's user.ts
+// router (`WHERE active = true ORDER BY handle`, "humans and agents in
+// one list"). Both roles must appear (not just agents, unlike
+// ListAllAgentAPIKeys) and an inactive user must not — a floor-first
+// shape would be pointless here (a real users table always has at least
+// the owner row), but the exclusion and ordering are each independently
+// asserted rather than inferred from one one of them holding.
+func TestRepo_ListActiveUsers_BothRoles_ExcludesInactive_OrderedByHandle(t *testing.T) {
+	ctx := context.Background()
+	conn := newTestDB(t)
+	repo := NewRepo(conn)
+
+	_, err := repo.CreateUser(ctx, "zed-owner", "owner", nil)
+	require.NoError(t, err)
+	_, err = repo.CreateUser(ctx, "alice-agent", "agent", nil)
+	require.NoError(t, err)
+	agent2, err := repo.CreateUser(ctx, "bob-agent", "agent", nil)
+	require.NoError(t, err)
+
+	// Deactivated directly at the SQL level — Repo has no deactivate
+	// method of its own (nothing in this codebase ever flips a user
+	// inactive; the column exists for completeness/future use), so this
+	// reaches past the repo layer on purpose, the same way other repo
+	// tests seed fixture state no exported method produces.
+	_, err = conn.ExecContext(ctx, `UPDATE users SET active = 0 WHERE id = ?`, agent2.ID)
+	require.NoError(t, err)
+
+	users, err := repo.ListActiveUsers(ctx)
+	require.NoError(t, err)
+
+	var handles []string
+	for _, u := range users {
+		handles = append(handles, u.Handle)
+	}
+	// alice-agent, then zed-owner, alphabetically by handle — NOT
+	// insertion order (owner was created first) and NOT role-grouped.
+	assert.Equal(t, []string{"alice-agent", "zed-owner"}, handles,
+		"both active roles present, ordered by handle, inactive bob-agent excluded")
+
+	for _, u := range users {
+		assert.NotEqual(t, agent2.ID, u.ID, "the deactivated user must not appear")
+	}
+}
+
 // TestI8_APIKeyStoredHashedNotRaw — I8: the raw key exists only at
 // issuance; api_keys.key_hash is one-way and never the raw value itself.
 func TestI8_APIKeyStoredHashedNotRaw(t *testing.T) {
