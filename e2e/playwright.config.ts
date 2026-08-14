@@ -8,14 +8,14 @@ import { defineConfig, devices } from "@playwright/test";
 // sequence and why it owns the whole lifecycle instead of this file's
 // own `webServer` option.
 export default defineConfig({
-  testDir: "./e2e/specs",
+  testDir: "./specs",
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: 0,
   workers: 1,
   reporter: [["list"]],
-  globalSetup: "./e2e/global-setup.ts",
-  globalTeardown: "./e2e/global-teardown.ts",
+  globalSetup: "./global-setup.ts",
+  globalTeardown: "./global-teardown.ts",
   use: {
     baseURL: "http://127.0.0.1:24080",
     trace: "retain-on-failure",

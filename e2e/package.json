@@ -1,0 +1,12 @@
+{
+  "name": "my-template-e2e",
+  "private": true,
+  "description": "TPL-3: browser e2e (Playwright + a local OIDC issuer) for my-template. Deliberately a separate package.json from web/ (the SPA's own dependencies/build tooling) — this one has exactly one real dependency, scoped entirely to this directory. Lives here, not at the repo root, so a Go template's own top-level shape stays a Go template's shape — nothing about running this suite requires it to sit above web/ or cmd/. See README.md (this directory) for how to run it, and global-setup.ts's own header comment for what it does.",
+  "scripts": {
+    "postinstall": "playwright install chromium",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1"
+  }
+}

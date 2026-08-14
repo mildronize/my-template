@@ -149,3 +149,13 @@ run:
 .PHONY: smoke
 smoke:
 	go run ./cmd/smoke
+
+# e2e is TPL-3's browser suite — unlike smoke (above), it manages its own
+# lifecycle end to end: brings up a real local OIDC issuer, builds and
+# starts a real instance of this service against it, runs, tears
+# everything down. See e2e/README.md for what it proves and doesn't, and
+# why it lives in its own e2e/package.json rather than at the repo root
+# or inside web/package.json.
+.PHONY: e2e
+e2e:
+	cd e2e && npm ci && npm run test:e2e
