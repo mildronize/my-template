@@ -24,9 +24,21 @@ milestone (nothing here — only this surface's code location moved, from
   takes another actor's id.
 - Any request carrying `actor`, `actorId`, `ownerId`, or `X-Actor` in body,
   query, or header → **400** (I1).
-- No `Idempotency-Key` requirement. Deliberate simplification (this
-  service has no append-only event log — see milestone-1's original
-  `_goal/GOAL.md` for the full reasoning); re-add it if a fork adds one.
+- **Stale as of milestone-4 (TPL-2), corrected here rather than left to
+  mislead a later reader:** this bullet used to say "No `Idempotency-Key`
+  requirement... this service has no append-only event log... re-add it
+  if a fork adds one." Milestone-4 added exactly that log
+  (`todo_events`), and `clientRequestId` is now **required**, not absent
+  — `openapi.yaml`'s `CreateTodoRequest`/`todo_events`-request schemas
+  both list it in `required`, enforced at the write path (I19,
+  `INVARIANTS.md`). The reasoning in the old bullet was correct for the
+  template *as it stood in milestone-1* — it just stopped being a
+  standing simplification the moment the event log this bullet predicted
+  actually got added, and nothing updated it at the time. Found by DLV-1,
+  this template's first real fork, reading this file as current when it
+  wasn't (`docs/GETTING-STARTED.md`'s "One thing already reconsidered,
+  and one still to" carried the identical stale claim — fixed there too,
+  same source).
 - No pagination on `GET /todos` — a personal todo list is small. Flagged
   here rather than silently decided, since it's the one place this
   contract diverges furthest from my-task's API shape.
