@@ -1,0 +1,11 @@
+{
+  "name": "my-template-e2e",
+  "private": true,
+  "description": "TPL-3: browser e2e (Playwright + a local OIDC issuer) for my-template. Deliberately a SEPARATE package.json from web/ (the SPA's own dependencies/build tooling) — this one has exactly one real dependency, scoped to e2e/ and playwright.config.ts alone. See e2e/global-setup.ts's own header comment for why this doesn't reuse web/package.json.",
+  "scripts": {
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1"
+  }
+}

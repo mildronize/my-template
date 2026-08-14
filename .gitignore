@@ -8,3 +8,17 @@
 *.db
 *.db-journal
 .env
+
+# TPL-3 browser e2e (Playwright + a local OIDC issuer, e2e/) — the root
+# package.json below is scoped to this alone, not the SPA (web/package.json
+# is separate). .env.e2e is generated fresh by e2e/global-setup.ts every
+# run (client secret from a throwaway Hydra instance) and torn down after
+# — never a real secret, never meant to persist. e2e/.tmp/ is where the
+# throwaway e2e-only database and any other run-scoped state live —
+# deliberately never .../data/app.db's own path, see that file's own
+# header comment for why.
+/node_modules/
+.env.e2e
+/playwright-report/
+/test-results/
+/e2e/.tmp/
