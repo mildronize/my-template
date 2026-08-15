@@ -647,6 +647,40 @@ Do it in this order:
    `internal/invariants_test.go`'s Done-when-12 check fails the moment you
    run it, naming your new module specifically. Resolve it one of the ways
    "Invariants: two things, not one" describes.
+
+   **The todo domain also carries I15–I19 (`scope: domain:todo`,
+   milestone-4's event/idempotency/permission invariants — atomicity,
+   idempotency, append-only, close-permission), the same shape as I3/I4
+   above but easy to miss because this step's own text, until a first
+   real fork (DLV-1) pointed it out, only ever named I3/I4 by example.**
+   Resolve I15–I19 the same three ways: carry the tests over renamed, or
+   decide your domain doesn't need that specific invariant and remove its
+   `INVARIANTS.md` entry. Either way, each one fails loudly and names
+   itself when you run the suite — `internal/invariants_test.go` walks
+   `perDomainModuleScopePackages` (I3/I4) and `domainScopePackageNames`
+   (I15–I19, and any `scope: domain:<name>` invariant) and checks every
+   package they point at for a real test, so a stale `"todo"` entry in
+   either map (still pointing at a now-deleted directory) fails Done-when
+   12 rather than silently passing. **Update both maps as part of this
+   step** — remove `"todo"` if your fork's own domain doesn't need the
+   invariant, or point the entry at your renamed module's own package if
+   it does. Expect this to surface as several separate failures across a
+   few `go test` runs, one invariant number at a time, rather than one
+   combined list — that's how the check is built, not a sign something
+   else is wrong.
+
+   **One thing in this same neighborhood that does *not* fail loudly, and
+   needs a manual pass:** `internal/dbquery/tableisolation.go`'s
+   `TableOwnership` map (`"todos": "todo"`, `"todo_events": "todo"`) and
+   any `ReadOnlyGrants` entries naming `todos.sql`/`todo_events.sql`.
+   Nothing checks that every `TableOwnership` entry still corresponds to
+   a table some query file actually references — the check runs the
+   other direction (a table *referenced* with no owner entry fails; an
+   owner entry for a table nobody references anymore does not). Remove
+   the stale `todos`/`todo_events` lines (and any `ReadOnlyGrants` entry
+   naming those files) once you've deleted the domain, add your own
+   table's entry if it's not already there from step 3, and don't rely on
+   the test suite to tell you this one's still outstanding.
 10. **Update `cmd/smoke/main.go` for your domain — do this even though
     nothing in Steps 1–9 above or `go build`/`go test ./...` will ever ask
     you to.** `cmd/smoke` is the only real-HTTP check in this entire repo
@@ -728,8 +762,47 @@ fresh rather than assuming the old failure modes still apply as described:
   for the check that actually catches it. Drop the `*TodoServer` embed
   from `compositeServer` as part of step 8, the same way you'd remove any
   other now-dead import.
+- **`sqlc` query names are global across every file under `db/queries/`,
+  not scoped per file.** Copying `db/queries/todos.sql` to your new
+  module's own query file (step 3 above) and keeping any of `todos.sql`'s
+  own query names (e.g. `GetUserHandleByID`, a small helper `todos.sql`
+  legitimately has) fails `sqlc generate` outright —
+  `duplicate query name: GetUserHandleByID` — the moment both files
+  exist together, before you've even gotten to step 6's checkpoint. Found
+  by DLV-1, this template's first real fork. It fails loudly, names the
+  file, and points at the real line — nobody ships past it — but a reader
+  who's just read this list as "what breaks while both exist" reasonably
+  expects it to be complete. **Rename the colliding query permanently
+  when you hit this, don't plan to revert the name after `todos.sql` is
+  deleted in step 8** — a temporary rename is one more thing to remember
+  at step 8, and a domain-qualified name (e.g.
+  `GetDeploymentActorHandleByID` instead of `GetUserHandleByID`) is
+  better anyway: it says which domain does the reading.
+- **A domain-agnostic helper defined inside a domain-specific file
+  disappears when that file is deleted — the mirror image of the two
+  collision failures above.** Those two are about two domains' *own*
+  identifiers colliding while both exist; this one is about a *shared*
+  identifier that never should have lived in either domain's file in the
+  first place, only surfacing once the file holding it is gone.
+  `internal/transport/bff/todo_handler.go` is where `bffOwnerID` happens
+  to live, but `keys_handler.go` and `users_handler.go` both call it —
+  nothing about `bffOwnerID` is todo-specific, it just ended up in that
+  file. Deleting `todo_handler.go` in step 8 breaks two handlers with
+  nothing to do with the todo domain, and the same shape hit three
+  domain-agnostic test helpers (`newBFFRouterForOwner`,
+  `newBFFRouterForOwnerSharedDB`, `doAgentAPIRequest`) living in todo test
+  files. Each failure is loud (a compile error naming the missing
+  identifier) but arrives one at a time, as a sequence of confusing
+  build failures rather than a single list. **Before deleting a domain's
+  files in step 8, grep for every identifier that file defines and check
+  whether anything outside the domain's own package references it** — one
+  command turns this from a surprise into a checklist:
+  ```sh
+  grep -n '^func \|^var \|^const ' internal/transport/bff/todo_handler.go internal/domain/todo/*.go
+  # for each name found, check whether anything outside these files/package references it
+  ```
 
-Both of these are what step 6's checkpoint (`go build ./...`/
+All four of these are what step 6's checkpoint (`go build ./...`/
 `go test ./...` green with both modules present) is actually proving you
 got right, not a sign something's wrong with your fork.
 
@@ -923,25 +996,37 @@ treat this as this template's live SSO integration; treat it as a
 reference implementation to build on once §3's "when to revisit"
 condition is met.
 
-## Two things to reconsider if your fork's needs change
+## One thing already reconsidered, and one still to
 
 `.chief/_rules/_contract/API.md`'s Conventions section (promoted from
-milestone-1, unchanged since — see "Invariants: two things, not one"
-below for what "promoted" means here) makes two deliberate simplifications
-for the todo domain. Both were reasonable
-*here* — reconsider them if your fork's domain doesn't share the same
-shape:
+milestone-1 — see "Invariants: two things, not one" below for what
+"promoted" means here) used to describe two deliberate simplifications
+for the todo domain, both framed as "reconsider if your fork's needs
+change." One of those needs already changed, inside this template itself,
+which is worth stating plainly rather than repeating the now-false claim:
 
-- **No `Idempotency-Key` requirement.** Reconsider this if you add an
-  event/activity log: my-task requires an idempotency key because its
-  append-only event log turns a duplicate write into a correctness bug
-  forever. This template has no such log, so a duplicate `POST` just
-  produces a second row — annoying, not a data-integrity problem. That
-  stops being true the moment a fork adds an append-only log of its own.
-- **No pagination on list endpoints.** Reconsider this if your fork's
-  list can grow large: this template's todo list is inherently small and
-  owner-scoped, so unpaginated `GET /todos` was a fine simplification for
-  it specifically, not a general rule about REST APIs.
+- **`Idempotency-Key` — already added, not merely reconsiderable.**
+  The original reasoning was: my-task requires an idempotency key because
+  its append-only event log turns a duplicate write into a correctness
+  bug forever, and "this template has no such log" — true when written.
+  **Milestone-4 (TPL-2) added exactly that log** (`todo_events`,
+  `internal/domain/todo/repo.go`'s `InsertEvent`/
+  `GetEventByClientRequestID`), and `clientRequestId` is now **required**
+  on every write that touches it (I19, `openapi.yaml`'s own `required`
+  arrays) — not a future trigger condition, a thing that already
+  happened. Found stale by DLV-1, this template's first real fork,
+  reading this paragraph as current; fixed here and in `API.md`'s own
+  Conventions section, same source, same fix. If your fork's own domain
+  has a shape closer to milestone-1's plain todo list (no event log, no
+  idempotency need), that absence is now something you'd be choosing
+  freshly, not inheriting from this template's current default — the
+  template you're forking from already made the opposite choice.
+- **No pagination on list endpoints — still genuinely simplification,
+  reconsider if your fork's needs change.** This one hasn't moved: this
+  template's todo list is inherently small and owner-scoped, so
+  unpaginated `GET /todos` is still a fine simplification for it
+  specifically, not a general rule about REST APIs. Reconsider it if your
+  fork's list can grow large.
 
 ## Invariants: two things, not one
 
