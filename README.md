@@ -1,5 +1,7 @@
 # my-template
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A starting point for a new Go microservice: owner/agent authentication (SSO
 session for a human owner, API keys for agents), an OpenAPI-first HTTP layer,
 and a small worked example (a shared todo list with an activity log) showing
@@ -121,5 +123,4 @@ see `e2e/README.md`.
 
 ## License
 
-Not yet chosen. Do not treat this repository as under a permissive license
-until a `LICENSE` file is added.
+MIT — see [`LICENSE`](LICENSE).
