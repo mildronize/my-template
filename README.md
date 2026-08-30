@@ -1,10 +1,10 @@
 # my-template
 
-A reusable Go microservice fork template with owner/agent auth, an OpenAPI-first API, and a worked example domain.
+A reusable Web App with Go microservice fork template with owner/agent auth, an OpenAPI-first API, and a worked example domain.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-> [!WARNING]
+> [WARNING ⚠️]
 > This repo is written AI-agent-first: the fork checklist, the code comments,
 > and the `.chief/` planning docs are dense with cross-references and
 > reasoning meant for an AI coding agent to read and act on directly, not for
