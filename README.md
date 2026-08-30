@@ -1,14 +1,26 @@
 # my-template
 
+A reusable Go microservice fork template with owner/agent auth, an OpenAPI-first API, and a worked example domain.
+
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+> [!WARNING]
+> This repo is written AI-agent-first: the fork checklist, the code comments,
+> and the `.chief/` planning docs are dense with cross-references and
+> reasoning meant for an AI coding agent to read and act on directly, not for
+> a human to skim. Some of it (`docs/GETTING-STARTED.md` especially) is long
+> and interleaves "why this changed" history with the actual instructions
+> rather than separating them. If you're forking this by hand, read slowly —
+> or better, point an AI coding assistant at the repo and have it walk you
+> through the fork checklist instead of reading it cold yourself.
+
+## About
 
 A starting point for a new Go microservice: owner/agent authentication (SSO
 session for a human owner, API keys for agents), an OpenAPI-first HTTP layer,
 and a small worked example (a shared todo list with an activity log) showing
 how the pieces fit together — so a new service can be forked from something
 that already runs, instead of built from a blank repo.
-
-## About
 
 Most internal services end up rebuilding the same handful of things: a login
 flow, a way for non-human callers (agents, scripts, other services) to
