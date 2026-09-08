@@ -5,13 +5,15 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humagin"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mildronize/my-template/internal/api"
 	"github.com/mildronize/my-template/internal/bffapi"
 	"github.com/mildronize/my-template/internal/identity"
+	"github.com/mildronize/my-template/internal/transport/humamw"
 	"github.com/mildronize/my-template/internal/transport/publicapi"
 )
 
@@ -34,23 +36,26 @@ import (
 // cmd/issue-key/main.go's own run() calls (line 123) — never a direct
 // repo.CreateUser(..., "agent", ...) insert standing in for it.
 
-// newAgentPublicAPIRouterForKeys builds a bare /api/v1 stack mounting only
-// publicapi.KeysServer.ListKeys — the real Bearer-authenticated surface an
-// agent actually calls in production, not a service-layer shortcut. Mirrors
-// activity_handler_test.go's own newAgentPublicAPIRouter (same package,
-// same "mount only the routes this file's tests need directly" pattern,
-// same reasoning: RequireActor + the real openapi.yaml request validator,
-// the same middleware chain production traffic hits).
+// newAgentPublicAPIRouterForKeys builds a real /api/v1 huma stack —
+// humamw.RejectActorHeader, humamw.RequireActor, then
+// publicapi.RegisterKeysRoutes — the real Bearer-authenticated surface an
+// agent actually calls in production, not a service-layer shortcut.
+// Mirrors activity_handler_test.go's own newAgentPublicAPIRouter (same
+// package, same wiring shape — story-1/ticket-6 retired internal/api and
+// publicapi's own gin-based RequireActor/KeysServer this helper used to
+// mount directly).
 func newAgentPublicAPIRouterForKeys(t *testing.T, identitySvc *identity.Service) *gin.Engine {
 	t.Helper()
-	validator, err := api.RequestValidator()
-	require.NoError(t, err)
 
 	router := gin.New()
-	group := router.Group("/api/v1")
-	group.Use(publicapi.RejectActorFields(), publicapi.RequireActor(identitySvc), validator)
-	keysServer := publicapi.NewKeysServer(identitySvc)
-	group.GET("/keys", keysServer.ListKeys)
+	config := huma.DefaultConfig("my-template API", "1.0.0")
+	config.OpenAPIPath = ""
+	config.DocsPath = ""
+	config.RejectUnknownQueryParameters = true
+	api := humagin.New(router, config)
+	api.UseMiddleware(humamw.RejectActorHeader())
+	api.UseMiddleware(humamw.RequireActor(identitySvc))
+	publicapi.RegisterKeysRoutes(api, identitySvc)
 	return router
 }
 
@@ -196,10 +201,10 @@ func TestDoneWhen11_RevocationActuallyStopsTheKey_BothHalves(t *testing.T) {
 	// before any revocation — proves the key actually worked.
 	beforeRec := doAgentAPIRequest(t, agentRouter, http.MethodGet, "/api/v1/keys", rawKey, nil)
 	require.Equal(t, http.StatusOK, beforeRec.Code, "the freshly issued key must authenticate successfully against the real /api/v1 surface before revocation")
-	var beforeList api.ApiKeyList
+	var beforeList publicapi.ApiKeyList
 	require.NoError(t, json.Unmarshal(beforeRec.Body.Bytes(), &beforeList))
 	require.Len(t, beforeList.Keys, 1, "the agent's own self-scoped listing must show exactly the one key just issued")
-	assert.Equal(t, issued.APIKey.ID, beforeList.Keys[0].Id)
+	assert.Equal(t, issued.APIKey.ID, beforeList.Keys[0].ID)
 
 	// 3. The owner revokes it through the new owner-facing BFF endpoint.
 	revokeRec := doBFFJSONRequest(t, bffRouter, http.MethodDelete, "/api/bff/keys/"+issued.APIKey.ID, ownerSession, nil)

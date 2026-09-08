@@ -1,561 +1,651 @@
-openapi: 3.0.3
-info:
-  title: my-template API
-  version: "1.0.0"
-  description: >
-    The template's one REST surface (`_contract/API.md`). Every request
-    authenticates over `Authorization: Bearer <credential>` — an `api_keys`
-    row's raw key or an SSO-issued JWT — resolved by
-    `internal/identity`'s actor-resolution middleware, not by anything in
-    this spec: no `security` scheme is declared here on purpose, since
-    OpenAPI-level "is a token present" checks would either duplicate or
-    fight the identity module's own I1/I2/I5 rules
-    (`.chief/milestone-1/_contract/INVARIANTS.md`). This spec's job is
-    request/response *shape* validation (`gin-middleware`), not auth.
-servers:
-  - url: /api/v1
-paths:
-  /me:
-    get:
-      operationId: getMe
-      summary: Return the authenticated actor's own identity.
-      description: >
-        `me` is the only way an actor refers to itself — there is no
-        endpoint that takes another actor's id.
-      responses:
-        "200":
-          description: The authenticated actor.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Me"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-  /todos:
-    get:
-      operationId: listTodos
-      summary: List every todo.
-      description: >
-        milestone-4: todos are a shared collection (GOAL.md's Ownership
-        model decision) — I3 no longer applies to this domain. Returns
-        every todo, created_at descending, unpaginated (deliberate — see
-        `_contract/API.md` Conventions), not just the caller's own.
-      responses:
-        "200":
-          description: Every todo.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TodoList"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-    post:
-      operationId: createTodo
-      summary: Create a todo, attributed to the caller.
-      description: >
-        `createdBy` is always the resolved actor — never accepted from
-        the body (I1) — but is attribution only, never access-scoping
-        (GOAL.md). `status` always starts `open`. The `created` event
-        this produces is never client-specifiable as a distinct write
-        (I16) — it only ever happens as this endpoint's own side effect.
-        `clientRequestId` makes this idempotent the same way
-        `POST .../events` is (I19): a repeated id returns the todo that
-        request already created and creates nothing new.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CreateTodoRequest"
-      responses:
-        "201":
-          description: The created todo.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Todo"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-  /todos/{id}:
-    parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-    get:
-      operationId: getTodo
-      summary: Get a todo by id.
-      description: >
-        milestone-4: every authenticated actor may read every todo (I3 no
-        longer applies to this domain) — an unknown id is `not_found`,
-        there is no "wrong owner" case left to produce it.
-      responses:
-        "200":
-          description: The todo.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Todo"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-    patch:
-      operationId: updateTodo
-      summary: Rename a todo.
-      description: >
-        milestone-4: the only field this endpoint still writes is
-        `title` — `status`/`assigneeId`/`priority`/`dueDate` changes
-        route through `POST .../events` instead (`status_changed`/
-        `assigned`/`field_changed`), the single write path (I15/I18)
-        those fields' permission/audit requirements actually need.
-        `done` is gone entirely (replaced by `status`) — sending it is a
-        `validation_error` (`hint: "done"`), not silently accepted and
-        ignored. Internally still funnels through the same single write
-        path as every other mutation (a `field_changed` event), hence
-        `clientRequestId` (I19).
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/UpdateTodoRequest"
-      responses:
-        "200":
-          description: The updated todo.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Todo"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /todos/{id}/events:
-    parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-    get:
-      operationId: listTodoEvents
-      summary: This todo's own timeline.
-      description: >
-        Oldest first (mirrors my-task's own per-task read, unlike the
-        newest-first cross-todo feed — `_contract/API.md`). No cross-todo
-        feed on this surface — that's `bff`-only (`GET /api/bff/activity`).
-      responses:
-        "200":
-          description: This todo's timeline, oldest first.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TodoEventList"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-    post:
-      operationId: createTodoEvent
-      summary: Append an event to this todo's timeline (I15's single write path).
-      description: >
-        One body shape per `type` — `commented` (`body`),
-        `status_changed` (`to`), `assigned` (`to`, or `null` to
-        unassign), `field_changed` (`field`, `to`) — `_contract/API.md`.
-        `type: "created"` is rejected (`validation_error`): a `created`
-        event only ever happens as `POST /todos`'s own side effect,
-        never as a direct client-specifiable write (I16) — the same
-        rejection applies to any other value this endpoint doesn't
-        recognise, `created` included, not a special case. A
-        `status: closed` write from an agent caller is rejected as `403
-        invalid_transition`, with a hint (I18) — a genuine permission
-        refusal, distinct from `401 unauthorized`, since the credential
-        itself is valid here; matches my-task's own equivalent check
-        exactly rather than the generic 401 this endpoint's first pass
-        used. Idempotent on `clientRequestId` (I19): a repeated id returns
-        the original event and creates nothing.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CreateTodoEventRequest"
-      responses:
-        "201":
-          description: The created event.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TodoEvent"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /keys:
-    get:
-      operationId: listKeys
-      summary: List the caller's own non-revoked API keys.
-      description: >
-        Lists the caller's own non-revoked keys (`revoked_at IS NULL`),
-        regardless of expiry — an expired-but-unrevoked key still shows up
-        so the caller can see it needs rotating (I9 is about the
-        auth-time check, not this listing decision).
-      responses:
-        "200":
-          description: The caller's own non-revoked keys.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiKeyList"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-  /keys/{id}:
-    parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-    delete:
-      operationId: revokeKey
-      summary: Revoke one of the caller's own API keys.
-      description: >
-        Sets `revoked_at`. Owner-scoped, same 404 rule as every other
-        owner-scoped resource on this surface (I3). There is deliberately
-        no `POST /api/v1/keys` — issuance is CLI-only (`cmd/issue-key`).
-      responses:
-        "204":
-          description: Revoked.
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
 components:
   schemas:
-    Me:
-      type: object
-      required: [handle, role, active]
-      properties:
-        handle:
-          type: string
-        role:
-          type: string
-        active:
-          type: boolean
-    Todo:
-      type: object
-      required:
-        [
-          id,
-          title,
-          status,
-          assigneeId,
-          assigneeHandle,
-          priority,
-          dueDate,
-          createdBy,
-          createdAt,
-          updatedAt,
-        ]
-      properties:
-        id:
-          type: string
-        title:
-          type: string
-        status:
-          type: string
-          description: >
-            milestone-4: replaces `done`. Fixed enum, not an
-            owner-editable table (GOAL.md).
-          enum: [open, in_progress, done, closed]
-        assigneeId:
-          type: string
-          nullable: true
-          description: References a user (any role).
-        assigneeHandle:
-          type: string
-          nullable: true
-          description: >
-            milestone-4 fix-round (handle-exposure): assigneeId's owning
-            user's handle, for display — null exactly when assigneeId is
-            null. my-task's own agent-facing REST contract
-            (`GET /api/v1/tasks`, `GET /api/v1/tasks/:id` —
-            `~/gits/my-task/src/app/api/v1/tasks/route.ts:128`,
-            `serializeTaskDetail`) shows a plain handle to agents too, not
-            just the owner UI, so this field is on this surface
-            (internal/transport/publicapi), not only bff-openapi.yaml's
-            copy. Additive: assigneeId is unchanged, still what a caller
-            writes back (CreateTodoRequest.assigneeId, CreateTodoEventRequest's
-            `to` for an `assigned` event) — this is display-only.
-        priority:
-          type: string
-          nullable: true
-          enum: [low, medium, high, urgent]
-        dueDate:
-          type: string
-          format: date-time
-          nullable: true
-        createdBy:
-          type: string
-          description: >
-            milestone-4: replaces `ownerId` — attribution only, never
-            access-scoping (GOAL.md).
-        createdAt:
-          type: string
-          format: date-time
-        updatedAt:
-          type: string
-          format: date-time
-    TodoList:
-      type: object
-      required: [todos]
-      properties:
-        todos:
-          type: array
-          items:
-            $ref: "#/components/schemas/Todo"
-    TodoEvent:
-      type: object
-      required: [id, todoId, seq, actorId, actorHandle, type, clientRequestId, createdAt]
-      properties:
-        id:
-          type: string
-        todoId:
-          type: string
-        seq:
-          type: integer
-          format: int64
-        actorId:
-          type: string
-        actorHandle:
-          type: string
-          description: >
-            milestone-4 fix-round (handle-exposure): the actor's handle —
-            always present, never null (every event has a real actor by
-            construction, DATA_MODEL.md). Deliberately a bare handle, no
-            role, unlike bff-openapi.yaml's own TodoEvent.actor
-            ({handle, role}): my-task's own agent-facing REST contract
-            gives an agent an event's actor as a plain handle string only
-            (`~/gits/my-task/src/server/modules/task/task.queries.ts:88-95`'s
-            `TaskTimelineEvent.actor: string`), while role-based
-            human/agent marking is resolved separately and stays owner-UI
-            only (`~/gits/my-task/src/server/api/routers/task.ts:82-101`'s
-            own `withActorRoles`, never reached from REST) — this field
-            matches that asymmetry.
-        type:
-          type: string
-          description: >
-            `created` | `commented` | `status_changed` | `assigned` |
-            `field_changed` — the full read-side vocabulary
-            (DATA_MODEL.md). `created` only ever appears here as a read
-            value, never as something `POST .../events` accepted (I16).
-        payload:
-          type: object
-          additionalProperties: true
-          nullable: true
-          description: >
-            JSON, shape depends on `type` — `{from, to}` pairs for
-            `status_changed`, `null` for `commented`, `{field, from, to}`
-            for `field_changed`. `assigned`'s own `{from, to}` pair is each
-            either `null` or a `{id, handle}` snapshot resolved once, at
-            write time, into the stored payload (milestone-4 fix-round,
-            handle-exposure — matches my-task's own AssigneeSnapshot,
-            `~/gits/my-task/src/server/modules/task/task.service.ts:139-142`,
-            resolved the same way at the same moment: a later handle
-            change never rewrites old history).
-        body:
-          type: string
-          nullable: true
-          description: >
-            The comment text for `type: commented`, `null` otherwise.
-            Rendered client-side through a Markdown-to-React-elements
-            path, never raw HTML (I8's mirror, GOAL.md).
-        clientRequestId:
-          type: string
-        createdAt:
-          type: string
-          format: date-time
-    TodoEventList:
-      type: object
-      required: [events]
-      properties:
-        events:
-          type: array
-          items:
-            $ref: "#/components/schemas/TodoEvent"
     ApiKey:
-      type: object
-      required: [id, prefix, createdAt, expiresAt]
+      additionalProperties: false
       properties:
+        createdAt:
+          format: date-time
+          type: string
+        expiresAt:
+          format: date-time
+          type: string
         id:
           type: string
         prefix:
           type: string
-        createdAt:
-          type: string
-          format: date-time
-        expiresAt:
-          type: string
-          format: date-time
-    ApiKeyList:
+      required:
+        - id
+        - prefix
+        - createdAt
+        - expiresAt
       type: object
-      required: [keys]
+    ApiKeyList:
+      additionalProperties: false
       properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/ApiKeyList.json
+          format: uri
+          readOnly: true
+          type: string
         keys:
-          type: array
           items:
             $ref: "#/components/schemas/ApiKey"
-    CreateTodoRequest:
+          nullable: true
+          type: array
+      required:
+        - keys
       type: object
-      additionalProperties: false
-      description: >
-        `additionalProperties: false` so a stray `done` (milestone-1/2/3's
-        removed field) is a `validation_error`, not silently dropped
-        (`_contract/API.md`). No `status` field, deliberately (Clara's
-        decision, not a residual gap): every created todo starts `open`
-        regardless of what a caller might ask for. มายด์'s own walkthrough
-        only requires *changing* a todo's status after it exists, never
-        setting one at creation, so `open` as the universal starting
-        point already satisfies the brief. The asymmetry with
-        `assigneeId`/`priority`/`dueDate` being settable here is
-        intentional — `_contract/API.md` states the same reasoning.
-      required: [title, clientRequestId]
-      properties:
-        title:
-          type: string
-          minLength: 1
-          maxLength: 200
-        assigneeId:
-          type: string
-          nullable: true
-        priority:
-          type: string
-          nullable: true
-          enum: [low, medium, high, urgent]
-        dueDate:
-          type: string
-          format: date-time
-          nullable: true
-        clientRequestId:
-          type: string
-          minLength: 1
-          description: >
-            I19's idempotency key, on the `created` event this endpoint's
-            own side effect writes — required, not optional, since
-            `todo_events.client_request_id` is `NOT NULL UNIQUE` at the
-            schema level for every row including `created` ones.
-    UpdateTodoRequest:
-      type: object
-      additionalProperties: false
-      description: >
-        milestone-4: `title` only — see `updateTodo`'s own description
-        for why `status`/`assigneeId`/`priority`/`dueDate` aren't here.
-        `additionalProperties: false` so a stray `done` is a
-        `validation_error`, not silently dropped.
-      required: [title, clientRequestId]
-      properties:
-        title:
-          type: string
-          minLength: 1
-          maxLength: 200
-        clientRequestId:
-          type: string
-          minLength: 1
-          description: >
-            I19's idempotency key — this endpoint now funnels through
-            the same single write path (I15) as every other mutation.
     CreateTodoEventRequest:
-      type: object
-      description: >
-        One shape covers all four client-postable `type` values
-        (`_contract/API.md`) — cross-field validation (e.g. `body`
-        required for `commented`, `to` required for `status_changed`) is
-        the handler's job, not this schema's, the same way my-task's own
-        `buildAppendInput` does it in code rather than a `oneOf`
-        discriminator. `type` is deliberately an open string, not an
-        `enum`, so `"created"` and any other unrecognised value reach the
-        handler's own dispatch and are rejected there (I16) — the same
-        path, not a special case for one string.
-      required: [type, clientRequestId]
+      additionalProperties: true
       properties:
-        type:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/CreateTodoEventRequest.json
+          format: uri
+          readOnly: true
           type: string
-        clientRequestId:
-          type: string
-          minLength: 1
         body:
           type: string
-          description: commented — the comment text.
-        to:
+        clientRequestId:
+          minLength: 1
           type: string
-          nullable: true
-          description: >
-            status_changed — the target status (a `Todo.status` enum
-            value). assigned — the target assignee's user id, or `null`
-            to unassign.
         field:
           type: string
-          description: >
-            field_changed — which field `to` changes: `title` |
-            `priority` | `dueDate`.
-    Error:
+        to:
+          type: string
+        type:
+          type: string
+      required:
+        - type
+        - clientRequestId
       type: object
-      required: [error]
+    CreateTodoRequest:
+      additionalProperties: false
       properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/CreateTodoRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        assigneeId:
+          type: string
+        clientRequestId:
+          minLength: 1
+          type: string
+        dueDate:
+          format: date-time
+          type: string
+        priority:
+          enum:
+            - low
+            - medium
+            - high
+            - urgent
+          type: string
+        title:
+          maxLength: 200
+          minLength: 1
+          type: string
+      required:
+        - title
+        - clientRequestId
+      type: object
+    ErrorBody:
+      additionalProperties: false
+      properties:
+        code:
+          type: string
+        hint:
+          type: string
+        message:
+          type: string
+      required:
+        - code
+        - message
+      type: object
+    ErrorEnvelope:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/ErrorEnvelope.json
+          format: uri
+          readOnly: true
+          type: string
         error:
+          $ref: "#/components/schemas/ErrorBody"
+      required:
+        - error
+      type: object
+    Me:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/Me.json
+          format: uri
+          readOnly: true
+          type: string
+        active:
+          type: boolean
+        handle:
+          type: string
+        role:
+          type: string
+      required:
+        - handle
+        - role
+        - active
+      type: object
+    Todo:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/Todo.json
+          format: uri
+          readOnly: true
+          type: string
+        assigneeHandle:
+          nullable: true
+          type: string
+        assigneeId:
+          nullable: true
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        createdBy:
+          type: string
+        dueDate:
+          format: date-time
+          nullable: true
+          type: string
+        id:
+          type: string
+        priority:
+          enum:
+            - low
+            - medium
+            - high
+            - urgent
+          nullable: true
+          type: string
+        status:
+          enum:
+            - open
+            - in_progress
+            - done
+            - closed
+          type: string
+        title:
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+        - id
+        - title
+        - status
+        - assigneeId
+        - assigneeHandle
+        - priority
+        - dueDate
+        - createdBy
+        - createdAt
+        - updatedAt
+      type: object
+    TodoEvent:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/TodoEvent.json
+          format: uri
+          readOnly: true
+          type: string
+        actorHandle:
+          type: string
+        actorId:
+          type: string
+        body:
+          type: string
+        clientRequestId:
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        id:
+          type: string
+        payload:
+          additionalProperties: {}
           type: object
-          required: [code, message]
-          properties:
-            code:
-              type: string
-            message:
-              type: string
-            hint:
-              type: string
-  responses:
-    BadRequest:
-      description: The request violates a request-shape or validation rule.
-      content:
-        application/json:
+        seq:
+          format: int64
+          type: integer
+        todoId:
+          type: string
+        type:
+          type: string
+      required:
+        - id
+        - todoId
+        - seq
+        - actorId
+        - actorHandle
+        - type
+        - clientRequestId
+        - createdAt
+      type: object
+    TodoEventList:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/TodoEventList.json
+          format: uri
+          readOnly: true
+          type: string
+        events:
+          items:
+            $ref: "#/components/schemas/TodoEvent"
+          nullable: true
+          type: array
+      required:
+        - events
+      type: object
+    TodoList:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/TodoList.json
+          format: uri
+          readOnly: true
+          type: string
+        todos:
+          items:
+            $ref: "#/components/schemas/Todo"
+          nullable: true
+          type: array
+      required:
+        - todos
+      type: object
+    UpdateTodoRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/UpdateTodoRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        clientRequestId:
+          minLength: 1
+          type: string
+        title:
+          maxLength: 200
+          minLength: 1
+          type: string
+      required:
+        - title
+        - clientRequestId
+      type: object
+info:
+  title: my-template API
+  version: 1.0.0
+openapi: 3.0.3
+paths:
+  /api/v1/keys:
+    get:
+      description: Lists the caller's own non-revoked keys (revoked_at IS NULL), regardless of expiry — an expired-but-unrevoked key still shows up so the caller can see it needs rotating (I9 is about the auth-time check, not this listing decision).
+      operationId: listKeys
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKeyList"
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Unauthorized
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Internal Server Error
+      summary: List the caller's own non-revoked API keys.
+  /api/v1/keys/{id}:
+    delete:
+      description: Sets revoked_at. Owner-scoped, same 404 rule as every other owner-scoped resource on this surface (I3). There is deliberately no POST /api/v1/keys — issuance is CLI-only (cmd/issue-key).
+      operationId: revokeKey
+      parameters:
+        - description: The API key's own id.
+          in: path
+          name: id
+          required: true
           schema:
-            $ref: "#/components/schemas/Error"
-    Unauthorized:
-      description: >
-        Missing, malformed, expired, revoked, wrong-role, or
-        inactive-user credential — same shape regardless of which check
-        failed (I5).
-      content:
-        application/json:
+            description: The API key's own id.
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Unauthorized
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Not Found
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Internal Server Error
+      summary: Revoke one of the caller's own API keys.
+  /api/v1/me:
+    get:
+      description: "`me` is the only way an actor refers to itself — there is no endpoint that takes another actor's id."
+      operationId: getMe
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Unauthorized
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Internal Server Error
+      summary: Return the authenticated actor's own identity.
+  /api/v1/todos:
+    get:
+      operationId: listTodos
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TodoList"
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Unauthorized
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Internal Server Error
+      summary: List every todo.
+    post:
+      operationId: createTodo
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTodoRequest"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Todo"
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Unauthorized
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Internal Server Error
+      summary: Create a todo, attributed to the caller.
+  /api/v1/todos/{id}:
+    get:
+      operationId: getTodo
+      parameters:
+        - description: The todo's own id.
+          in: path
+          name: id
+          required: true
           schema:
-            $ref: "#/components/schemas/Error"
-    Forbidden:
-      description: >
-        A genuine permission refusal for an authenticated, valid
-        credential — distinct from Unauthorized, which means the
-        credential itself failed. This surface's only case today: an
-        agent key attempting to move a todo to status: closed (I18),
-        code `invalid_transition`, matching my-task's own equivalent
-        check exactly (`~/gits/my-task/src/server/api/v1/errors.ts:130`)
-        rather than the generic 401 this endpoint's first pass used.
-      content:
-        application/json:
+            description: The todo's own id.
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Todo"
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Unauthorized
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Not Found
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Internal Server Error
+      summary: Get a todo by id.
+    patch:
+      operationId: updateTodo
+      parameters:
+        - description: The todo's own id.
+          in: path
+          name: id
+          required: true
           schema:
-            $ref: "#/components/schemas/Error"
-    NotFound:
-      description: >
-        Unknown id, or an id that exists but isn't the caller's (I3 —
-        absence, not permission).
-      content:
-        application/json:
+            description: The todo's own id.
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTodoRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Todo"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Unauthorized
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Not Found
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Internal Server Error
+      summary: Rename a todo.
+  /api/v1/todos/{id}/events:
+    get:
+      operationId: listTodoEvents
+      parameters:
+        - description: The todo's own id.
+          in: path
+          name: id
+          required: true
           schema:
-            $ref: "#/components/schemas/Error"
+            description: The todo's own id.
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TodoEventList"
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Unauthorized
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Not Found
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Internal Server Error
+      summary: This todo's own timeline.
+    post:
+      operationId: createTodoEvent
+      parameters:
+        - description: The todo's own id.
+          in: path
+          name: id
+          required: true
+          schema:
+            description: The todo's own id.
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTodoEventRequest"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TodoEvent"
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Not Found
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+          description: Internal Server Error
+      summary: Append an event to this todo's timeline (I15's single write path).

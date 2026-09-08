@@ -560,6 +560,13 @@ func main() {
 
 	// ---- 2. actor-field rejection (I1) ----------------------------------
 
+	// story-1/ticket-6 (huma migration): a body-level actor-shaped field is
+	// no longer this repo's own bespoke actor_field_present check for
+	// /api/v1 — huma's own additionalProperties:false default now catches
+	// it as a generic unknown-field rejection (422 validation_error),
+	// contract.md's "Middleware mapping" table. The X-Actor header check
+	// below is the one path that keeps its own 400 actor_field_present,
+	// because I1 specifically names it.
 	for _, field := range []string{"actor", "actorId", "ownerId"} {
 		body := newCreateBodyWithForbiddenField("smoke — should be rejected", nextCR("forbidden-"+field), field)
 		status, respBody, err := doRequest(client, http.MethodPost, apiBase+resourcePath, auth1, body)
@@ -568,7 +575,7 @@ func main() {
 		}
 		env := decode[errorEnvelope](respBody)
 		record(fmt.Sprintf("POST %s with %q in the body is rejected, not silently ignored", resourcePath, field),
-			status == http.StatusBadRequest && env.Error.Code == "actor_field_present",
+			status == http.StatusUnprocessableEntity && env.Error.Code == "validation_error",
 			fmt.Sprintf("%d %s", status, env.Error.Code), "I1")
 	}
 
@@ -631,8 +638,12 @@ func main() {
 		fatalErr(err)
 	}
 	doneBodyEnv := decode[errorEnvelope](doneBodyResp)
+	// story-1/ticket-6: huma's own additionalProperties:false schema
+	// validation now catches this (422), not the old gin-middleware/
+	// oapi-codegen validator's 400 — contract.md's "Behavior note", the
+	// one accepted, flagged status delta this migration makes.
 	record("PATCH with a stray \"done\" field is rejected, not silently accepted (done was removed, replaced by status)",
-		doneBodyStatus == http.StatusBadRequest,
+		doneBodyStatus == http.StatusUnprocessableEntity,
 		fmt.Sprintf("%d %s", doneBodyStatus, doneBodyEnv.Error.Code), "")
 
 	deleteStatus, _, err := doRequest(client, http.MethodDelete, apiBase+resourcePath+"/"+id, auth1, nil)
@@ -940,24 +951,24 @@ func main() {
 
 	// ---- 6. spec validation — rejected before handler logic ---------------
 	// A request missing CreateTodoRequest's required fields (title,
-	// clientRequestId) must be refused by openapi.yaml's gin-middleware
-	// validator (internal/api.RequestValidator), not reach
-	// TodoServer.CreateTodo's own fallback (todo_handler.go's
-	// ShouldBindJSON branch, which writes a bare 400 with NO body via
-	// c.AbortWithStatus — not the structured error envelope). A
-	// non-empty body carrying code "validation_error" is what
-	// distinguishes "the validator caught this" from "it reached the
-	// handler and the handler's own defensive fallback caught it
-	// instead" — the exact distinction this check exists to prove, not
-	// just get a 400.
+	// clientRequestId) must be refused by huma's own request-shape
+	// validation (story-1/ticket-6: replaces openapi.yaml's old
+	// gin-middleware/oapi-codegen validator), not reach the handler's own
+	// business logic. A non-empty body carrying code "validation_error" is
+	// what distinguishes "the schema validator caught this" from "it
+	// reached the handler and something else caught it instead" — the
+	// exact distinction this check exists to prove, not just get a
+	// rejection. Status is 422, not 400 — huma's own default for a
+	// request-validation failure (contract.md's "Behavior note", the one
+	// accepted, flagged status delta this migration makes).
 
 	specStatus, specBody, err := doRequest(client, http.MethodPost, apiBase+resourcePath, auth1, missingRequiredFieldBody)
 	if err != nil {
 		fatalErr(err)
 	}
 	specEnv := decode[errorEnvelope](specBody)
-	record(fmt.Sprintf("POST %s missing required fields is rejected by the openapi validator before handler logic", resourcePath),
-		specStatus == http.StatusBadRequest && len(specBody) > 0 && specEnv.Error.Code == "validation_error",
+	record(fmt.Sprintf("POST %s missing required fields is rejected by the schema validator before handler logic", resourcePath),
+		specStatus == http.StatusUnprocessableEntity && len(specBody) > 0 && specEnv.Error.Code == "validation_error",
 		fmt.Sprintf("%d %s %q", specStatus, specEnv.Error.Code, specEnv.Error.Message), "")
 
 	// ---- report -------------------------------------------------------

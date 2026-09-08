@@ -11,19 +11,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humagin"
 	"github.com/gin-gonic/gin"
 	"github.com/pressly/goose/v3"
 	"github.com/stretchr/testify/require"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" database/sql driver for these tests
 
-	"github.com/mildronize/my-template/internal/api"
 	"github.com/mildronize/my-template/internal/domain/todo"
 	"github.com/mildronize/my-template/internal/identity"
+	"github.com/mildronize/my-template/internal/transport/humamw"
 )
 
 func init() {
 	gin.SetMode(gin.TestMode)
+	humamw.InstallErrorEnvelope()
 }
 
 // repoRootForTests resolves the module root from this test file's own
@@ -64,25 +67,31 @@ func newTestDB(t *testing.T) *sql.DB {
 	return conn
 }
 
-// compositeServer mirrors cmd/server's apiServer — MeServer contributes
-// GetMe, *KeysServer contributes ListKeys/RevokeKey, *TodoServer
-// contributes the todo CRUD methods — so these integration tests exercise
-// the exact same generated-interface/openapi-validated wiring production
-// uses, not a hand-rolled subset of it. Moved here (task-9, Blocker A)
-// from todo_handler_test.go, a file docs/GETTING-STARTED.md's Step 8
-// deletes on fork — this file is not on that delete list, so the shared
-// harness now actually lives where the doc already said it did, and
-// deleting todo_handler_test.go no longer takes it down too.
-type compositeServer struct {
-	MeServer
-	*KeysServer
-	*TodoServer
+// newHumaV1API wraps a fresh gin.Engine in a huma.API instance, exactly
+// the shape cmd/server/main.go's newHumaAPIs/apiV1H builds for the real
+// service (ticket-6): humagin.New over the whole engine (no route group —
+// contract.md's "Framework & wiring"), RejectUnknownQueryParameters set,
+// humamw.RejectActorHeader then humamw.RequireActor(svc) attached in that
+// order (I1's X-Actor check before any DB-backed credential resolution).
+// Every integration router this file's test helpers build below is this
+// plus whichever RegisterXRoutes calls that test needs — so these tests
+// exercise the real /api/v1 wiring shape, not a hand-rolled subset of it.
+func newHumaV1API(router *gin.Engine, svc *identity.Service) huma.API {
+	config := huma.DefaultConfig("my-template API", "1.0.0")
+	config.OpenAPIPath = ""
+	config.DocsPath = ""
+	config.RejectUnknownQueryParameters = true
+
+	api := humagin.New(router, config)
+	api.UseMiddleware(humamw.RejectActorHeader())
+	api.UseMiddleware(humamw.RequireActor(svc))
+	return api
 }
 
-// newIntegrationRouter builds a full /api/v1 stack — RejectActorFields,
-// RequireActor, the openapi.yaml request validator, then
-// api.RegisterHandlers — against a real temp-file SQLite database (not a
-// mock), for todo CRUD + ownership-scoping integration tests.
+// newIntegrationRouter builds a full /api/v1 stack — humamw.RejectActorHeader,
+// humamw.RequireActor, then every RegisterXRoutes call — against a real
+// temp-file SQLite database (not a mock), for todo CRUD + ownership-scoping
+// integration tests.
 func newIntegrationRouter(t *testing.T) (*gin.Engine, *sql.DB) {
 	t.Helper()
 	conn := newTestDB(t)
@@ -92,16 +101,11 @@ func newIntegrationRouter(t *testing.T) (*gin.Engine, *sql.DB) {
 
 	todoSvc := todo.NewService(todo.NewRepo(conn))
 
-	validator, err := api.RequestValidator()
-	require.NoError(t, err)
-
 	router := gin.New()
-	group := router.Group("/api/v1")
-	group.Use(RejectActorFields(), RequireActor(identitySvc), validator)
-	api.RegisterHandlers(group, compositeServer{
-		KeysServer: NewKeysServer(identitySvc),
-		TodoServer: NewTodoServer(todoSvc),
-	})
+	api := newHumaV1API(router, identitySvc)
+	RegisterMeRoutes(api)
+	RegisterKeysRoutes(api, identitySvc)
+	RegisterTodoRoutes(api, todoSvc)
 
 	return router, conn
 }
@@ -146,13 +150,32 @@ func doJSONRequest(t *testing.T, router *gin.Engine, method, path, rawKey string
 	return rec
 }
 
-// decodeError decodes an api.Error-shaped response body — generic across
-// every domain (the error envelope shape is package-wide, not
+// apiErrorBody decodes this service's {error:{code,message,hint}} envelope
+// shape — replacing internal/api.Error (deleted this ticket, contract.md's
+// "File/package layout": internal/api's framework-agnostic response types
+// move into this package). Every real error response on this surface
+// (huma's own request-validation failures and huma.Error404NotFound/
+// Error403Forbidden, via humamw.InstallErrorEnvelope's override, and this
+// package's own apiError for its 400 validation_error responses,
+// middleware.go) already writes this exact JSON shape — this type only
+// exists so tests can decode it back, mirroring the old api.Error's own
+// Hint *string (omitempty) shape so existing assertions
+// (require.NotNil(...Hint), *errBody.Error.Hint) keep compiling unchanged.
+type apiErrorBody struct {
+	Error struct {
+		Code    string  `json:"code"`
+		Message string  `json:"message"`
+		Hint    *string `json:"hint,omitempty"`
+	} `json:"error"`
+}
+
+// decodeError decodes an apiErrorBody-shaped response body — generic
+// across every domain (the error envelope shape is package-wide, not
 // todo-specific), so it lives here rather than in a per-domain handler
 // test file.
-func decodeError(t *testing.T, rec *httptest.ResponseRecorder) api.Error {
+func decodeError(t *testing.T, rec *httptest.ResponseRecorder) apiErrorBody {
 	t.Helper()
-	var got api.Error
+	var got apiErrorBody
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	return got
 }

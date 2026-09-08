@@ -1,48 +1,58 @@
 package publicapi
 
 import (
+	"context"
 	"net/http"
 
-	"github.com/gin-gonic/gin"
+	"github.com/danielgtaylor/huma/v2"
 )
 
-// meResponse is GET /api/v1/me's response shape (_contract/API.md).
-type meResponse struct {
+// Me is GET /api/v1/me's response shape (_contract/API.md,
+// openapi.yaml's Me schema). Replaces the old bespoke meResponse — same
+// field names/JSON tags, just exported now that it's a real huma output
+// body type (ticket-6) rather than a type only ever built and marshaled
+// inside this file.
+type Me struct {
 	Handle string `json:"handle"`
 	Role   string `json:"role"`
 	Active bool   `json:"active"`
 }
 
-// MeServer adapts handleMe to internal/api's generated
-// ServerInterface's GetMe method. GET /api/v1/me predates openapi.yaml
-// (task-2 hand-wired it directly on the gin group before that file
-// existed) — task-3 brought it onto the same generated-interface,
-// openapi-validated path as every other endpoint instead of leaving it on
-// a bespoke route, by embedding MeServer alongside TodoServer (and
-// KeysServer) in cmd/server's composite api.ServerInterface
-// implementation. The underlying handleMe function, and its
-// behavior/tests, are unchanged by this file's move out of
-// internal/identity (ARCHITECTURE.md — identity keeps no transport code).
-type MeServer struct{}
+// GetMeOutput is GetMe's huma.Register output.
+type GetMeOutput struct {
+	Body Me
+}
 
-// GetMe implements api.ServerInterface.
-func (MeServer) GetMe(c *gin.Context) { handleMe(c) }
+// RegisterMeRoutes registers GET /api/v1/me on api (ticket-6). GetMe
+// predates openapi.yaml (task-2 hand-wired it directly on the gin group
+// before that file existed) — task-3 brought it onto the same
+// generated-interface, validated path as every other endpoint; this
+// ticket brings it onto huma the same way every other operation in this
+// package moves. api must already have humamw.RequireActor attached
+// (cmd/server/main.go) — this operation only ever reads the actor that
+// middleware resolved (I4), it never resolves identity itself.
+func RegisterMeRoutes(api huma.API) {
+	huma.Register(api, huma.Operation{
+		OperationID: "getMe",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/me",
+		Summary:     "Return the authenticated actor's own identity.",
+		Description: "`me` is the only way an actor refers to itself — there is no endpoint that takes another actor's id.",
+		Errors:      []int{http.StatusUnauthorized},
+	}, handleGetMe)
+}
 
-// handleMe reads the actor RequireActor (middleware.go, this package)
-// already resolved onto the gin context — it never queries users/api_keys
-// itself (I4).
-func handleMe(c *gin.Context) {
-	user, ok := ActorFromContext(c)
-	if !ok {
-		// RequireActor guarantees this is set whenever the middleware
-		// chain runs in the intended order. Treated as a defensive 401
-		// (not a panic) in case a route is ever wired without it.
-		c.AbortWithStatusJSON(http.StatusUnauthorized, unauthorizedBody)
-		return
+// handleGetMe reads the actor humamw.RequireActor (cmd/server/main.go)
+// already resolved onto ctx — it never queries users/api_keys itself
+// (I4).
+func handleGetMe(ctx context.Context, _ *struct{}) (*GetMeOutput, error) {
+	user, err := actorFromContext(ctx)
+	if err != nil {
+		return nil, err
 	}
-	c.JSON(http.StatusOK, meResponse{
+	return &GetMeOutput{Body: Me{
 		Handle: user.Handle,
 		Role:   user.Role,
 		Active: user.Active,
-	})
+	}}, nil
 }

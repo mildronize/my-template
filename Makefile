@@ -36,12 +36,12 @@ tools:
 	GOBIN=$(BIN_DIR) go install github.com/pressly/goose/v3/cmd/goose
 	GOBIN=$(BIN_DIR) go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen
 
-# generate re-runs both codegen tools against their sources (db/queries +
-# db/migrations for sqlc, openapi.yaml + bff-openapi.yaml for
-# oapi-codegen) so the committed generated output (internal/db,
-# internal/api/openapi.gen.go, internal/bffapi/bffapi.gen.go) can be
-# regenerated reproducibly from the pinned tool versions in tools/tools.go
-# rather than hand-edited.
+# generate re-runs every codegen source against sqlc (db/queries +
+# db/migrations), huma (the public API's own code, dumping openapi.yaml),
+# and oapi-codegen (bff-openapi.yaml, still hand-authored input for the
+# BFF surface until a later ticket migrates it too) so the committed
+# generated output (internal/db, openapi.yaml, internal/bffapi/
+# bffapi.gen.go) can be regenerated reproducibly rather than hand-edited.
 #
 # The internal/db cleanup step below runs first: sqlc emits one .sql.go
 # file per db/queries/*.sql file, so deleting a query file (e.g. on fork,
@@ -55,28 +55,25 @@ tools:
 # marker are removed, so this stays safe even if that ever stops being
 # true.
 #
-# Two independent oapi-codegen invocations, one per spec file
-# (milestone-3/task-2, `_contract/API.md` "Two specs, not one"): each run
-# generates its own ServerInterface/Error/RegisterHandlers into its own
-# package — internal/api for the Bearer-authenticated public surface,
-# internal/bffapi for the session-authenticated BFF surface. Distinct
-# package names (not just distinct output files) so the two independently
-# generated sets of symbols of the same names (Error, ServerInterface,
-# RegisterHandlers, ...) never collide at the Go package level.
-# NOT wired in here yet: `go run ./cmd/server openapi` (story-1/ticket-5,
-# .chief/story-1/_contract/contract.md's "OpenAPI spec output" section) —
-# the huma-side command exists and works (dumps both surfaces' huma-
-# generated OpenAPI docs to these same two filenames), but ticket-5
-# registers zero real huma operations on either surface yet, so today it
-# would dump a near-empty spec straight over the hand-authored
-# openapi.yaml/bff-openapi.yaml the two oapi-codegen invocations below
-# still read as real input — silently breaking them the next time this
-# target runs. Deliberately deferred, not forgotten: wire it in (and
-# retire the two oapi-codegen lines below, per contract.md's "File/package
-# layout" — "the oapi-codegen invocations in Makefile's generate target"
-# are listed as deleted) once a later ticket (6/7) actually moves real
-# routes onto huma and its dumped spec becomes the genuine source of
-# truth instead of a placeholder.
+# story-1/ticket-6: `go run ./cmd/server openapi v1` replaces the old
+# `oapi-codegen -generate types,gin,spec -package api -o
+# internal/api/openapi.gen.go openapi.yaml` line — internal/api is gone
+# (contract.md's "File/package layout"), and openapi.yaml itself flips
+# from hand-authored input to huma-derived output (contract.md's
+# "OpenAPI spec output" section). Deliberately the "v1"-scoped form of the
+# "openapi" command, not the bare `go run ./cmd/server openapi` ticket-5
+# originally built (main.go's own doc comment on that command explains
+# why): apiBFF has zero real operations
+# registered until a later ticket migrates the BFF surface too, so dumping
+# its half here would overwrite the hand-authored bff-openapi.yaml the
+# oapi-codegen line below still needs as real input — the exact landmine
+# ticket-5's own report flagged forward ("tickets 6 and 7 each wire their
+# own surface's half once that surface no longer depends on the
+# hand-authored file"). That line itself is otherwise unchanged: BFF
+# still generates its own ServerInterface/Error/RegisterHandlers into its
+# own package (internal/bffapi) from a distinct package name, same
+# reasoning as always (`_contract/API.md`'s "Two specs, not one") — it
+# just no longer has an internal/api sibling to distinguish itself from.
 .PHONY: generate
 generate:
 	@for f in internal/db/*.go; do \
@@ -84,7 +81,7 @@ generate:
 		grep -q '^// Code generated' "$$f" && rm -f "$$f"; \
 	done
 	$(BIN_DIR)/sqlc generate
-	$(BIN_DIR)/oapi-codegen -generate types,gin,spec -package api -o internal/api/openapi.gen.go openapi.yaml
+	go run ./cmd/server openapi v1
 	$(BIN_DIR)/oapi-codegen -generate types,gin,spec -package bffapi -o internal/bffapi/bffapi.gen.go bff-openapi.yaml
 
 # web-build runs Vite's production build (web/dist) — split out of

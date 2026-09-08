@@ -14,38 +14,27 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mildronize/my-template/internal/api"
 	"github.com/mildronize/my-template/internal/identity"
 )
 
-// newKeysIntegrationRouter builds a full /api/v1 stack — RejectActorFields,
-// RequireActor, then the openapi.yaml request validator — against a real
-// temp-file SQLite database (not a mock), for GET /keys and
-// DELETE /keys/:id integration tests. It mounts KeysServer's two routes
-// directly on the gin group rather than going through the full generated
-// api.RegisterHandlers (which would require these keys-only tests to also
-// implement internal/domain/todo's ServerInterface methods —
-// todo_handler_test.go already covers the composite-registration path end
-// to end). The openapi.yaml request validator matches requests against
-// the spec's own path templates, independent of gin's route table, so
-// this still exercises the same validated-shape guarantee (Done-when 7)
-// the composite wiring gives /todos and /me.
+// newKeysIntegrationRouter builds a full /api/v1 stack — humamw.RejectActorHeader,
+// humamw.RequireActor, then RegisterKeysRoutes — against a real temp-file
+// SQLite database (not a mock), for GET /keys and DELETE /keys/:id
+// integration tests. It registers only the keys routes rather than going
+// through newIntegrationRouter's full RegisterTodoRoutes too
+// (todo_handler_test.go already covers that combined-registration path
+// end to end) — still the same humagin-wrapped *gin.Engine wiring shape
+// as production (ticket-6), just a narrower operation set.
 func newKeysIntegrationRouter(t *testing.T) (*gin.Engine, *sql.DB) {
 	t.Helper()
 	conn := newTestDB(t)
 
 	repo := identity.NewRepo(conn)
 	svc := identity.NewService(repo, repo, nil, nil)
-	keysServer := NewKeysServer(svc)
-
-	validator, err := api.RequestValidator()
-	require.NoError(t, err)
 
 	router := gin.New()
-	group := router.Group("/api/v1")
-	group.Use(RejectActorFields(), RequireActor(svc), validator)
-	group.GET("/keys", keysServer.ListKeys)
-	group.DELETE("/keys/:id", func(c *gin.Context) { keysServer.RevokeKey(c, c.Param("id")) })
+	api := newHumaV1API(router, svc)
+	RegisterKeysRoutes(api, svc)
 
 	return router, conn
 }
@@ -61,9 +50,9 @@ func doKeysRequest(t *testing.T, router *gin.Engine, method, path, rawKey string
 	return rec
 }
 
-func decodeKeysError(t *testing.T, rec *httptest.ResponseRecorder) api.Error {
+func decodeKeysError(t *testing.T, rec *httptest.ResponseRecorder) apiErrorBody {
 	t.Helper()
-	var got api.Error
+	var got apiErrorBody
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	return got
 }
@@ -83,7 +72,7 @@ func TestHandler_KeysListAndRevokeRoundTrip(t *testing.T) {
 
 	listRec := doKeysRequest(t, router, http.MethodGet, "/api/v1/keys", rawKey)
 	require.Equal(t, http.StatusOK, listRec.Code)
-	var list api.ApiKeyList
+	var list ApiKeyList
 	require.NoError(t, json.Unmarshal(listRec.Body.Bytes(), &list))
 	require.Len(t, list.Keys, 2, "both the seeded key and the freshly created one must be listed")
 
@@ -92,10 +81,10 @@ func TestHandler_KeysListAndRevokeRoundTrip(t *testing.T) {
 
 	listAfterRec := doKeysRequest(t, router, http.MethodGet, "/api/v1/keys", rawKey)
 	require.Equal(t, http.StatusOK, listAfterRec.Code)
-	var listAfter api.ApiKeyList
+	var listAfter ApiKeyList
 	require.NoError(t, json.Unmarshal(listAfterRec.Body.Bytes(), &listAfter))
 	require.Len(t, listAfter.Keys, 1, "the revoked key must no longer be listed")
-	assert.NotEqual(t, second.ID, listAfter.Keys[0].Id)
+	assert.NotEqual(t, second.ID, listAfter.Keys[0].ID)
 }
 
 // TestI3_HandlerOwnershipScoping_ReturnsNotFoundNotForbidden_Keys — I3, at
@@ -145,11 +134,11 @@ func TestI3_HandlerOwnershipScoping_ReturnsNotFoundNotForbidden_Keys(t *testing.
 	// revoke it. Authenticate as the actual owner (ownerKey) to confirm.
 	listRec := doKeysRequest(t, router, http.MethodGet, "/api/v1/keys", ownerKey)
 	require.Equal(t, http.StatusOK, listRec.Code)
-	var list api.ApiKeyList
+	var list ApiKeyList
 	require.NoError(t, json.Unmarshal(listRec.Body.Bytes(), &list))
 	found := false
 	for _, k := range list.Keys {
-		if k.Id == theirs.ID {
+		if k.ID == theirs.ID {
 			found = true
 		}
 	}
@@ -185,12 +174,12 @@ func TestI9_ListKeys_ExpiredButUnrevokedKeyStillListed_RevokedKeyExcluded(t *tes
 	rec := doKeysRequest(t, router, http.MethodGet, "/api/v1/keys", liveKey)
 	require.Equal(t, http.StatusOK, rec.Code)
 
-	var list api.ApiKeyList
+	var list ApiKeyList
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &list))
 
 	ids := make(map[string]bool, len(list.Keys))
 	for _, k := range list.Keys {
-		ids[k.Id] = true
+		ids[k.ID] = true
 	}
 	assert.True(t, ids[expired.ID], "an expired-but-unrevoked key must still be listed (API.md — deliberate UX choice, not a bug)")
 	assert.False(t, ids[toRevoke.ID], "a revoked key must never be listed")
