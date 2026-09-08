@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mildronize/my-template/internal/bffapi"
 	"github.com/mildronize/my-template/internal/identity"
 	"github.com/mildronize/my-template/internal/transport/humamw"
 	"github.com/mildronize/my-template/internal/transport/publicapi"
@@ -83,10 +82,10 @@ func TestBFFHandler_ListKeys_ReturnsEveryAgentsKeys(t *testing.T) {
 
 	rec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/keys", ownerSession, nil)
 	require.Equal(t, http.StatusOK, rec.Code)
-	var list bffapi.ApiKeyList
+	var list ApiKeyList
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &list))
 
-	byID := make(map[string]bffapi.ApiKey, len(list.Keys))
+	byID := make(map[string]ApiKey, len(list.Keys))
 	for _, k := range list.Keys {
 		byID[k.Id] = k
 	}
@@ -118,7 +117,7 @@ func TestBFFHandler_RevokeKey_AnyAgentsKey_ThenListNoLongerShowsIt(t *testing.T)
 
 	listRec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/keys", ownerSession, nil)
 	require.Equal(t, http.StatusOK, listRec.Code)
-	var list bffapi.ApiKeyList
+	var list ApiKeyList
 	require.NoError(t, json.Unmarshal(listRec.Body.Bytes(), &list))
 	for _, k := range list.Keys {
 		assert.NotEqual(t, issued.APIKey.ID, k.Id, "a revoked key must no longer be listed (revoked_at IS NULL is ListAllAgentAPIKeys' own filter)")

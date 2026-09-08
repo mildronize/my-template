@@ -33,7 +33,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/cobra"
 
-	"github.com/mildronize/my-template/internal/bffapi"
 	"github.com/mildronize/my-template/internal/domain/todo"
 	"github.com/mildronize/my-template/internal/identity"
 	"github.com/mildronize/my-template/internal/platform"
@@ -157,15 +156,13 @@ func main() {
 		Use:   "openapi [surface]",
 		Short: "Dump one or both surfaces' OpenAPI specs to disk",
 		Long: "surface is \"v1\", \"bff\", or omitted to dump both (ticket-5's " +
-			"original, still the default for anyone invoking this bare). " +
-			"story-1/ticket-6 wires `make generate` to \"openapi v1\" only, " +
-			"not the bare form — apiBFF has zero real operations registered " +
-			"until ticket 7 migrates that surface too, so dumping its half " +
-			"here would overwrite the hand-authored bff-openapi.yaml " +
-			"oapi-codegen's own bffapi invocation still needs as input " +
-			"(the exact landmine ticket-5's own report flagged forward: " +
-			"\"tickets 6 and 7 each wire their own surface's half once that " +
-			"surface no longer depends on the hand-authored file\").",
+			"original default). story-1/ticket-6 temporarily narrowed " +
+			"`make generate` to \"openapi v1\" only, since apiBFF had zero real " +
+			"operations registered until ticket 7 migrated that surface too — " +
+			"dumping its half before then would have overwritten the " +
+			"hand-authored bff-openapi.yaml oapi-codegen's own bffapi " +
+			"invocation still needed as input. Both surfaces are huma-native " +
+			"now (ticket 7), so `make generate` calls this bare, dumping both.",
 		Args: cobra.MaximumNArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
 			surface := ""
@@ -240,13 +237,16 @@ func buildHandler(ctx context.Context, cfg *platform.Config, db *sql.DB, logger 
 
 // buildHandlerAndHumaAPIs does everything buildHandler always did, plus
 // (ticket-5) wraps apiRouter/bffRouter — the exact same *gin.Engine
-// instances oapi-codegen's own routes are registered on, not a separate
-// pair — in two huma.API instances via humagin.New, per contract.md's
-// "Framework & wiring" section ("Two huma.API instances, both wrapping
-// that same *gin.Engine"). Neither instance has any operation registered
-// on it yet (that's tickets 6/7's job) and neither serves any real
-// traffic this ticket — see newHumaAPIs' own doc comment for how that's
-// kept true even though both engines are already live.
+// instances every route is registered on, not a separate pair — in two
+// huma.API instances via humagin.New, per contract.md's "Framework &
+// wiring" section ("Two huma.API instances, both wrapping that same
+// *gin.Engine"). story-1/ticket-7: both surfaces now register real
+// operations, so newHumaAPIs is built before wireBFF runs (unlike
+// tickets 5/6, where bff still built its own oapi-codegen-backed
+// /api/bff group independently and apiBFFH sat inert until this ticket) —
+// wireBFF needs apiBFFH in hand to attach humamw.RequireSession and
+// register bff's own huma operations on it, the same way wirePublicAPI
+// already does for apiV1H.
 func buildHandlerAndHumaAPIs(ctx context.Context, cfg *platform.Config, db *sql.DB, logger *slog.Logger, distFS fs.FS) (http.Handler, huma.API, huma.API, error) {
 	repo := identity.NewRepo(db)
 	todoSvc := todo.NewService(todo.NewRepo(db))
@@ -259,20 +259,22 @@ func buildHandlerAndHumaAPIs(ctx context.Context, cfg *platform.Config, db *sql.
 		return nil, nil, nil, fmt.Errorf("wiring identity module: %w", err)
 	}
 
-	// --- bff ------------------------------------------------------------
+	// --- bff (ticket-7: fully on huma) -----------------------------------
 	bffRouter := platform.NewRouter(logger)
+
+	// --- huma foundation (ticket-5) + public API operations (ticket-6) +
+	// bff operations (ticket-7) ------------------------------------------
+	apiV1H, apiBFFH := newHumaAPIs(apiRouter, bffRouter)
+	wirePublicAPI(apiV1H, identitySvc, todoSvc)
+
 	// identitySvc (built once by wireIdentity, above) is shared with bff's
-	// own new /api/bff/keys endpoints (milestone-3/task-2) — one
+	// own /api/bff/keys endpoints (milestone-3/task-2) — one
 	// *identity.Service instance, not two independently-constructed ones,
 	// the same shared-service-layer reasoning todoSvc's own single
 	// instance already follows across both engines.
-	if err := wireBFF(ctx, bffRouter, cfg, repo, todoSvc, identitySvc, logger, distFS); err != nil {
+	if err := wireBFF(ctx, bffRouter, apiBFFH, cfg, repo, todoSvc, identitySvc, logger, distFS); err != nil {
 		return nil, nil, nil, fmt.Errorf("wiring bff: %w", err)
 	}
-
-	// --- huma foundation (ticket-5) + public API operations (ticket-6) ---
-	apiV1H, apiBFFH := newHumaAPIs(apiRouter, bffRouter)
-	wirePublicAPI(apiV1H, identitySvc, todoSvc)
 
 	// Both engines share one port — a stdlib mux dispatches by path prefix.
 	// "/api/v1/" and "/healthz" are publicapi's; everything else (bff's
@@ -323,12 +325,11 @@ func buildHandlerAndHumaAPIs(ctx context.Context, cfg *platform.Config, db *sql.
 // middleware is api.UseMiddleware(...) after construction, not a Config
 // field — see RejectActorFields' own doc comment in
 // internal/transport/humamw). humamw.RequireActor itself is attached one
-// level up, by wirePublicAPI (ticket-6, publicapi.go below) — apiV1H's
-// own actor-resolution middleware needs identitySvc, which this function
-// deliberately doesn't take a dependency on (it only ever wires
-// engine-level plumbing both surfaces share, per its own name). apiBFFH's
-// own RequireSession attachment is ticket-7's job, same reasoning
-// ticket-5 originally gave: it has no operation to protect yet.
+// level up, by wirePublicAPI (ticket-6, publicapi.go below) and wireBFF
+// (ticket-7, below) respectively — each surface's own actor-resolution
+// middleware needs dependencies (identitySvc, or the bff session signer)
+// this function deliberately doesn't take on, since it only ever wires
+// engine-level plumbing both surfaces share, per its own name.
 func newHumaAPIs(apiRouter, bffRouter *gin.Engine) (apiV1H, apiBFFH huma.API) {
 	humamw.InstallErrorEnvelope()
 
@@ -405,31 +406,21 @@ func wirePublicAPI(apiV1H huma.API, identitySvc *identity.Service, todoSvc *todo
 	publicapi.RegisterTodoRoutes(apiV1H, todoSvc)
 }
 
-// bffServer composes every internal/bffapi ServerInterface piece into the
-// one type internal/bffapi.RegisterHandlers needs — the bff-surface mirror
-// of apiServer, above. bff.MeServer contributes GetMe, *bff.KeysServer
-// contributes ListKeys/RevokeKey, *bff.TodoServer contributes the todo
-// CRUD methods, *bff.UsersServer contributes ListUsers (the assignee
-// picker's data source). No method names collide, so plain embedding is
-// sufficient, same reasoning as apiServer.
-type bffServer struct {
-	bff.MeServer
-	*bff.KeysServer
-	*bff.TodoServer
-	*bff.UsersServer
-}
-
-var _ bffapi.ServerInterface = bffServer{}
-
 // wireBFF builds internal/transport/bff's session signer and its
 // owner-login flow's id-token verifier, then registers GET /login and
 // GET /callback on router (task-4.md, _contract/API.md's BFF section),
-// the new /api/bff JSON surface (milestone-3/task-2, below), plus the
-// embedded SPA (cmd/server/spa.go) as router's NoRoute handler
-// (milestone-3/task-1) — completing task-1's Done-when 3 (platform's
-// middleware wired into both engines): router here already carries
-// platform.NewRouter's RequestID/RequestLogging/Recovery, applied by
-// buildHandler exactly the way it's applied to publicapi's own router.
+// the /api/bff JSON surface (story-1/ticket-7: every operation on
+// apiBFFH now, replacing internal/bffapi's generated ServerInterface
+// registration), plus the embedded SPA (cmd/server/spa.go) as router's
+// NoRoute handler (milestone-3/task-1) — completing task-1's Done-when 3
+// (platform's middleware wired into both engines): router here already
+// carries platform.NewRouter's RequestID/RequestLogging/Recovery, applied
+// by buildHandler exactly the way it's applied to publicapi's own router.
+// apiBFFH is the same huma.API instance newHumaAPIs built wrapping
+// router — passed in (rather than built here) so this function's own
+// humamw.RequireSession attachment and bff.RegisterXRoutes calls happen
+// on the one instance every other piece of apiBFFH wiring (RejectActorFields,
+// newHumaAPIs) already shares.
 //
 // Neither cfg.SessionSecret being auto-generated nor
 // SSOClientID/SSOClientSecret being unset stop this from wiring routes —
@@ -449,13 +440,13 @@ var _ bffapi.ServerInterface = bffServer{}
 // task-1/task-2 (each task's own "what NOT to do" list) and removed by
 // task-3, once the SPA's own todos screen replaced what it rendered —
 // there is no view_handler.go left in this package at all now. todoSvc is
-// still accepted here for the /api/bff JSON surface below
-// (milestone-3/task-2 — the same instance wirePublicAPI's own TodoServer
-// uses, per ARCHITECTURE.md's shared-service-layer rule).
+// still accepted here for the /api/bff JSON surface below (the same
+// instance wirePublicAPI's own todo routes use, per ARCHITECTURE.md's
+// shared-service-layer rule).
 // distFS is the SPA's already-fs.Sub'd dist filesystem — see buildHandler's
 // own doc comment on why this is a parameter rather than wireBFF reaching
 // into web.DistFS itself.
-func wireBFF(ctx context.Context, router *gin.Engine, cfg *platform.Config, repo *identity.Repo, todoSvc *todo.Service, identitySvc *identity.Service, logger *slog.Logger, distFS fs.FS) error {
+func wireBFF(ctx context.Context, router *gin.Engine, apiBFFH huma.API, cfg *platform.Config, repo *identity.Repo, todoSvc *todo.Service, identitySvc *identity.Service, logger *slog.Logger, distFS fs.FS) error {
 	secret := []byte(cfg.SessionSecret)
 	if len(secret) == 0 {
 		secret = make([]byte, 32)
@@ -493,44 +484,38 @@ func wireBFF(ctx context.Context, router *gin.Engine, cfg *platform.Config, repo
 	router.GET("/login", bff.NewLoginHandler(cfg, signer, logger))
 	router.GET("/callback", bff.NewCallbackHandler(cfg, signer, idVerifier, repo, logger))
 
-	// --- /api/bff: milestone-3/task-2's new session-authenticated JSON
-	// surface (bff-openapi.yaml, internal/bffapi) -----------------------
+	// --- /api/bff: the session-authenticated JSON surface (story-1/
+	// ticket-7: every operation on apiBFFH, huma.Register calls in
+	// internal/transport/bff replacing internal/bffapi's generated
+	// ServerInterface registration) -----------------------------------
 	//
 	// This is the point BFF writes are enabled — the I2/I12 boundary,
 	// condensed from _contract/API.md's "The I2/I12 boundary" section
-	// (see also internal/transport/bff/json_middleware.go's
-	// RequireJSONSession doc comment, the other point this same reasoning
-	// is pinned to): I2 (a Bearer credential never resolves to
-	// role='owner') and I12 (a BFF
+	// (see also internal/transport/humamw.RequireSession's own doc
+	// comment, the other point this same reasoning is pinned to): I2 (a
+	// Bearer credential never resolves to role='owner') and I12 (a BFF
 	// session never resolves to role='agent') are two halves of one
 	// design. An owner has no Bearer credential to present at all, so a
-	// BFF session — gated here by bff.RequireJSONSession — is the *only*
+	// BFF session — gated here by humamw.RequireSession — is the *only*
 	// path by which POST/PATCH/DELETE /api/bff/todos and DELETE
 	// /api/bff/keys/{id} ever run; an agent has no session to present, so
-	// it can never reach these routes regardless. This group is
-	// deliberately the only place in this service that registers an
-	// owner-authenticated write route — wirePublicAPI (above) registers
-	// none, and per the boundary reasoning above, never should.
+	// it can never reach these routes regardless. This is deliberately the
+	// only place in this service that registers an owner-authenticated
+	// write route — wirePublicAPI (above) registers none, and per the
+	// boundary reasoning above, never should.
 	//
-	// Middleware order mirrors wireIdentity/wirePublicAPI's own: I1's
-	// RejectActorFields (reused directly from internal/transport/
-	// publicapi — a pure request-shape guard with no publicapi-specific
-	// state) runs before RequireJSONSession's own DB lookup, so a shape
-	// violation never spends a session-resolution query; the bff-openapi.yaml
-	// request validator runs last, after authentication, same as
-	// wirePublicAPI's own validator placement.
-	bffValidator, err := bffapi.RequestValidator()
-	if err != nil {
-		return fmt.Errorf("building bff-openapi request validator: %w", err)
-	}
-	apiBFF := router.Group("/api/bff")
-	apiBFF.Use(publicapi.RejectActorFields(), bff.RequireJSONSession(signer, repo, logger), bffValidator)
-	bffapi.RegisterHandlers(apiBFF, bffServer{
-		MeServer:    bff.MeServer{},
-		KeysServer:  bff.NewKeysServer(identitySvc),
-		TodoServer:  bff.NewTodoServer(todoSvc),
-		UsersServer: bff.NewUsersServer(identitySvc),
-	})
+	// Middleware order mirrors wireIdentity/wirePublicAPI's own:
+	// newHumaAPIs already attached humamw.RejectActorFields (I1) to
+	// apiBFFH ahead of any operation, so a shape violation never spends a
+	// session-resolution DB lookup — humamw.RequireSession is attached
+	// here, after that, same ordering wirePublicAPI's own
+	// humamw.RequireActor follows relative to apiV1H's RejectActorFields.
+	apiBFFH.UseMiddleware(humamw.RequireSession(signer, bff.SessionCookieName, repo))
+
+	bff.RegisterMeRoutes(apiBFFH)
+	bff.RegisterKeysRoutes(apiBFFH, identitySvc)
+	bff.RegisterUsersRoutes(apiBFFH, identitySvc)
+	bff.RegisterTodoRoutes(apiBFFH, todoSvc)
 
 	spaHandler, err := newSPAHandler(distFS)
 	if err != nil {

@@ -18,12 +18,23 @@ import (
 )
 
 // Cookie names — distinct per DATA_MODEL.md's "BFF session" note and
-// task-4.md's login-flow spec: sessionCookieName is the long-lived (well,
+// task-4.md's login-flow spec: SessionCookieName is the long-lived (well,
 // an hour) proof of a completed login; stateCookieName only survives one
 // redirect round-trip (GET /login -> Hydra -> GET /callback) and carries
 // the PKCE verifier, never the other way around.
+//
+// SessionCookieName is exported (story-1/ticket-7, unlike every other
+// name in this const block): cmd/server/main.go's wireBFF now has to pass
+// it to humamw.RequireSession(signer, cookieName, repo) when attaching
+// that middleware to apiBFFH — humamw deliberately takes the cookie name
+// as a parameter rather than hard-coding it or importing this package for
+// the literal (humamw.RequireSession's own doc comment), so this is the
+// one name in this file that needs a caller outside the package to reach
+// it now that ticket-7 wires the real production call. stateCookieName
+// stays unexported — it never leaves login_handler.go/callback_handler.go,
+// both still in this package.
 const (
-	sessionCookieName = "session"
+	SessionCookieName = "session"
 	stateCookieName   = "oauth_state"
 
 	sessionTTL = time.Hour       // "reasonable TTL... an hour is fine" (task-4.md)

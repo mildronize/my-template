@@ -1,60 +1,78 @@
 package bff
 
 import (
+	"context"
 	"net/http"
 
-	"github.com/gin-gonic/gin"
+	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/mildronize/my-template/internal/bffapi"
 	"github.com/mildronize/my-template/internal/identity"
 )
 
-// UsersServer adapts identity.Service to internal/bffapi's generated
-// ServerInterface's users-shaped subset (ListUsers) — GET /api/bff/users,
-// the assignee picker's own data source (มายด์'s ask: "the assignee form
-// ... to be a drop[down] of the assignee, not freeform text, see in
-// my-task"). Mirrors my-task's own user.ts router (list only, "humans
-// and agents in one list") and this package's own KeysServer shape
-// (session-gated, no create/update/delete — see that file's own doc
-// comment for the same reasoning applied to keys).
-type UsersServer struct {
-	Service *identity.Service
+// UserRole is User.Role's fixed two-value enum (bff-openapi.yaml's
+// UserRole schema) — replaces internal/bffapi.UserRole (deleted this
+// ticket).
+type UserRole string
+
+// User is GET /api/bff/users' row shape — the assignee picker's data
+// source (มายด์'s ask: "the assignee form ... to be a drop[down] of the
+// assignee, not freeform text, see in my-task"). Replaces
+// internal/bffapi.User — same field names/JSON tags as before.
+type User struct {
+	Id     string   `json:"id"`
+	Handle string   `json:"handle"`
+	Role   UserRole `json:"role" enum:"owner,agent"`
+	Active bool     `json:"active"`
 }
 
-// NewUsersServer builds a UsersServer on top of svc.
-func NewUsersServer(svc *identity.Service) *UsersServer {
-	return &UsersServer{Service: svc}
+// UserList is GET /api/bff/users' response envelope.
+type UserList struct {
+	Users []User `json:"users"`
 }
 
-func toBFFUser(u identity.User) bffapi.User {
-	return bffapi.User{
+// ListUsersOutput is ListUsers' huma.Register output.
+type ListUsersOutput struct {
+	Body UserList
+}
+
+func toBFFUser(u identity.User) User {
+	return User{
 		Id:     u.ID,
 		Handle: u.Handle,
-		Role:   bffapi.UserRole(u.Role),
+		Role:   UserRole(u.Role),
 		Active: u.Active,
 	}
 }
 
-// ListUsers implements bffapi.ServerInterface — GET /api/bff/users. Every
-// active user, either role, ordered by handle (identity.Service.
-// ListActiveUsers' own doc comment) — session-gated only, no further
-// scoping: unlike /keys, there is no "which users belong to this caller"
-// question to ask, every active user is a real candidate assignee for
-// every todo (todos are shared, GOAL.md's Ownership model decision).
-func (s *UsersServer) ListUsers(c *gin.Context) {
-	if _, ok := bffOwnerID(c); !ok {
-		return
-	}
+// RegisterUsersRoutes registers GET /api/bff/users on api (ticket-7) —
+// every active user, either role, ordered by handle
+// (identity.Service.ListActiveUsers' own doc comment). Session-gated
+// only, no further scoping: unlike /keys, there is no "which users belong
+// to this caller" question to ask — every active user is a real candidate
+// assignee for every todo (todos are shared, GOAL.md's Ownership model
+// decision). api must already have humamw.RequireSession attached
+// (cmd/server/main.go).
+func RegisterUsersRoutes(api huma.API, svc *identity.Service) {
+	huma.Register(api, huma.Operation{
+		OperationID: "listUsers",
+		Method:      http.MethodGet,
+		Path:        "/api/bff/users",
+		Summary:     "List every active user, either role (the assignee picker's data source).",
+		Errors:      []int{http.StatusUnauthorized},
+	}, func(ctx context.Context, _ *struct{}) (*ListUsersOutput, error) {
+		if _, err := actorFromContext(ctx); err != nil {
+			return nil, err
+		}
 
-	users, err := s.Service.ListActiveUsers(c.Request.Context())
-	if err != nil {
-		c.AbortWithStatus(http.StatusInternalServerError)
-		return
-	}
+		users, err := svc.ListActiveUsers(ctx)
+		if err != nil {
+			return nil, internalServerError()
+		}
 
-	resp := bffapi.UserList{Users: make([]bffapi.User, 0, len(users))}
-	for _, u := range users {
-		resp.Users = append(resp.Users, toBFFUser(u))
-	}
-	c.JSON(http.StatusOK, resp)
+		resp := UserList{Users: make([]User, 0, len(users))}
+		for _, u := range users {
+			resp.Users = append(resp.Users, toBFFUser(u))
+		}
+		return &ListUsersOutput{Body: resp}, nil
+	})
 }

@@ -16,7 +16,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mildronize/my-template/internal/bffapi"
 	"github.com/mildronize/my-template/internal/domain/todo"
 	"github.com/mildronize/my-template/internal/identity"
 	"github.com/mildronize/my-template/internal/transport/humamw"
@@ -35,11 +34,11 @@ func init() {
 	humamw.InstallErrorEnvelope()
 }
 
-// decodeBFFActivityFeed decodes a bffapi.ActivityFeed-shaped response body
+// decodeBFFActivityFeed decodes an ActivityFeed-shaped response body
 // — GET /api/bff/activity's own success shape.
-func decodeBFFActivityFeed(t *testing.T, rec *httptest.ResponseRecorder) bffapi.ActivityFeed {
+func decodeBFFActivityFeed(t *testing.T, rec *httptest.ResponseRecorder) ActivityFeed {
 	t.Helper()
-	var got bffapi.ActivityFeed
+	var got ActivityFeed
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	return got
 }
@@ -155,11 +154,11 @@ func doAgentAPIRequest(t *testing.T, router *gin.Engine, method, path, rawKey st
 }
 
 // decodeAgentAPITodo/-Event decode internal/transport/publicapi's own
-// Todo/TodoEvent response shapes — a distinct Go type from
-// bffapi.Todo/TodoEvent (two independently-authored surfaces,
+// Todo/TodoEvent response shapes — a distinct Go type from this package's
+// own Todo/TodoEvent (two independently-authored surfaces,
 // `_contract/API.md`'s "Two specs, not one" — same field names, different
 // types), needed here because this file's agent-side requests go through
-// publicapi's own huma operations, not internal/bffapi's. Pre-ticket-6
+// publicapi's own huma operations, not this package's. Pre-ticket-6
 // these decoded internal/api.Todo/TodoEvent (oapi-codegen's own
 // generated types); story-1/ticket-6 moved that surface's
 // framework-agnostic response types into internal/transport/publicapi
@@ -264,7 +263,7 @@ func TestDoneWhen12_ActivityFeed_CrossActorAttribution(t *testing.T) {
 	// own zero events as a nonzero-looking response in some broken
 	// implementations, so the identity of what's found matters, not just
 	// that something was).
-	var found *bffapi.ActivityItem
+	var found *ActivityItem
 	for i := range feed.Items {
 		if feed.Items[i].Id == agentEvent.ID {
 			found = &feed.Items[i]
