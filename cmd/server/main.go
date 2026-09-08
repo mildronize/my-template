@@ -27,7 +27,11 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humagin"
+	"github.com/danielgtaylor/huma/v2/humacli"
 	"github.com/gin-gonic/gin"
+	"github.com/spf13/cobra"
 
 	"github.com/mildronize/my-template/internal/api"
 	"github.com/mildronize/my-template/internal/bffapi"
@@ -35,54 +39,151 @@ import (
 	"github.com/mildronize/my-template/internal/identity"
 	"github.com/mildronize/my-template/internal/platform"
 	"github.com/mildronize/my-template/internal/transport/bff"
+	"github.com/mildronize/my-template/internal/transport/humamw"
 	"github.com/mildronize/my-template/internal/transport/publicapi"
 	"github.com/mildronize/my-template/web"
 )
 
+// cliOptions is humacli's input-options struct (docs/docs/features/cli.md)
+// for this service's CLI — deliberately empty. Every existing setting
+// this service reads (port, database path, session secret, SSO config...)
+// still comes from platform.LoadConfig()'s caarlos0/env-based loading,
+// unchanged by this ticket; humacli.New is adopted here only for the
+// "custom Cobra command" mechanism (cli.Root().AddCommand(...)) the
+// contract's "OpenAPI spec output" section asks for, not to replace this
+// service's existing configuration story. An empty Options struct means
+// humacli registers zero flags/env-vars of its own, so there is nothing
+// for its "SERVICE_"-prefixed auto env-var binding to collide with.
+type cliOptions struct{}
+
+// main wires this service's CLI: the default command starts the server
+// exactly as run() used to (LoadConfig -> logger -> DB -> migrate ->
+// buildHandlerAndHumaAPIs -> listen), and a second, custom "openapi"
+// command (contract.md's "OpenAPI spec output" section) dumps both
+// surfaces' huma-generated OpenAPI documents to disk without starting the
+// server at all — huma's humacli.New's onParsed callback runs once, via
+// Cobra's PersistentPreRun, before *either* command's own Run body, so
+// apiV1H/apiBFFH are always built and populated by the time the
+// "openapi" command's own Run reads them, and the default command's own
+// Run (humacli's own root.Root().Run, built by humacli.New) is the only
+// path that ever calls hooks.OnStart and actually binds a port.
 func main() {
-	if err := run(); err != nil {
-		slog.Error("server exited with error", "error", err)
-		os.Exit(1)
-	}
+	var apiV1H, apiBFFH huma.API
+
+	cli := humacli.New(func(hooks humacli.Hooks, _ *cliOptions) {
+		// ctx/stop is set up first, before LoadConfig/OpenDB/Migrate/
+		// buildHandlerAndHumaAPIs, matching the old run()'s own
+		// signal.NotifyContext(context.Background(), os.Interrupt,
+		// syscall.SIGTERM) placement — a SIGINT/SIGTERM arriving during
+		// startup wiring (e.g. mid SSO-discovery HTTP call inside
+		// wireIdentity) still cancels that in-flight work, not just a
+		// signal arriving once the server is already serving. humacli's
+		// own signal.Notify (humacli/humacli.go's root.Run, wired below via
+		// hooks.OnStop) only starts listening once this callback returns —
+		// there is no gap where two competing signal handlers race, since
+		// Go's signal package fans out each delivered signal to every
+		// registered listener independently.
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+
+		cfg, err := platform.LoadConfig()
+		if err != nil {
+			stop()
+			slog.Error("server exited with error", "error", fmt.Errorf("loading config: %w", err))
+			os.Exit(1)
+		}
+
+		logger := platform.NewLogger()
+		slog.SetDefault(logger)
+
+		db, err := platform.OpenDB(cfg.DatabasePath)
+		if err != nil {
+			stop()
+			slog.Error("server exited with error", "error", fmt.Errorf("opening database: %w", err))
+			os.Exit(1)
+		}
+
+		if err := platform.Migrate(db); err != nil {
+			_ = db.Close()
+			stop()
+			slog.Error("server exited with error", "error", fmt.Errorf("applying migrations: %w", err))
+			os.Exit(1)
+		}
+
+		distFS, err := fs.Sub(web.DistFS, "dist")
+		if err != nil {
+			_ = db.Close()
+			stop()
+			slog.Error("server exited with error", "error", fmt.Errorf("opening embedded web/dist: %w", err))
+			os.Exit(1)
+		}
+
+		handler, v1, bffH, err := buildHandlerAndHumaAPIs(ctx, cfg, db, logger, distFS)
+		if err != nil {
+			_ = db.Close()
+			stop()
+			slog.Error("server exited with error", "error", fmt.Errorf("building HTTP handler: %w", err))
+			os.Exit(1)
+		}
+		apiV1H, apiBFFH = v1, bffH
+
+		addr := fmt.Sprintf(":%d", cfg.Port)
+		serverDone := make(chan struct{})
+
+		// hooks.OnStop must not return until the server has actually
+		// finished shutting down — humacli's own root.Run calls
+		// hooks.OnStop synchronously from within its signal-handling
+		// select and returns (ending the whole process) as soon as that
+		// call returns, without separately waiting on whatever
+		// hooks.OnStart's own goroutine is still doing
+		// (humacli/humacli.go's New: `case <-quit: ... c.stop()`, no
+		// second wait afterwards). Blocking on serverDone here, closed
+		// only after platform.RunServer's own graceful-shutdown sequence
+		// returns, is what makes that true — a bare `stop()` would return
+		// immediately and let the process exit mid-drain.
+		hooks.OnStart(func() {
+			defer close(serverDone)
+			defer db.Close()
+			if err := platform.RunServer(ctx, logger, addr, handler); err != nil {
+				slog.Error("server exited with error", "error", err)
+				os.Exit(1)
+			}
+		})
+		hooks.OnStop(func() {
+			stop()
+			<-serverDone
+		})
+	})
+
+	cli.Root().AddCommand(&cobra.Command{
+		Use:   "openapi",
+		Short: "Dump both surfaces' OpenAPI specs to disk",
+		Run: func(_ *cobra.Command, _ []string) {
+			if err := writeSpec(apiV1H.OpenAPI(), "openapi.yaml"); err != nil {
+				slog.Error("dumping openapi.yaml", "error", err)
+				os.Exit(1)
+			}
+			if err := writeSpec(apiBFFH.OpenAPI(), "bff-openapi.yaml"); err != nil {
+				slog.Error("dumping bff-openapi.yaml", "error", err)
+				os.Exit(1)
+			}
+		},
+	})
+
+	cli.Run()
 }
 
-func run() error {
-	cfg, err := platform.LoadConfig()
+// writeSpec dumps doc to path as OpenAPI 3.0.3 YAML (DowngradeYAML, not
+// YAML — contract.md's "OpenAPI spec output" section: both existing spec
+// files are 3.0.3 today, and every downstream reader — openapi-typescript
+// included — is pinned to that, not 3.1).
+func writeSpec(doc *huma.OpenAPI, path string) error {
+	b, err := doc.DowngradeYAML()
 	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
+		return fmt.Errorf("downgrading %s to OpenAPI 3.0.3 YAML: %w", path, err)
 	}
-
-	logger := platform.NewLogger()
-	slog.SetDefault(logger)
-
-	db, err := platform.OpenDB(cfg.DatabasePath)
-	if err != nil {
-		return fmt.Errorf("opening database: %w", err)
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		return fmt.Errorf("writing %s: %w", path, err)
 	}
-	defer db.Close()
-
-	if err := platform.Migrate(db); err != nil {
-		return fmt.Errorf("applying migrations: %w", err)
-	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	distFS, err := fs.Sub(web.DistFS, "dist")
-	if err != nil {
-		return fmt.Errorf("opening embedded web/dist: %w", err)
-	}
-
-	handler, err := buildHandler(ctx, cfg, db, logger, distFS)
-	if err != nil {
-		return fmt.Errorf("building HTTP handler: %w", err)
-	}
-
-	addr := fmt.Sprintf(":%d", cfg.Port)
-	if err := platform.RunServer(ctx, logger, addr, handler); err != nil {
-		return fmt.Errorf("running server: %w", err)
-	}
-
 	return nil
 }
 
@@ -99,12 +200,36 @@ func run() error {
 // unmatched route, per gin's own 404-handler-chain behavior, so this is
 // checkable without a single real route on either engine needing to
 // match).
-// distFS is the SPA's dist filesystem (already fs.Sub'd to "dist") — run()
+// distFS is the SPA's dist filesystem (already fs.Sub'd to "dist") — main()
 // passes fs.Sub(web.DistFS, "dist"), the real Vite-built embed, for
 // production; tests pass a synthetic fs.FS (e.g. fstest.MapFS) so the
 // SPA-fallback assertions don't depend on `npm run build` having actually
 // run before `go test` (cmd/server/bff_negative_check_test.go).
+//
+// This is now a thin wrapper around buildHandlerAndHumaAPIs (below) —
+// same signature, same return values, same behavior, byte-for-byte, so
+// every existing caller (this file's own doc comment continues to apply
+// unmodified) and every existing test (main_test.go,
+// bff_negative_check_test.go) keeps compiling and passing exactly as
+// before. The split exists only so main()'s new "openapi" CLI command
+// (ticket-5, contract.md's "OpenAPI spec output" section) can reach the
+// two new huma.API instances buildHandlerAndHumaAPIs also builds, without
+// changing this function's own public signature.
 func buildHandler(ctx context.Context, cfg *platform.Config, db *sql.DB, logger *slog.Logger, distFS fs.FS) (http.Handler, error) {
+	handler, _, _, err := buildHandlerAndHumaAPIs(ctx, cfg, db, logger, distFS)
+	return handler, err
+}
+
+// buildHandlerAndHumaAPIs does everything buildHandler always did, plus
+// (ticket-5) wraps apiRouter/bffRouter — the exact same *gin.Engine
+// instances oapi-codegen's own routes are registered on, not a separate
+// pair — in two huma.API instances via humagin.New, per contract.md's
+// "Framework & wiring" section ("Two huma.API instances, both wrapping
+// that same *gin.Engine"). Neither instance has any operation registered
+// on it yet (that's tickets 6/7's job) and neither serves any real
+// traffic this ticket — see newHumaAPIs' own doc comment for how that's
+// kept true even though both engines are already live.
+func buildHandlerAndHumaAPIs(ctx context.Context, cfg *platform.Config, db *sql.DB, logger *slog.Logger, distFS fs.FS) (http.Handler, huma.API, huma.API, error) {
 	repo := identity.NewRepo(db)
 	todoSvc := todo.NewService(todo.NewRepo(db))
 
@@ -113,10 +238,10 @@ func buildHandler(ctx context.Context, cfg *platform.Config, db *sql.DB, logger 
 
 	apiV1, identitySvc, err := wireIdentity(ctx, apiRouter, repo, cfg, logger)
 	if err != nil {
-		return nil, fmt.Errorf("wiring identity module: %w", err)
+		return nil, nil, nil, fmt.Errorf("wiring identity module: %w", err)
 	}
 	if err := wirePublicAPI(apiV1, todoSvc, identitySvc); err != nil {
-		return nil, fmt.Errorf("wiring public API: %w", err)
+		return nil, nil, nil, fmt.Errorf("wiring public API: %w", err)
 	}
 
 	// --- bff ------------------------------------------------------------
@@ -127,8 +252,11 @@ func buildHandler(ctx context.Context, cfg *platform.Config, db *sql.DB, logger 
 	// the same shared-service-layer reasoning todoSvc's own single
 	// instance already follows across both engines.
 	if err := wireBFF(ctx, bffRouter, cfg, repo, todoSvc, identitySvc, logger, distFS); err != nil {
-		return nil, fmt.Errorf("wiring bff: %w", err)
+		return nil, nil, nil, fmt.Errorf("wiring bff: %w", err)
 	}
+
+	// --- huma foundation (ticket-5) --------------------------------------
+	apiV1H, apiBFFH := newHumaAPIs(apiRouter, bffRouter)
 
 	// Both engines share one port — a stdlib mux dispatches by path prefix.
 	// "/api/v1/" and "/healthz" are publicapi's; everything else (bff's
@@ -143,7 +271,67 @@ func buildHandler(ctx context.Context, cfg *platform.Config, db *sql.DB, logger 
 	mux.Handle("/healthz", apiRouter)
 	mux.Handle("/", bffRouter)
 
-	return mux, nil
+	return mux, apiV1H, apiBFFH, nil
+}
+
+// newHumaAPIs builds this ticket's two huma.API instances — apiV1 wraps
+// apiRouter (public API, Bearer-authenticated), apiBFF wraps bffRouter
+// (BFF, session-authenticated) — matching contract.md's "Framework &
+// wiring" section: humagin.New binds to the full *gin.Engine (not a route
+// group), each surface keeps its own Info.Title/Info.Version matching
+// today's two hand-authored spec files' own `info` blocks, and
+// RejectUnknownQueryParameters is set once per surface (I1's query-param
+// half, now free instead of hand-rolled).
+//
+// OpenAPIPath and DocsPath are both deliberately cleared: huma.DefaultConfig
+// defaults them to "/openapi" and "/docs" respectively, which would
+// auto-register GET /openapi.json / /openapi.yaml / /docs directly on
+// whichever *gin.Engine each huma.API wraps (huma's own api.go NewAPI,
+// gated behind `if config.OpenAPIPath != ""` / `if config.DocsPath != ""`).
+// For apiBFF specifically, bffRouter is the engine mounted at "/" in
+// buildHandlerAndHumaAPIs' own mux (the SPA's catch-all) — leaving those
+// paths enabled would make them newly, observably reachable in place of
+// the SPA fallback that serves them today, which is exactly the kind of
+// change ticket-5's own "nothing observable has changed" acceptance bar
+// rules out. This ticket's own spec-output mechanism is the "openapi" CLI
+// command (main(), contract.md's "OpenAPI spec output" section) dumping
+// to committed files, not a live-served spec/docs endpoint, so neither
+// built-in route is needed anyway.
+//
+// Only RejectActorHeader (I1's X-Actor check) is registered on either
+// instance in this ticket — contract.md's middleware-mapping table names
+// that one as shared by both surfaces explicitly ("registered on both
+// configV1.Middlewares and configBFF.Middlewares"; huma v2.39.1's actual
+// API for API-wide middleware is api.UseMiddleware(...) after
+// construction, not a Config field — see RejectActorHeader's own doc
+// comment in internal/transport/humamw). RequireActor/RequireSession are
+// ported (internal/transport/humamw) and unit-tested in isolation this
+// ticket, but not yet attached to either instance here — attaching an
+// actor-resolution middleware ahead of any operation that would need it
+// has no observable effect yet, and ticket-5's own framing is "shared
+// plumbing ... built and verified in isolation before any real route
+// moves onto it": tickets 6/7 attach these once real operations exist to
+// protect.
+func newHumaAPIs(apiRouter, bffRouter *gin.Engine) (apiV1H, apiBFFH huma.API) {
+	humamw.InstallErrorEnvelope()
+
+	configV1 := huma.DefaultConfig("my-template API", "1.0.0")
+	configV1.OpenAPIPath = ""
+	configV1.DocsPath = ""
+	configV1.RejectUnknownQueryParameters = true
+
+	configBFF := huma.DefaultConfig("my-template BFF API", "1.0.0")
+	configBFF.OpenAPIPath = ""
+	configBFF.DocsPath = ""
+	configBFF.RejectUnknownQueryParameters = true
+
+	apiV1H = humagin.New(apiRouter, configV1)
+	apiBFFH = humagin.New(bffRouter, configBFF)
+
+	apiV1H.UseMiddleware(humamw.RejectActorHeader())
+	apiBFFH.UseMiddleware(humamw.RejectActorHeader())
+
+	return apiV1H, apiBFFH
 }
 
 // wireIdentity builds the identity module's actor-resolution

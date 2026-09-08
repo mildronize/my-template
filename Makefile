@@ -63,6 +63,20 @@ tools:
 # package names (not just distinct output files) so the two independently
 # generated sets of symbols of the same names (Error, ServerInterface,
 # RegisterHandlers, ...) never collide at the Go package level.
+# NOT wired in here yet: `go run ./cmd/server openapi` (story-1/ticket-5,
+# .chief/story-1/_contract/contract.md's "OpenAPI spec output" section) —
+# the huma-side command exists and works (dumps both surfaces' huma-
+# generated OpenAPI docs to these same two filenames), but ticket-5
+# registers zero real huma operations on either surface yet, so today it
+# would dump a near-empty spec straight over the hand-authored
+# openapi.yaml/bff-openapi.yaml the two oapi-codegen invocations below
+# still read as real input — silently breaking them the next time this
+# target runs. Deliberately deferred, not forgotten: wire it in (and
+# retire the two oapi-codegen lines below, per contract.md's "File/package
+# layout" — "the oapi-codegen invocations in Makefile's generate target"
+# are listed as deleted) once a later ticket (6/7) actually moves real
+# routes onto huma and its dumped spec becomes the genuine source of
+# truth instead of a placeholder.
 .PHONY: generate
 generate:
 	@for f in internal/db/*.go; do \
