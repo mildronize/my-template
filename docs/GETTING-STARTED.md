@@ -14,24 +14,33 @@ forked" once the five steps are done, to actually see it work.
 ## Prerequisites
 
 `bin/` is gitignored (`.gitignore`) — a fresh `git clone` of this
-template, or of a fork made from it, has none of `sqlc`, `goose`, or
-`oapi-codegen` on disk yet, even though `go.mod`/`go.sum` pin their exact
-versions. Run this before anything else, including before Step 2:
+template, or of a fork made from it, has neither `sqlc` nor `goose` on
+disk yet, even though `go.mod`/`go.sum` pin their exact versions. Run this
+before anything else, including before Step 2:
 
 ```sh
 make tools
 ```
 
-This installs the three pinned tools into `./bin` (`GOBIN=$(CURDIR)/bin`,
-Makefile). Nothing in Step 2–5 below works without it — `make generate`
-(the Makefile target, run more than once during Step 5: once after adding
-your new module's migration/queries/openapi content, again after deleting
-`internal/domain/todo`) shells out to `bin/sqlc` and `bin/oapi-codegen` directly,
-and they won't exist otherwise. You need these tools as early as Step 5's
-migration-authoring sub-step (`bin/goose create`, see "Writing a new
-migration" below) — well before the deletion sub-step, not just at it.
-`make tools` has nothing to do with Step 1 below (registering a Hydra
-client) — that step doesn't touch Go tooling at all.
+This installs the two pinned tools into `./bin` (`GOBIN=$(CURDIR)/bin`,
+Makefile). **Only two, not three, since story-1's huma migration**: this
+template used to also pin `oapi-codegen` here to generate Go server
+interfaces from `openapi.yaml`/`bff-openapi.yaml`; both surfaces now run
+on [huma](https://github.com/danielgtaylor/huma) (code-first — the Go
+handler code is the source of truth, and `openapi.yaml`/`bff-openapi.yaml`
+are dumped *from* it, not hand-authored *into* it), so there is no
+codegen-from-spec step left and nothing installs `oapi-codegen` anymore.
+Nothing in Step 2–5 below works without `make tools` regardless —
+`make generate` (the Makefile target, run more than once during Step 5:
+once after adding your new module's migration/queries/route
+registrations, again after deleting `internal/domain/todo`) shells out to
+`bin/sqlc` directly (it won't exist otherwise) and runs
+`go run ./cmd/server openapi` to dump both surfaces' specs. You need
+`make tools` as early as Step 5's migration-authoring sub-step
+(`bin/goose create`, see "Writing a new migration" below) — well before
+the deletion sub-step, not just at it. `make tools` has nothing to do with
+Step 1 below (registering a Hydra client) — that step doesn't touch Go
+tooling at all.
 
 **A Node.js toolchain is also required, since milestone-3** — a fresh
 clone needs Node (22+; tested against Node 22, matching `web/package.json`'s
@@ -351,16 +360,27 @@ nothing else in this repo documents — read this **before** step 1 below,
 so you know what to look for during that read-through instead of
 discovering it's missing later:
 
-- **How `todo_handler.go` implements the generated `ServerInterface`.**
-  `oapi-codegen` generates `internal/api.ServerInterface` from
-  `openapi.yaml`'s `operationId` values (one generated method per
-  operation); `internal/transport/publicapi/todo_handler.go`'s
-  `*TodoServer` type implements the subset of that interface covering
-  `/todos`. Your new module's `<new>_handler.go`, added to that same
-  `internal/transport/publicapi` package, does the same for your own
-  paths — note the type is named `TodoServer`, not a generic `Server` the
-  way milestone-1's did; keep that `<Domain>Server` naming convention for
-  your own type (see the `apiServer` bullet below for why it matters now).
+- **How `todo_handler.go` registers its routes directly on huma, no
+  generated interface involved.** This template is code-first, not
+  spec-first, since story-1's huma migration: there is no
+  `oapi-codegen`/`internal/api.ServerInterface` step anymore, and
+  `openapi.yaml`/`bff-openapi.yaml` are *derived output* (dumped by
+  `go run ./cmd/server openapi`, wired into `make generate`), not
+  hand-authored input. `internal/transport/publicapi/todo_handler.go`
+  defines its own request/response Go structs (e.g. `CreateTodoRequest`,
+  tagged `json:"title" minLength:"1" maxLength:"200"` — huma reads these
+  struct tags to build both the runtime validation and the generated spec)
+  and exports `RegisterTodoRoutes(api huma.API, svc *todo.Service)`, which
+  calls `huma.Register(api, huma.Operation{OperationID: "listTodos",
+  Method: http.MethodGet, Path: "/api/v1/todos", ...}, handlerFunc)` once
+  per operation — `handlerFunc` is a plain `func(context.Context, *Input)
+  (*Output, error)`, not an interface method. Your new module's
+  `<new>_handler.go`, added to that same `internal/transport/publicapi`
+  package, does the same for your own paths: its own request/response
+  structs, its own `Register<New>Routes(api huma.API, svc *<new>.Service)`
+  function, called once from `cmd/server/main.go`'s `wirePublicAPI` (see
+  the next bullet — there is no naming convention to keep for a shared
+  interface anymore, since there's no shared interface).
 - **The `Repository` interface + fake-repo test pattern.**
   `internal/domain/todo/service.go` depends on a small `Repository`
   interface, not `*Repo` directly, so `service_test.go` can substitute a
@@ -382,16 +402,25 @@ discovering it's missing later:
   exercise. Nothing else in this repo states this plainly — copy this
   exact call shape for your new module's own integration tests (or just
   reuse `newIntegrationRouter` — you likely don't need your own).
-- **`RejectActorFields`/`RequireActor` middleware wiring.** These now live
-  in `internal/transport/publicapi/middleware.go` (moved out of
-  `internal/identity`, which holds no transport code post-restructure —
-  ARCHITECTURE.md). `cmd/server/main.go`'s `wireIdentity` mounts
-  `publicapi.RejectActorFields()` then `publicapi.RequireActor(svc)` on
-  the `/api/v1` group before any domain module's routes are registered —
-  I1's request-shape check runs before I2/I5's actor-resolution check, and
-  every domain module's handlers rely on both having already run. Your
-  new module doesn't add this wiring itself; it just has to keep living
-  inside the `apiV1` group it's already mounted on.
+- **`RejectActorFields`/`RequireActor` middleware wiring.** These live in
+  `internal/transport/humamw` now (a router-agnostic package shared by
+  both surfaces, not `internal/identity`, which holds no transport code
+  post-restructure — ARCHITECTURE.md — and not
+  `internal/transport/publicapi/middleware.go` either, whose own
+  `gin.HandlerFunc`-based `RejectActorFields`/`RequireActor` are the
+  pre-huma versions, still present but no longer called by production
+  wiring). `cmd/server/main.go`'s `newHumaAPIs` attaches
+  `humamw.RejectActorFields()` to both `apiV1H` and `apiBFFH`
+  (`apiV1H.UseMiddleware(humamw.RejectActorFields())`) before either
+  surface registers any routes; `wirePublicAPI` then attaches
+  `humamw.RequireActor(identitySvc)` to `apiV1H` (Bearer-credential
+  resolution), and `wireBFF` attaches `humamw.RequireSession(...)` to
+  `apiBFFH` (session-cookie resolution) — I1's request-shape check runs
+  before either surface's own actor-resolution check, and every domain
+  module's handlers rely on both having already run. Your new module
+  doesn't add any of this wiring itself; it just has to keep living
+  behind the `Register<New>Routes(apiV1H, ...)` call `wirePublicAPI`
+  already makes, the same as every other domain module's routes.
 - **`HashAPIKey`/`CreateAPIKey` test-fixture helpers.** `internal/identity`
   exports `HashAPIKey` and its repo's `CreateAPIKey`;
   `internal/transport/publicapi/publicapi_testutil_test.go`'s
@@ -401,25 +430,28 @@ discovering it's missing later:
   (`todo_handler_test.go`, `keys_handler_test.go`, `middleware_test.go`),
   not one per domain module. Reuse it rather than reinventing key
   fixtures for your own module's tests.
-- **The `apiServer` embedding trick in `cmd/server/main.go`.**
-  `wirePublicAPI` builds one `apiServer` struct that embeds every domain
-  module's `ServerInterface`-contributing type —
-  `publicapi.MeServer`, `*publicapi.KeysServer`, `*publicapi.TodoServer`
-  today — and passes it to `api.RegisterHandlers` as the single value
-  satisfying the whole generated interface. This works with plain Go
-  embedding, no hand-written delegation methods, *because* no two domain
-  modules' `operationId` values collide into the same generated method
-  name, **and**, unlike milestone-1, because the embedded field names
-  don't collide either: milestone-1 named every domain's adapter type the
-  same generic `Server`, guaranteeing a `Server redeclared in this block`
-  compile error the instant a second one was embedded. This repo's
-  handler types are named after their domain instead (`TodoServer`,
-  `KeysServer`, `MeServer`), specifically so more than one can be embedded
-  at once with no alias or other workaround — keep following that
-  `<Domain>Server` convention for your own type and step 4's embed just
-  works. See "Two modules, briefly, at once" (below the numbered list) for
-  what *does* still need attention while your new module and `todo`
-  coexist.
+- **How `cmd/server/main.go` registers every domain module — plain
+  function calls, not an interface to satisfy.** `wirePublicAPI(apiV1H,
+  identitySvc, todoSvc)` calls `publicapi.RegisterMeRoutes(apiV1H)`,
+  `publicapi.RegisterKeysRoutes(apiV1H, identitySvc)`, then
+  `publicapi.RegisterTodoRoutes(apiV1H, todoSvc)` — one line per domain
+  module, each registering that module's operations directly on the
+  shared `apiV1H huma.API` instance. **This retires the old `apiServer`
+  struct-embedding trick entirely, not just changes its shape** —
+  pre-migration, `wirePublicAPI` built one `apiServer` struct embedding
+  every domain's `*<Domain>Server` type (`MeServer`, `KeysServer`,
+  `TodoServer`) so the whole thing together satisfied `oapi-codegen`'s one
+  generated `ServerInterface`, which needed a real naming convention
+  (`<Domain>Server`, not a generic `Server`) to avoid embedded-field
+  collisions between domain modules. huma's `huma.Register` needs none of
+  that: there is no generated interface for a composite value to satisfy,
+  so there is nothing to embed and no naming collision possible between
+  domain modules' handler types — add your new module's own
+  `Register<New>Routes(apiV1H, newSvc)` call as one more line inside
+  `wirePublicAPI`, same as the three already there. See "Two modules,
+  briefly, at once" (below the numbered list) for what *does* still need
+  attention while your new module and `todo` coexist — it's a shorter list
+  than it used to be, for the same reason.
 
 Do it in this order:
 
@@ -450,48 +482,57 @@ Do it in this order:
    `internal/domain/todo/` → `internal/domain/<new>/` (new package name,
    new file/type/identifier names, new table name) **and**
    `internal/transport/publicapi/todo_handler.go` (+ its test) →
-   `internal/transport/publicapi/<new>_handler.go` (+ its test), with the
-   handler's adapter type renamed to `<New>Server` (same `<Domain>Server`
-   convention `TodoServer` already follows — see "Patterns worth
-   preserving" above for why that convention matters). Keep the two
-   copies consistent with each other — the handler's `Service` field type
-   has to match your renamed domain package's `Service` type — but **keep
-   the field names todo-shaped for now** (still `title`/`done`, not your
-   real domain's fields yet). Don't touch what the domain actually does in
-   this step, only what it's called and where it lives.
+   `internal/transport/publicapi/<new>_handler.go` (+ its test), with
+   every `Todo`/`CreateTodoRequest`/... struct and the
+   `RegisterTodoRoutes(api huma.API, svc *todo.Service)` function itself
+   renamed to match your new domain (`Register<New>Routes`, see "Patterns
+   worth preserving" above — there's no separate "adapter type" to rename
+   here, huma's registration is a plain function plus a set of plain
+   request/response structs, nothing more). Keep the two copies consistent
+   with each other — the handler function's `svc *<new>.Service` parameter
+   type has to match your renamed domain package's `Service` type — but
+   **keep the field names todo-shaped for now** (still `title`/`done`, not
+   your real domain's fields yet). Don't touch what the domain actually
+   does in this step, only what it's called and where it lives.
 3. **In the same pass, add your new module's own migration, sqlc
-   queries, and `openapi.yaml` paths/schemas** — a new table, new query
-   file, new paths with new `operationId` values (e.g. `createSnippet`,
-   not `createTodo`) — still todo-shaped: the same `title`/`done`-style
-   fields your copy from step 2 already has, just declared under your new
-   table/type/operation names. This is what actually produces the
-   generated types your renamed copy references (`api.Snippet`,
-   `db.CreateSnippetParams`, ...) — a rename alone doesn't regenerate
-   anything, so skip this step and the copy from step 2 can't compile no
-   matter how carefully you renamed it.
+   queries, and huma request/response structs** — a new table, new query
+   file, new operations (`OperationID: "createSnippet"`, not
+   `"createTodo"`) in your new `<new>_handler.go` — still todo-shaped: the
+   same `title`/`done`-style fields your copy from step 2 already has,
+   just declared under your new table/type/operation names. **This
+   template is code-first, not spec-first** (since story-1's huma
+   migration — see the "Patterns worth preserving" bullets above): you
+   don't hand-edit `openapi.yaml` here the way an oapi-codegen-era fork
+   would have. `openapi.yaml`/`bff-openapi.yaml` are dumped *from* your
+   handler code by `go run ./cmd/server openapi` (step 5 below, wired into
+   `make generate`) — editing them directly gets silently overwritten the
+   next time that runs. This step is what actually produces the
+   sqlc-generated types your renamed copy references (`db.CreateSnippetParams`,
+   ...) — a rename alone doesn't regenerate anything, so skip this step
+   and the copy from step 2 can't compile no matter how carefully you
+   renamed it.
 4. **Wire the new module into `cmd/server/main.go`** the same way `todo`
    is wired today: build the service once in `buildHandler`
    (`todoSvc := todo.NewService(todo.NewRepo(db))` is the pattern — add an
-   equivalent line for your new module), add `*publicapi.<New>Server` to
-   the `apiServer` struct, and add
-   `<New>Server: publicapi.New<New>Server(newSvc)` to the composite
-   literal `wirePublicAPI` builds (see "Patterns worth preserving" above
-   for what that struct is doing). A domain module's `service.go`/`repo.go`
-   stay behind its `internal/transport/publicapi` handler, not imported
-   directly elsewhere (`ARCHITECTURE.md` rules 1–2, enforced by
+   equivalent line for your new module), then add
+   `publicapi.Register<New>Routes(apiV1H, newSvc)` as one more line inside
+   `wirePublicAPI` (see "Patterns worth preserving" above — this is a
+   plain function call, no struct field or composite literal to touch). A
+   domain module's `service.go`/`repo.go` stay behind its
+   `internal/transport/publicapi` handler, not imported directly elsewhere
+   (`ARCHITECTURE.md` rules 1–2, enforced by
    `internal/architecture_test.go`). At this point both your new module
    and the original `todo` domain exist side by side and both need to
    work — **read "Two modules, briefly, at once" right below before you
-   do this step** — the failure modes there are different from what an
-   earlier version of this document described, so don't assume you
-   already know them.
+   do this step.**
 
-   *Optional, and separate from the `api.ServerInterface` wiring above:*
+   *Optional, and separate from the public-API wiring above:*
    if you also want the owner-facing BFF surface
    (`internal/transport/bff/todo_handler.go`'s `/api/bff/todos`, and the
    SPA screens that call it) to show your new domain instead of todos,
-   `wireBFF`'s own `todoSvc` argument and `NewTodoServer` need the same
-   swap, plus the equivalent rename pass through
+   `wireBFF`'s own `todoSvc` argument and its
+   `bff.Register<New>Routes(apiBFFH, newSvc)` call need the same swap,
+   plus the equivalent rename pass through
    `web/src/app/{TodosPage,TodosList,TodoRow,NewTodoDialog}.tsx` and
    `web/src/lib/todos.ts` (Step 3b above covers the SPA-side domain-noun
    sweep in general). Nothing requires this before step 8 — but step 8
@@ -503,102 +544,81 @@ Do it in this order:
    instruction claimed one existed a step earlier than it actually could:
    `go build ./...` and `go test ./...` green here, with the copy's
    fields still todo-shaped, proves the wiring (handler↔service↔repo, the
-   sqlc/openapi/migration trio, the `main.go` registration from step 4) is
+   sqlc/migration trio, the `main.go` registration from step 4) is
    correct, independent of what the domain actually does. A renamed copy
-   straight out of step 2, with no migration/queries/openapi/regenerate
-   behind it yet, cannot reach a green build — it references generated
-   types that don't exist until steps 3 and 5 create them. That was the
-   actual bug in the old "get the copy compiling and its tests passing as
-   a copy" instruction: it described a checkpoint one step earlier than
-   the one that's actually reachable.
+   straight out of step 2, with no migration/queries/regenerate behind it
+   yet, cannot reach a green build — it references sqlc-generated types
+   that don't exist until steps 3 and 5 create them (huma's own request/
+   response types are hand-written Go structs, not generated, so those
+   compile as soon as you write them — it's specifically the DB-layer
+   types this checkpoint is waiting on). That was the actual bug in the
+   old "get the copy compiling and its tests passing as a copy"
+   instruction: it described a checkpoint one step earlier than the one
+   that's actually reachable.
 7. **Only now, change the copy's fields to your real domain shape** — your
    own `service.go`/`repo.go` logic, your migration
    (`db/migrations/*_create_<yours>.sql`) and sqlc queries
    (`db/queries/<yours>.sql`, both still todo-shaped since step 3 — this
    is where they actually become your domain's real columns), and your
-   `openapi.yaml` paths/schemas' actual field names (following the same
+   handler's request/response struct fields and tags (following the same
    conventions — owner-scoped, `me`-only actor reference, no actor field
    in the body/query/header; `_contract/API.md` has the milestone-1
    rationale, though your fork's own contract is what governs going
-   forward). Re-run `make generate` after changing the migration/queries.
-   If this step breaks the build or a test, you now know the break is in
-   your domain logic, not in the wiring — step 6's checkpoint already
-   ruled the wiring out.
+   forward). Re-run `make generate` after changing the migration/queries
+   (this also re-dumps `openapi.yaml`/`bff-openapi.yaml` from your updated
+   handler structs). If this step breaks the build or a test, you now know
+   the break is in your domain logic, not in the wiring — step 6's
+   checkpoint already ruled the wiring out.
 8. **Only now, delete both locations — `rm -rf internal/domain/todo` AND
    remove `internal/transport/publicapi/todo_handler.go` (+ its test).**
    Both deletions, not just one — it's easy to do the domain-directory
    `rm -rf` (it's the dramatic one) and forget the handler file sitting in
    a package alongside other files that aren't going anywhere. Also remove
-   its migration (`db/migrations/*_create_todos.sql`), its sqlc queries
-   (`db/queries/todos.sql`), and **its `openapi.yaml` content — the
-   `/todos` paths and the `Todo`/`TodoList`/`CreateTodoRequest`/
-   `UpdateTodoRequest` schemas.** This last one is easy to skip because
-   nothing on this list says "edit `openapi.yaml`" the way it says `rm`
-   for the other two — but skipping it leaves `oapi-codegen` regenerating
-   the old `CreateTodo`/`ListTodos`/etc. methods on every `make generate`,
-   and the build breaks with `apiServer does not implement
-   api.ServerInterface (missing method CreateTodo)` the moment you delete
-   `internal/domain/todo` and `todo_handler.go` out from under those
-   regenerated methods. Then re-run `make generate` — it cleans up
-   `internal/db`'s stale generated output for you (it deletes every
-   sqlc-generated file there before regenerating, so a query file you
-   removed doesn't leave its old `.sql.go` behind breaking the build); no
-   manual `rm` step needed **for `internal/db`.** That auto-cleanup is
-   specific to `internal/db` — `openapi.yaml` itself is never
-   auto-cleaned by `make generate` or anything else; the paragraph above
-   is the manual edit that has to happen instead, and it has to happen
-   *before* you run `make generate` again, not after. Remove `todo`'s
-   registration from `cmd/server/main.go` too — `buildHandler`'s
-   `todoSvc := todo.NewService(todo.NewRepo(db))` line, the
-   `*publicapi.TodoServer` field on `apiServer`, and the
-   `TodoServer: publicapi.NewTodoServer(todoSvc)` entry in
-   `wirePublicAPI`'s composite literal (see "Patterns worth preserving"
-   above for what that struct is doing before you touch it).
-   **Also remove every `TodoServer` reference in
-   `internal/transport/publicapi/publicapi_testutil_test.go`'s shared
-   `compositeServer` — that's two live edits, not one: the `*TodoServer`
-   embed in the struct definition, AND the `TodoServer:
-   NewTodoServer(todoSvc)` entry in `newIntegrationRouter`'s own
-   `compositeServer{...}` literal** (a separate composite literal from
-   `wirePublicAPI`'s in `cmd/server/main.go`, addressed above — this one's
-   test-only and easy to miss precisely because the production one already
-   got fixed). Doing only the embed and stopping there still fails:
-   `go vet ./...` reports `undefined: NewTodoServer` for the
-   now-orphaned initializer. See "Two modules, briefly, at once" above:
-   none of this happens on its own, and `go build ./...` passing does not
-   mean you got it, since the stale reference only shows up in
-   `go test ./...`/`go vet ./...`. Before moving on, run both:
-   ```sh
-   go build ./...   # passing here is NOT sufficient evidence step 8 is done
-   go test ./...    # this is the check that actually catches a leftover
-                     # cross-module test embed
-   ```
+   its migration (`db/migrations/*_create_todos.sql`) and its sqlc queries
+   (`db/queries/todos.sql`). **Unlike an oapi-codegen-era fork, there is no
+   `openapi.yaml` to hand-edit here** — it's derived output (step 5's
+   `go run ./cmd/server openapi`, wired into `make generate`); once
+   `todo_handler.go`'s own `RegisterTodoRoutes` call is gone (below), the
+   next `make generate` simply stops emitting `/todos` into
+   `openapi.yaml` on its own, nothing to remember. Then re-run
+   `make generate` — it also cleans up `internal/db`'s stale generated
+   output for you (it deletes every sqlc-generated file there before
+   regenerating, so a query file you removed doesn't leave its old
+   `.sql.go` behind breaking the build); no manual `rm` step needed there
+   either. Remove `todo`'s registration from `cmd/server/main.go` too —
+   `buildHandler`'s `todoSvc := todo.NewService(todo.NewRepo(db))` line,
+   and the `publicapi.RegisterTodoRoutes(apiV1H, todoSvc)` line inside
+   `wirePublicAPI` (see "Patterns worth preserving" above for what that
+   function is doing before you touch it). Doing this leaves a plain
+   `undefined: todo` (or `todoSvc`) compile error if you miss a call
+   site — `go build ./...` catches it directly, no interface-satisfaction
+   error to puzzle over the way an oapi-codegen-era fork would have seen.
 
    **A third place also imports the todo domain directly:
-   `internal/transport/bff/todo_handler.go`** (`NewTodoServer(svc
-   *todo.Service)`, `toBFFTodo(t todo.Todo) bffapi.Todo`, and every
-   `ListTodos`/`CreateTodo`/`GetTodo`/`UpdateTodo`/`DeleteTodo` method
-   calling `s.Service.*Todo(...)`) — the session-authenticated
-   `/api/bff/todos` surface the owner's SPA calls after `GET /login`, not
-   through the shared-service-layer indirection alone but through this
-   file naming the domain type directly, same as
+   `internal/transport/bff/todo_handler.go`** (`RegisterTodoRoutes(api
+   huma.API, svc *todo.Service)` and every operation's handler closure
+   calling `svc.*Todo(...)`) — the session-authenticated `/api/bff/todos`
+   surface the owner's SPA calls after `GET /login`, not through the
+   shared-service-layer indirection alone but through this file naming the
+   domain type directly, same as
    `internal/transport/publicapi/todo_handler.go` already does. **This is
    structurally the same file you already adapted once, in step 2 above —
-   `internal/transport/bff/todo_handler.go` is `internal/transport/
-   publicapi/todo_handler.go`'s session-authenticated twin, generated from
-   a second OpenAPI spec (`bff-openapi.yaml`) into a second package
-   (`internal/bffapi`) instead of `internal/api`.** Deleting
-   `internal/domain/todo` without touching this file is a guaranteed
-   `go build ./...` failure (`no required module provides package
-   .../internal/domain/todo`) — loud, not silent.
+   `internal/transport/bff/todo_handler.go` is
+   `internal/transport/publicapi/todo_handler.go`'s session-authenticated
+   twin**, registering its own operations on `apiBFFH` the same
+   code-first way (its own hand-written request/response structs live in
+   this package now, not a separate generated `internal/bffapi` package —
+   that package is gone). Deleting `internal/domain/todo` without touching
+   this file is a guaranteed `go build ./...` failure (`no required module
+   provides package .../internal/domain/todo`) — loud, not silent.
 
    **Adapt it to your new domain, the same rename-in-place you already did
-   for the `publicapi` handler in step 2** — new `bffapi.<New>`-shaped
-   request/response types (from your own `bff-openapi.yaml` edits and
-   `make generate`, mirroring step 3's `openapi.yaml` work), the same
-   method bodies calling your renamed service's own methods.
-   `internal/transport/bff/todo_handler_test.go` carries three things a
-   sloppy rename can silently break rather than catch:
+   for the `publicapi` handler in step 2** — new `<New>`-shaped
+   request/response structs declared in this file (mirroring step 3's
+   `publicapi` work; `make generate` re-dumps `bff-openapi.yaml` from
+   them), the same method bodies calling your renamed service's own
+   methods. `internal/transport/bff/todo_handler_test.go` carries three
+   things a sloppy rename can silently break rather than catch:
    `TestBFFHandler_FullCRUDRoundTrip_RealSessionCookie` (the real-cookie
    round trip this document's own Step 5 checklist and task-5's own final
    verification both rely on), `TestI3_BFFHandlerOwnershipScoping_
@@ -608,8 +628,8 @@ Do it in this order:
    "answer 401, never redirect" behavior on this JSON surface). Carry all
    three over the same way you carried `internal/domain/todo`'s own tests
    in step 2. `cmd/server/main.go`'s `wireBFF` call passes `todoSvc` as an
-   argument to `bff.NewTodoServer` — that call site has to keep matching
-   whatever your renamed constructor ends up expecting.
+   argument to `bff.RegisterTodoRoutes` — that call site has to keep
+   matching whatever your renamed function ends up expecting.
 
    **The SPA side needs the same rename, and it's easy to treat as
    optional because nothing in `go build`/`go test ./...` will ever ask
@@ -624,17 +644,16 @@ Do it in this order:
    same way, not just the Go tests.
 
    **`internal/transport/bff`'s own test files hit the same build-vs-test
-   trap the `compositeServer` warning above describes for
-   `publicapi` — extend that warning to this package too.**
-   `todo_handler_test.go` and `bff_testutil_test.go` (`newTestRouter`'s
-   `todoSvc *todo.Service` parameter, `seedTodo`) both import
-   `internal/domain/todo` directly, same as `todo_handler.go` itself.
-   `go build ./...` never compiles `_test.go` files at all, so getting
-   `todo_handler.go` itself to compile cleanly proves nothing about either
-   of these two — a stale `todo.Service`/`todo.Todo` reference left behind
-   in either one only surfaces once you run `go test ./...` (or
-   `go vet ./...`), exactly the way `compositeServer`'s stale `*TodoServer`
-   embed only surfaced there for `publicapi_testutil_test.go`. Update both
+   trap "Two modules, briefly, at once" (below) describes — a stale
+   reference in a `_test.go` file only shows up in `go test ./...`/
+   `go vet ./...`, never in `go build ./...`.** `todo_handler_test.go` and
+   `bff_testutil_test.go` (`newTestRouter`'s `todoSvc *todo.Service`
+   parameter, `seedTodo`) both import `internal/domain/todo` directly,
+   same as `todo_handler.go` itself. `go build ./...` never compiles
+   `_test.go` files at all, so getting `todo_handler.go` itself to compile
+   cleanly proves nothing about either of these two — a stale
+   `todo.Service`/`todo.Todo` reference left behind in either one only
+   surfaces once you run `go test ./...` (or `go vet ./...`). Update both
    test files' own domain references (and rename `seedTodo` if you're
    keeping that fixture) in the same pass you adapt `todo_handler.go`, not
    after a green `go build ./...` makes it look finished.
@@ -721,47 +740,38 @@ restructure didn't change that reasoning, only where the two halves of
 different from an earlier version of this section, though — read this
 fresh rather than assuming the old failure modes still apply as described:
 
-- **No handler-type naming collision by default — a change from
-  milestone-1.** Milestone-1 named every domain's adapter type the same
-  generic `Server`, so `apiServer` (`cmd/server/main.go`) embedding two of
-  them was a guaranteed `Server redeclared in this block` compile error
-  the instant a second domain module joined, and needed a type-alias
-  workaround to avoid. That workaround no longer applies: this repo's
-  handler types all live together in one `internal/transport/publicapi`
-  package now and are named after their domain specifically so more than
-  one can coexist — `apiServer` (`cmd/server/main.go`) and
-  `compositeServer` (`internal/transport/publicapi/
-  publicapi_testutil_test.go`) both already embed `MeServer`,
-  `*KeysServer`, and `*TodoServer` side by side with no alias anywhere.
-  The only way to reintroduce the old collision is to not follow the
-  `<Domain>Server` convention for your new module's type — keep following
-  it (see "Patterns worth preserving" above) and step 4's embed just
-  compiles.
-- **The shared integration-test harness still has to satisfy the whole
-  interface, though — that part of milestone-1's problem is unchanged in
-  spirit.** `internal/transport/publicapi/publicapi_testutil_test.go`'s
-  `compositeServer` and `newIntegrationRouter` are shared by every handler
-  test file in that package (`todo_handler_test.go`, `keys_handler_test.go`,
+- **No handler-type naming collision to worry about at all, since story-1's
+  huma migration — this used to be a real hazard here, and no longer is.**
+  Milestone-1 named every domain's adapter type the same generic `Server`,
+  so `apiServer` (`cmd/server/main.go`) embedding two of them for
+  `oapi-codegen`'s generated interface was a guaranteed `Server redeclared
+  in this block` compile error the instant a second domain module joined;
+  milestone-2 fixed that by naming each domain's adapter type after its
+  domain instead (`TodoServer`, `KeysServer`, ...). huma's migration
+  removes the underlying hazard, not just the workaround for it: there is
+  no generated interface for a composite value to satisfy anymore
+  (`wirePublicAPI` just calls `Register<Domain>Routes(apiV1H, ...)` once
+  per module — see "Patterns worth preserving" above), so there is no
+  struct embedding anything else, and no naming convention required to
+  avoid a collision that can't happen in the first place.
+- **The shared integration-test harness needs one line per module, not a
+  shared struct to satisfy — the same simplification as production
+  wiring.** `internal/transport/publicapi/publicapi_testutil_test.go`'s
+  `newIntegrationRouter` (shared by every handler test file in that
+  package — `todo_handler_test.go`, `keys_handler_test.go`,
   `middleware_test.go`, and your new `<new>_handler_test.go` once you add
-  it) — one definition, not one per domain module. Adding your new
-  module's handler to `compositeServer` in step 4 means the existing
-  `todo_handler_test.go` tests now run against a router that also has to
-  satisfy your new module's routes, and your own new handler's tests won't
-  compile without `compositeServer` embedding `*TodoServer` alongside your
-  own type, purely so the shared harness satisfies the full generated
-  interface. This is a temporary cross-module test dependency, in a repo
-  whose architecture rule is otherwise that domain modules stay
-  independent (`ARCHITECTURE.md`) — **it does not resolve itself.**
-  Deleting `internal/domain/todo` in step 8 removes the *package*, not
-  `compositeServer`'s embed of `*TodoServer` — `go build ./...` will
-  still report success (the struct's other fields still compile fine in
-  isolation), but `go test ./...` fails with `no required module provides
-  package .../internal/domain/todo`, because `publicapi_testutil_test.go`
-  itself still imports and embeds it. **`go build` passing is not
-  evidence this step worked** — see the checklist at the end of step 8
-  for the check that actually catches it. Drop the `*TodoServer` embed
-  from `compositeServer` as part of step 8, the same way you'd remove any
-  other now-dead import.
+  it) calls `RegisterMeRoutes(api)`, `RegisterKeysRoutes(api,
+  identitySvc)`, `RegisterTodoRoutes(api, todoSvc)` directly, the same
+  three calls `wirePublicAPI` makes in production. Adding your new
+  module's own `Register<New>Routes(api, newSvc)` call there, once, is the
+  whole change — there is no shared struct type that also needs your
+  module embedded into it just to keep compiling. Removing
+  `RegisterTodoRoutes(api, todoSvc)` from this function is part of step 8's
+  deletion, the direct test-harness equivalent of removing the call from
+  `wirePublicAPI` — miss it and `go build ./...` still passes (this file
+  compiles fine on its own), but `go test ./...`/`go vet ./...` fails on
+  the orphaned `todoSvc`/`RegisterTodoRoutes` reference, same shape as any
+  other stale import left behind in a `_test.go` file.
 - **`sqlc` query names are global across every file under `db/queries/`,
   not scoped per file.** Copying `db/queries/todos.sql` to your new
   module's own query file (step 3 above) and keeping any of `todos.sql`'s
@@ -1158,19 +1168,20 @@ whichever reflects your fork —
 Leaving both the entries and the failing check as-is is the one option
 that isn't fine — that's exactly the drift Done-when 12 exists to catch.
 
-## Two codegen gotchas only the compiler tells you about
+## One codegen gotcha only the compiler tells you about
 
-Both of these are easy to lose an hour to on a fork, because nothing
-currently states them and the failure mode is a compile error pointing at
-generated code, not at the source you actually wrote:
+Easy to lose an hour to on a fork, because nothing currently states it and
+the failure mode is a compile error pointing at generated code, not at the
+source you actually wrote (a second one used to live here, about
+`openapi.yaml`'s `operationId` values naming `oapi-codegen`'s generated
+`ServerInterface` methods — story-1's huma migration retired it outright,
+not just changed its shape: `huma.Operation{OperationID: "listTodos", ...}`
+is a plain string field on a literal you write yourself, in the same
+`huma.Register` call as the handler function, not a name a generated
+interface method has to match. Get it wrong and the worst case is a
+slightly-off `operationId` in the spec `make generate` dumps — never a
+compile error, since there's no interface in the loop anymore):
 
-- **`openapi.yaml`'s `operationId` values name the generated
-  `ServerInterface` methods.** `oapi-codegen` turns each operation's
-  `operationId` (e.g. `listTodos`) directly into a Go method name
-  (`ListTodos`) on `internal/api.ServerInterface` — your `handler.go` has
-  to implement that exact method name to satisfy the interface. Renaming
-  or adding a path without giving it a sensible `operationId` gets you an
-  auto-generated one you didn't choose.
 - **sqlc capitalizes `url` as `Url`, not `URL`.** sqlc's default Go-name
   casing doesn't treat `url` as an initialism the way `ID` is — a column
   named `url` generates a struct field `Url`. If your fork's schema adds
@@ -1206,9 +1217,9 @@ Not spelled out elsewhere, though every existing migration under
 Even a fork that gets every step above exactly right leaves references to
 `todo`/`todos` behind in places `go build`/`go vet` can't see: doc
 comments (`internal/identity/doc.go`, `internal/platform/config.go`,
-`internal/api/validator.go`, `internal/architecture_test.go`, and several
-more across `internal/identity/*_test.go` all mention todos in prose, not
-code) and test/example fixtures (`{"title": "a todo"}`-shaped literals).
+`internal/architecture_test.go`, and several more across
+`internal/identity/*_test.go` all mention todos in prose, not code) and
+test/example fixtures (`{"title": "a todo"}`-shaped literals).
 **A real number survives a fully correct fork, and it's deliberately not
 written here** — an earlier version of this paragraph put a specific
 count in prose twice, and both times the actual number had drifted by the
@@ -1217,11 +1228,14 @@ grep at the end of this section yourself; that output is the only
 trustworthy count, excluding everything a correct Step 5 already deletes
 or edits (`internal/domain/todo/`, `internal/transport/publicapi/
 todo_handler.go`, and `internal/transport/bff/todo_handler.go` themselves,
-its migration and query file, the two generated outputs
-`internal/db`/`internal/api/openapi.gen.go`/`internal/bffapi/
-bffapi.gen.go`, `openapi.yaml`'s and `bff-openapi.yaml`'s own `/todos`
-content per Step 5's now-corrected delete list, `cmd/server/main.go`'s
-registration, and the SPA screens under `web/src/app/` and
+its migration and query file, `internal/db`'s generated output,
+`openapi.yaml`'s and `bff-openapi.yaml`'s own `/todos` content (both
+re-dumped by `make generate` once `todo_handler.go`'s route registration
+is gone — there is no separate generated Go package to delete here since
+story-1's huma migration; `internal/api`/`internal/bffapi`, the old
+`oapi-codegen` output, no longer exist at all) per Step 5's now-corrected
+delete list, `cmd/server/main.go`'s registration, and the SPA screens under
+`web/src/app/` and
 `web/src/lib/todos.ts` (Step 5's BFF note above covers this set) and this
 repo's unrelated
 `.chief`-planning-framework use of the word "todo" in `_todo.md`,

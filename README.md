@@ -33,14 +33,16 @@ Clone it, follow the fork checklist, and end up with your own service.
 - **Two auth paths, one identity model** — SSO session for a human owner,
   long-lived API key (`Authorization: Bearer <key>`) for agents. Both
   resolve to the same actor concept.
-- **OpenAPI-first HTTP layer** — two hand-authored specs:
-  - `openapi.yaml` — Bearer-token public API for agents. Go server
-    interfaces only (`oapi-codegen`).
-  - `bff-openapi.yaml` — session-authenticated BFF for the web UI. Generates
-    *both* Go server interfaces and the frontend's TypeScript types
-    (`oapi-codegen` + `openapi-typescript`, same file). A field rename
-    breaks `go build` and `npm run typecheck` at every call site — nothing
-    silently drifts.
+- **Code-first HTTP layer, spec as derived output** — both surfaces run on
+  [huma](https://github.com/danielgtaylor/huma):
+  - `openapi.yaml` — Bearer-token public API for agents. Dumped from
+    `internal/transport/publicapi`'s huma operations (`go run ./cmd/server
+    openapi`, wired into `make generate`), not hand-authored.
+  - `bff-openapi.yaml` — session-authenticated BFF for the web UI. Same
+    huma-derived generation as `openapi.yaml`, then feeds the frontend's
+    TypeScript types (`openapi-typescript`, same file). A field rename in
+    the Go handler breaks `go build` and `npm run typecheck` at every call
+    site — nothing silently drifts.
 - **Typed, generated DB access** — `sqlc` generates Go from hand-written
   SQL; `goose` manages migrations. No ORM, no hand-rolled query builder.
 - **A working example domain** — a shared todo list (status, assignee,
@@ -53,7 +55,7 @@ Clone it, follow the fork checklist, and end up with your own service.
 **Backend**
 - Go
 - [gin](https://github.com/gin-gonic/gin) — HTTP router
-- [oapi-codegen](https://github.com/oapi-codegen/oapi-codegen) + `gin-middleware` — OpenAPI codegen + request validation
+- [huma](https://github.com/danielgtaylor/huma) (`humagin` adapter) — code-first HTTP layer: request validation, error envelope, and the OpenAPI spec generated from it
 - [sqlc](https://sqlc.dev/) — typed SQL → Go
 - [goose](https://github.com/pressly/goose) — migrations
 - [modernc.org/sqlite](https://gitlab.com/cznic/sqlite) — SQLite driver
@@ -78,8 +80,8 @@ Clone it, follow the fork checklist, and end up with your own service.
 ## Quickstart
 
 ```sh
-make tools      # installs pinned sqlc/goose/oapi-codegen into ./bin
-make generate   # sqlc + oapi-codegen, from db/ and the two openapi specs
+make tools      # installs pinned sqlc/goose into ./bin
+make generate   # sqlc (from db/) + huma's openapi command (dumps openapi.yaml/bff-openapi.yaml from the Go handler code)
 make build      # builds the web SPA, then the Go binary (in that order)
 make run        # go run ./cmd/server
 ```

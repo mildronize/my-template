@@ -5,8 +5,12 @@ milestone-2, same reasoning as `DATA_MODEL.md`/`INVARIANTS.md` — this
 surface's conventions are cross-milestone now that a second surface
 (`bff`) exists beside it. Milestone-1's copy is historical only.
 
-`internal/transport/publicapi`, mounted at `/api/v1`, OpenAPI-first
-(`openapi.yaml` at repo root). Everything authenticates over
+`internal/transport/publicapi`, mounted at `/api/v1`, running on
+[huma](https://github.com/danielgtaylor/huma) (story-1) — code-first, not
+spec-first: `openapi.yaml` (repo root) is generated *from* the handler
+code (`go run ./cmd/server openapi`, wired into `make generate`), still
+readable without a build per this project's own convention, just no
+longer the thing the code is generated from. Everything authenticates over
 `Authorization: Bearer <credential>`, where the credential is either an
 `api_keys` row's raw key or an SSO-issued JWT (`INVARIANTS.md` I2, I6–I10,
 I13–I14). See milestone-2's own `_contract/API.md` for the second surface
@@ -62,12 +66,38 @@ milestone (nothing here — only this surface's code location moved, from
 | `unauthorized` | 401 | any credential failure (I2, I5, I9, I10) |
 | `not_found` | 404 | unknown resource id, or one that exists but isn't the caller's (I3 — absence, not 403) |
 | `actor_field_present` | 400 | request tried to declare an actor (I1) |
-| `validation_error` | 400 | `hint` names the field |
+| `validation_error` | 400/422 | `hint` names the field — see the note below for the 400/422 split |
 | `invalid_transition` | 403 | a genuine permission refusal for a valid, authenticated credential — distinct from `unauthorized`, since the credential itself is fine. First and currently only case: an agent moving a todo to `closed` (`domain:todo`'s I18). `hint` says what to do instead. |
 
-A request that fails OpenAPI spec validation (missing required field, wrong
-type) is rejected by `gin-middleware` before reaching handler code at all —
-it never reaches the codes above.
+Both surfaces run on [huma](https://github.com/danielgtaylor/huma)
+(story-1). huma's own request-shape validation (missing required field,
+wrong type, an unrecognized field on a schema that doesn't allow one)
+happens inside its own parse→validate→resolve→handle chain (`huma.go:881`)
+— and that whole chain is itself wrapped by every `api.UseMiddleware`,
+including the actor-resolution middleware behind `unauthorized` above
+(`RequireActor`/`RequireSession`). So for a generic shape failure, actor
+resolution's DB lookup runs *first*: an invalid credential still answers
+401 regardless of the body's shape, and only once the credential resolves
+does huma's own validation get a chance to reject the body/query at 422 —
+this is the one deliberate, disclosed ordering delta from this repo's
+pre-huma behavior (where a hand-rolled OpenAPI validator rejected shape
+violations for every request, authenticated or not, before either check
+ran). Huma's own default status for that case is **422**, not 400,
+which is the other deliberate, disclosed delta — a generic
+OpenAPI-validation rejection used to answer 400 here too — so
+`validation_error` now appears at both statuses: **422** for huma's own
+generic shape-validation failures, **400** for this repo's own
+handler-level validation checks (cross-field rules a schema alone can't
+express, e.g. `CreateTodoEventRequest`'s per-`type` dispatch). The
+`X-Actor` header/body/query actor-field check (`actor_field_present`) is
+the one path that keeps the *old* pre-auth ordering intact: it's a
+bespoke check (`internal/transport/humamw`'s `RejectActorFields`),
+registered as its own `api.UseMiddleware` *before* the actor-resolution
+middleware, that peeks at the raw header/body/query without touching the
+database — so a request declaring `actor`/`actorId`/`ownerId`/`X-Actor`
+is rejected at 400 before any credential lookup runs, exactly as I1
+requires, regardless of what huma's own later validation would have done
+with it.
 
 ## Endpoints
 
