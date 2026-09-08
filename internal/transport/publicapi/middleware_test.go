@@ -54,7 +54,7 @@ func registerEchoOperation(api huma.API) {
 
 // newMiddlewareTestRouter mirrors newIntegrationRouter/
 // newKeysIntegrationRouter's shape (publicapi_testutil_test.go's
-// newHumaV1API: humamw.RejectActorHeader then humamw.RequireActor(svc),
+// newHumaV1API: humamw.RejectActorFields then humamw.RequireActor(svc),
 // the same order and mechanism cmd/server/main.go attaches to apiV1H) —
 // plus GET /api/v1/me (the real operation, RegisterMeRoutes) and this
 // file's own synthetic POST /api/v1/echo (registerEchoOperation), just
@@ -91,40 +91,20 @@ func doMiddlewareRequest(router *gin.Engine, method, path, body string, headers 
 // TestI1_RejectActorFields_BodyField — I1: a request body naming an
 // actor is rejected, not a value silently read and ignored.
 //
-// ticket-6 (huma migration): the standalone RejectActorFields body-field
-// check is gone for /api/v1 (contract.md's "Middleware mapping" table) —
-// every huma input struct's own additionalProperties:false default now
-// catches this for free, as a generic unknown-field rejection (422
-// validation_error) rather than a bespoke actor-field check (400
-// actor_field_present). This is the one accepted, contract-documented
-// status/code delta the story-1/ticket-6 clarification calls out by name
-// for exactly this case — the X-Actor header check (below) is the one
-// path that keeps its own 400 actor_field_present, because I1 specifically
-// names it and contract.md says so explicitly.
-//
-// Also carries a real Authorization header now, unlike its pre-ticket-6
-// version — found while building this ticket, not something contract.md
-// discussed explicitly: huma wraps the *entire* parse->validate->resolve->
-// handle chain in api.Middlewares().Handler(...) (confirmed against
-// huma.go, same citation humamw.RejectActorHeader's own doc comment
-// already relies on), so every api.UseMiddleware-registered middleware —
-// humamw.RequireActor included, not just RejectActorHeader — runs before
-// an operation's own body/query schema validation, not after. Pre-
-// ticket-6, RejectActorFields ran *before* RequireActor on the gin group
-// specifically so a shape violation "never spends a DB lookup on
-// credential resolution" (middleware.go's own old doc comment) — that
-// ordering guarantee holds for the X-Actor check (RejectActorHeader is
-// still the first api.UseMiddleware registered), but cannot hold for
-// generic body/query shape validation once it becomes huma's own
-// per-operation mechanism instead of a hand-rolled pre-auth gin
-// middleware: an unauthenticated request with a malformed body now gets
-// 401 before validation ever runs (a defensible, arguably more secure
-// failure mode — I5's "401 never leaks why" now also means an
-// unauthenticated caller never learns their body was malformed either —
-// but a real ordering change from today, not just a status-code delta).
-// This test now authenticates first so it isolates the property it
-// actually means to prove (a clean vs. actor-shaped body, once
-// authenticated) from that ordering change.
+// Fix (story-1/ticket-6 finding, contract.md's "Middleware mapping"
+// table): ticket-6 originally retired this body-field check for /api/v1,
+// relying on huma's own additionalProperties:false default instead (422
+// validation_error) — but that default runs *inside* huma's own
+// parse->validate->resolve->handle chain, which every api.UseMiddleware,
+// including humamw.RequireActor, wraps entirely (huma.go:881). That moved
+// actor-field rejection from *before* auth to *after* it, reversing I1's
+// own documented ordering intent (middleware.go's old doc comment: "so a
+// shape violation never spends a DB lookup on credential resolution").
+// humamw.RejectActorFields (renamed from RejectActorHeader) now performs
+// this check itself again, pre-auth, exactly like the original
+// pre-ticket-6 behavior — so this test no longer needs an Authorization
+// header to reach it, and the original assertion (400
+// actor_field_present) holds again.
 func TestI1_RejectActorFields_BodyField(t *testing.T) {
 	for _, field := range []string{"actor", "actorId", "ActorID", "ownerId", "OwnerId"} {
 		t.Run(field, func(t *testing.T) {
@@ -132,19 +112,19 @@ func TestI1_RejectActorFields_BodyField(t *testing.T) {
 			repo := identity.NewRepo(conn)
 			svc := identity.NewService(repo, repo, nil, nil)
 			router := newMiddlewareTestRouter(svc)
-			_, rawKey := createAgentWithKey(t, conn, "agent-"+field)
 
 			body := `{"` + field + `":"someone-else","title":"a todo"}`
-			rec := doMiddlewareRequest(router, http.MethodPost, "/api/v1/echo", body, map[string]string{"Authorization": "Bearer " + rawKey})
+			rec := doMiddlewareRequest(router, http.MethodPost, "/api/v1/echo", body, nil)
 
-			assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
-			assert.Contains(t, rec.Body.String(), "validation_error")
+			assert.Equal(t, http.StatusBadRequest, rec.Code)
+			assert.Contains(t, rec.Body.String(), "actor_field_present")
 		})
 	}
 }
 
 // TestI1_RejectActorFields_QueryParam — see TestI1_RejectActorFields_
-// BodyField's own doc comment for why this now authenticates first too.
+// BodyField's own doc comment: same fix, same reason no Authorization
+// header is needed here either.
 func TestI1_RejectActorFields_QueryParam(t *testing.T) {
 	for _, field := range []string{"actor", "actorId", "ownerId"} {
 		t.Run(field, func(t *testing.T) {
@@ -152,13 +132,11 @@ func TestI1_RejectActorFields_QueryParam(t *testing.T) {
 			repo := identity.NewRepo(conn)
 			svc := identity.NewService(repo, repo, nil, nil)
 			router := newMiddlewareTestRouter(svc)
-			_, rawKey := createAgentWithKey(t, conn, "agent-"+field)
 
-			rec := doMiddlewareRequest(router, http.MethodPost, "/api/v1/echo?"+field+"=someone-else", `{}`,
-				map[string]string{"Authorization": "Bearer " + rawKey})
+			rec := doMiddlewareRequest(router, http.MethodPost, "/api/v1/echo?"+field+"=someone-else", `{}`, nil)
 
-			assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
-			assert.Contains(t, rec.Body.String(), "validation_error")
+			assert.Equal(t, http.StatusBadRequest, rec.Code)
+			assert.Contains(t, rec.Body.String(), "actor_field_present")
 		})
 	}
 }
@@ -166,8 +144,9 @@ func TestI1_RejectActorFields_QueryParam(t *testing.T) {
 // TestI1_RejectActorFields_XActorHeader — the X-Actor header can't be
 // delegated to huma's own additionalProperties:false default the way
 // body fields can (contract.md's "Middleware mapping" table), so it
-// keeps its own explicit check — humamw.RejectActorHeader (ticket-5),
-// attached to apiV1H the same way cmd/server/main.go does.
+// keeps its own explicit check — humamw.RejectActorFields (ticket-5,
+// widened by this fix), attached to apiV1H the same way cmd/server/main.go
+// does.
 func TestI1_RejectActorFields_XActorHeader(t *testing.T) {
 	repo := identity.NewRepo(newTestDB(t))
 	svc := identity.NewService(repo, repo, nil, nil)

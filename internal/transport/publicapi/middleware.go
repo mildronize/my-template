@@ -99,10 +99,16 @@ func NewErrorEnvelope(code, message, hint string) ErrorEnvelope {
 // problem. Register it on a gin group *before* any credential-resolution
 // middleware, so a shape violation never spends a DB lookup on credential
 // resolution. Only internal/transport/bff's /api/bff group uses this now
-// (ticket-6's own doc comment above) — /api/v1 moved to huma's own
-// additionalProperties:false/RejectUnknownQueryParameters defaults plus
-// humamw.RejectActorHeader for the one piece (X-Actor) that stays
-// bespoke under huma too.
+// (ticket-6's own doc comment above) — /api/v1 runs its own equivalent
+// check, humamw.RejectActorFields (ticket-6 fix, contract.md's
+// "Middleware mapping" table): huma's additionalProperties:false/
+// RejectUnknownQueryParameters defaults alone weren't enough, because
+// they run *after* auth (inside huma's own parse→validate→handle chain,
+// which every api.UseMiddleware wraps), reversing this check's own
+// pre-auth ordering intent. humamw.RejectActorFields is a second,
+// router-agnostic copy of this same body/query/header logic, not a
+// delegation to this function — the two packages don't share code (see
+// that function's own doc comment for why), only the same approach.
 //
 // It checks body keys, query params, and the X-Actor header itself,
 // independently of whatever gin binding or `additionalProperties: false`
@@ -184,7 +190,7 @@ const unauthorizedMessage = "authentication required"
 // uses this instead of querying users/api_keys itself (I4), mirroring the
 // old ActorFromContext(c *gin.Context)'s role before ticket-6. The error
 // branch is defensive, mirroring handleMe's old comment: unreachable
-// given main.go's intended middleware order (humamw.RejectActorHeader,
+// given main.go's intended middleware order (humamw.RejectActorFields,
 // humamw.RequireActor, then the operation handler), and only here in
 // case an operation is ever registered on a huma.API instance without
 // that chain attached.

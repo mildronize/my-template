@@ -71,7 +71,7 @@ func newTestDB(t *testing.T) *sql.DB {
 // the shape cmd/server/main.go's newHumaAPIs/apiV1H builds for the real
 // service (ticket-6): humagin.New over the whole engine (no route group —
 // contract.md's "Framework & wiring"), RejectUnknownQueryParameters set,
-// humamw.RejectActorHeader then humamw.RequireActor(svc) attached in that
+// humamw.RejectActorFields then humamw.RequireActor(svc) attached in that
 // order (I1's X-Actor check before any DB-backed credential resolution).
 // Every integration router this file's test helpers build below is this
 // plus whichever RegisterXRoutes calls that test needs — so these tests
@@ -83,12 +83,12 @@ func newHumaV1API(router *gin.Engine, svc *identity.Service) huma.API {
 	config.RejectUnknownQueryParameters = true
 
 	api := humagin.New(router, config)
-	api.UseMiddleware(humamw.RejectActorHeader())
+	api.UseMiddleware(humamw.RejectActorFields())
 	api.UseMiddleware(humamw.RequireActor(svc))
 	return api
 }
 
-// newIntegrationRouter builds a full /api/v1 stack — humamw.RejectActorHeader,
+// newIntegrationRouter builds a full /api/v1 stack — humamw.RejectActorFields,
 // humamw.RequireActor, then every RegisterXRoutes call — against a real
 // temp-file SQLite database (not a mock), for todo CRUD + ownership-scoping
 // integration tests.

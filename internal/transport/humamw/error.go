@@ -152,7 +152,7 @@ func InstallErrorEnvelope() {
 // writeError writes status/message as this package's ErrorEnvelope JSON
 // shape directly onto ctx, via huma.NewError (so it reflects whatever
 // InstallErrorEnvelope installed) — used by the router-agnostic
-// middlewares below (RejectActorHeader, RequireActor, RequireSession),
+// middlewares below (RejectActorFields, RequireActor, RequireSession),
 // which run as part of huma.Config.Middlewares/OpenAPI.Middlewares —
 // registered on the Config *before* the huma.API instance that would
 // normally be huma.WriteErr's first argument exists yet

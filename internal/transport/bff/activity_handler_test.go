@@ -108,7 +108,7 @@ func newBFFRouterForOwnerSharedDB(t *testing.T) (router *gin.Engine, sessionValu
 }
 
 // newAgentPublicAPIRouter builds a real /api/v1 huma stack —
-// humamw.RejectActorHeader, humamw.RequireActor, then every
+// humamw.RejectActorFields, humamw.RequireActor, then every
 // publicapi.RegisterTodoRoutes operation — the same wiring shape
 // cmd/server/main.go's apiV1H uses in production (story-1/ticket-6's huma
 // migration retired internal/api and publicapi's own gin-based
@@ -128,7 +128,7 @@ func newAgentPublicAPIRouter(t *testing.T, identitySvc *identity.Service, todoSv
 	config.DocsPath = ""
 	config.RejectUnknownQueryParameters = true
 	api := humagin.New(router, config)
-	api.UseMiddleware(humamw.RejectActorHeader())
+	api.UseMiddleware(humamw.RejectActorFields())
 	api.UseMiddleware(humamw.RequireActor(identitySvc))
 	publicapi.RegisterTodoRoutes(api, todoSvc)
 	return router

@@ -314,11 +314,14 @@ func buildHandlerAndHumaAPIs(ctx context.Context, cfg *platform.Config, db *sql.
 // to committed files, not a live-served spec/docs endpoint, so neither
 // built-in route is needed anyway.
 //
-// RejectActorHeader (I1's X-Actor check) is registered on both instances
+// RejectActorFields (I1's X-Actor header + body/query actor-field check,
+// renamed from RejectActorHeader — story-1/ticket-6 finding, contract.md's
+// "Middleware mapping" table: body/query rejection must stay bespoke and
+// pre-auth too, not just the header) is registered on both instances
 // right here — contract.md's middleware-mapping table names it as shared
 // by both surfaces explicitly (huma v2.39.1's actual API for API-wide
 // middleware is api.UseMiddleware(...) after construction, not a Config
-// field — see RejectActorHeader's own doc comment in
+// field — see RejectActorFields' own doc comment in
 // internal/transport/humamw). humamw.RequireActor itself is attached one
 // level up, by wirePublicAPI (ticket-6, publicapi.go below) — apiV1H's
 // own actor-resolution middleware needs identitySvc, which this function
@@ -342,8 +345,8 @@ func newHumaAPIs(apiRouter, bffRouter *gin.Engine) (apiV1H, apiBFFH huma.API) {
 	apiV1H = humagin.New(apiRouter, configV1)
 	apiBFFH = humagin.New(bffRouter, configBFF)
 
-	apiV1H.UseMiddleware(humamw.RejectActorHeader())
-	apiBFFH.UseMiddleware(humamw.RejectActorHeader())
+	apiV1H.UseMiddleware(humamw.RejectActorFields())
+	apiBFFH.UseMiddleware(humamw.RejectActorFields())
 
 	return apiV1H, apiBFFH
 }
@@ -356,7 +359,7 @@ func newHumaAPIs(apiRouter, bffRouter *gin.Engine) (apiV1H, apiBFFH huma.API) {
 // registered publicapi.RejectActorFields/RequireActor on it directly —
 // /api/v1 runs entirely on huma now (apiV1H, buildHandlerAndHumaAPIs),
 // so there is no gin group left for this function to build; its own
-// actor-resolution middleware is humamw.RejectActorHeader (newHumaAPIs)
+// actor-resolution middleware is humamw.RejectActorFields (newHumaAPIs)
 // and humamw.RequireActor (wirePublicAPI), attached to apiV1H directly
 // instead.
 //
@@ -385,7 +388,7 @@ func wireIdentity(ctx context.Context, cfg *platform.Config, repo *identity.Repo
 }
 
 // wirePublicAPI attaches humamw.RequireActor to apiV1H (I2/I5's actor
-// resolution, after RejectActorHeader — newHumaAPIs already attached that
+// resolution, after RejectActorFields — newHumaAPIs already attached that
 // one — so a shape violation on the X-Actor header never spends a DB
 // lookup on credential resolution) and registers every publicapi
 // operation on it: identity's GetMe/keys endpoints alongside

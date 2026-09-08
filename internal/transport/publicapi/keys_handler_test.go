@@ -17,7 +17,7 @@ import (
 	"github.com/mildronize/my-template/internal/identity"
 )
 
-// newKeysIntegrationRouter builds a full /api/v1 stack — humamw.RejectActorHeader,
+// newKeysIntegrationRouter builds a full /api/v1 stack — humamw.RejectActorFields,
 // humamw.RequireActor, then RegisterKeysRoutes — against a real temp-file
 // SQLite database (not a mock), for GET /keys and DELETE /keys/:id
 // integration tests. It registers only the keys routes rather than going

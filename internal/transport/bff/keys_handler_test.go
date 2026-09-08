@@ -37,7 +37,7 @@ import (
 // repo.CreateUser(..., "agent", ...) insert standing in for it.
 
 // newAgentPublicAPIRouterForKeys builds a real /api/v1 huma stack —
-// humamw.RejectActorHeader, humamw.RequireActor, then
+// humamw.RejectActorFields, humamw.RequireActor, then
 // publicapi.RegisterKeysRoutes — the real Bearer-authenticated surface an
 // agent actually calls in production, not a service-layer shortcut.
 // Mirrors activity_handler_test.go's own newAgentPublicAPIRouter (same
@@ -53,7 +53,7 @@ func newAgentPublicAPIRouterForKeys(t *testing.T, identitySvc *identity.Service)
 	config.DocsPath = ""
 	config.RejectUnknownQueryParameters = true
 	api := humagin.New(router, config)
-	api.UseMiddleware(humamw.RejectActorHeader())
+	api.UseMiddleware(humamw.RejectActorFields())
 	api.UseMiddleware(humamw.RequireActor(identitySvc))
 	publicapi.RegisterKeysRoutes(api, identitySvc)
 	return router

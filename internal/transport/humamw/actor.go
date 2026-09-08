@@ -1,30 +1,74 @@
 package humamw
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humagin"
 
 	"github.com/mildronize/my-template/internal/identity"
 )
 
 // forbiddenActorHeader mirrors
-// internal/transport/publicapi.forbiddenActorHeader — the one piece of
-// I1's RejectActorFields that stays bespoke under huma (contract.md's
-// middleware-mapping table: body/query rejection becomes free via huma's
-// own additionalProperties:false default and
-// Config.RejectUnknownQueryParameters, but nothing in huma's request
-// validation knows about a header this repo has specifically reserved for
-// identity).
+// internal/transport/publicapi.forbiddenActorHeader. Duplicated
+// deliberately, not shared: publicapi already imports this package
+// (actorFromContext, middleware.go's own doc comment), so the reverse
+// import this package would need to reuse publicapi's constant would be a
+// cycle. This is the same duplication this file already carried for this
+// exact constant pre-fix — extended below to forbiddenFieldNames for the
+// identical reason, now that this middleware checks body/query too.
 const forbiddenActorHeader = "X-Actor"
 
-// RejectActorHeader is the router-agnostic huma.Middlewares equivalent of
-// publicapi.RejectActorFields' X-Actor check (I1) — the ticket-5 port of
-// the one piece of that gin middleware that isn't obsoleted by huma
-// defaults. Registered on both apiV1 and apiBFF via
-// huma.API.UseMiddleware (contract.md describes this as "registered on
-// both configV1.Middlewares and configBFF.Middlewares" — huma v2.39.1
+// forbiddenFieldNames mirrors
+// internal/transport/publicapi.forbiddenFieldNames (I1) — duplicated for
+// the same import-cycle reason forbiddenActorHeader already was (see that
+// const's own doc comment above). internal/transport/publicapi still
+// keeps its own copy: internal/transport/bff's /api/bff group (ticket 7,
+// not yet migrated) mounts publicapi.RejectActorFields directly as gin
+// middleware and needs it independently of this package.
+var forbiddenFieldNames = map[string]struct{}{
+	"actor":   {},
+	"actorid": {},
+	"ownerid": {},
+}
+
+// RejectActorFields is the router-agnostic huma.Middlewares equivalent of
+// publicapi.RejectActorFields (I1) — checks the X-Actor header, every
+// query param, and the request body for the reserved actor/actorId/
+// ownerId field names, independently of huma's own request validation.
+//
+// Fix (story-1/ticket-6 finding, contract.md's "Middleware mapping"
+// table): this used to be RejectActorHeader, covering only the X-Actor
+// header — ticket 6 originally relied on huma's own
+// additionalProperties:false default and
+// Config.RejectUnknownQueryParameters to catch body/query actor fields
+// instead of porting that half of the old gin middleware. That doesn't
+// preserve I1's ordering: huma's own body/query validation runs *inside*
+// the parse→validate→resolve→handle chain that every
+// api.UseMiddleware — including RequireActor — wraps *entirely*
+// (huma.go:881), so an actor field in the body/query would only be
+// caught *after* RequireActor's DB-backed credential resolution, not
+// before it — reversing the documented reason this check is registered
+// ahead of RequireActor in the first place (an unauthenticated,
+// shape-violating request should never spend a DB lookup on credential
+// resolution). This function now performs the body/query check itself,
+// exactly like publicapi.RejectActorFields/hasForbiddenBodyField did (and
+// still does, for the not-yet-migrated /api/bff group), so the ordering
+// guarantee holds for /api/v1 again too. Huma's additionalProperties:
+// false/RejectUnknownQueryParameters defaults stay enabled underneath as
+// a second-layer catch-all for non-actor unrecognized fields (typos,
+// etc.) — not a conflict: this check runs first, before huma's own
+// parsing ever sees the request, and only short-circuits for these three
+// specific field names.
+//
+// Registered on both apiV1 and apiBFF via huma.API.UseMiddleware
+// (contract.md describes this as "registered on both
+// configV1.Middlewares and configBFF.Middlewares" — huma v2.39.1
 // actually has no such Config field; API-wide middleware is added after
 // construction via api.UseMiddleware(...), per
 // docs/docs/features/middleware.md's "Router-agnostic" section. Same
@@ -38,15 +82,85 @@ const forbiddenActorHeader = "X-Actor"
 // parsing, preserving today's "fail on shape before spending a DB lookup"
 // ordering even though request-body parsing itself is now huma's job
 // rather than a step this middleware performs by hand.
-func RejectActorHeader() func(huma.Context, func(huma.Context)) {
+func RejectActorFields() func(huma.Context, func(huma.Context)) {
 	return func(ctx huma.Context, next func(huma.Context)) {
 		if ctx.Header(forbiddenActorHeader) != "" {
 			writeError(ctx, http.StatusBadRequest,
 				"request may not declare an actor — identity comes only from the resolved credential")
 			return
 		}
+
+		requestURL := ctx.URL()
+		for key := range requestURL.Query() {
+			if _, forbidden := forbiddenFieldNames[strings.ToLower(key)]; forbidden {
+				writeError(ctx, http.StatusBadRequest,
+					"request may not declare an actor — identity comes only from the resolved credential")
+				return
+			}
+		}
+
+		if hasForbiddenBodyField(ctx) {
+			writeError(ctx, http.StatusBadRequest,
+				"request may not declare an actor — identity comes only from the resolved credential")
+			return
+		}
+
 		next(ctx)
 	}
+}
+
+// hasForbiddenBodyField peeks at ctx's request body, parsed as a generic
+// map[string]json.RawMessage exactly like
+// publicapi.hasForbiddenBodyField (independent of whatever typed
+// request-body struct the operation this request eventually reaches
+// declares), and restores the body afterward so huma's own downstream
+// parsing still sees the full, unconsumed body — mirrors the gin-era
+// io.NopCloser(bytes.NewReader(body)) trick from that same function.
+//
+// huma.Context has no body-reset method (its BodyReader() method is
+// read-only, by design — docs/docs/features/middleware.md's own
+// "Unwrapping" section is the documented escape hatch for exactly this
+// kind of router-specific need: "if you need to access the underlying
+// router-specific request and response objects, you can Unwrap() them
+// using the router-specific adapter package"), so this reaches through
+// humagin.Unwrap to the underlying *gin.Context and replaces
+// Request.Body directly. This repo only ever attaches RejectActorFields
+// to a humagin-backed huma.API (cmd/server/main.go's apiV1H/apiBFFH), so
+// that adapter-specific reach-through is safe here; this package's own
+// tests that exercise this function build the same humagin-backed
+// harness for that reason (see newGinTestAPI in actor_test.go), rather
+// than the humatest/humaflow harness this package's other tests use.
+//
+// A body that isn't a JSON object (missing, empty, an array, a scalar,
+// malformed JSON) is not this guard's concern — it returns false and
+// leaves that to whatever validates the request shape otherwise (huma's
+// own schema validation, downstream).
+func hasForbiddenBodyField(ctx huma.Context) bool {
+	reader := ctx.BodyReader()
+	if reader == nil {
+		return false
+	}
+
+	body, err := io.ReadAll(reader)
+	// Restore regardless of outcome — even a read error or an empty body
+	// must leave Request.Body in a consumable state for huma's own
+	// parsing, matching hasForbiddenBodyField's original gin behavior.
+	humagin.Unwrap(ctx).Request.Body = io.NopCloser(bytes.NewReader(body))
+
+	if err != nil || len(bytes.TrimSpace(body)) == 0 {
+		return false
+	}
+
+	var generic map[string]json.RawMessage
+	if err := json.Unmarshal(body, &generic); err != nil {
+		return false
+	}
+	for key := range generic {
+		if _, forbidden := forbiddenFieldNames[strings.ToLower(key)]; forbidden {
+			return true
+		}
+	}
+	return false
 }
 
 // actorContextKey is a private type (not a bare string, unlike gin's own
@@ -101,7 +215,7 @@ const unauthorizedMessage = "authentication required"
 // package's doc comment: it's shared plumbing, "built and verified in
 // isolation before any real route moves onto it" (ticket-5), ready for
 // ticket 6 to attach once apiV1 actually serves real operations. Only
-// RejectActorHeader (I1, both surfaces) is wired into cmd/server/main.go's
+// RejectActorFields (I1, both surfaces) is wired into cmd/server/main.go's
 // new huma.API instances this ticket — attaching an actor-resolution
 // middleware ahead of any operation that would need it has no observable
 // effect yet and nothing to verify it against beyond this package's own

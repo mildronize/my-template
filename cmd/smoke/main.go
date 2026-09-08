@@ -560,13 +560,18 @@ func main() {
 
 	// ---- 2. actor-field rejection (I1) ----------------------------------
 
-	// story-1/ticket-6 (huma migration): a body-level actor-shaped field is
-	// no longer this repo's own bespoke actor_field_present check for
-	// /api/v1 — huma's own additionalProperties:false default now catches
-	// it as a generic unknown-field rejection (422 validation_error),
-	// contract.md's "Middleware mapping" table. The X-Actor header check
-	// below is the one path that keeps its own 400 actor_field_present,
-	// because I1 specifically names it.
+	// Fix (story-1/ticket-6 finding, contract.md's "Middleware mapping"
+	// table): ticket-6 originally relied on huma's own
+	// additionalProperties:false default to catch a body-level
+	// actor-shaped field (422 validation_error) instead of porting the
+	// old bespoke pre-auth check — but that default runs inside huma's
+	// own parse->validate->resolve->handle chain, which every
+	// api.UseMiddleware (RequireActor included) wraps entirely, so the
+	// rejection moved from before auth to after it. humamw.RejectActorFields
+	// (renamed from RejectActorHeader) now checks the body itself again,
+	// pre-auth, exactly like the X-Actor header check below — so this
+	// asserts the original 400 actor_field_present again, not the
+	// ticket-6-era 422 validation_error.
 	for _, field := range []string{"actor", "actorId", "ownerId"} {
 		body := newCreateBodyWithForbiddenField("smoke — should be rejected", nextCR("forbidden-"+field), field)
 		status, respBody, err := doRequest(client, http.MethodPost, apiBase+resourcePath, auth1, body)
@@ -575,7 +580,7 @@ func main() {
 		}
 		env := decode[errorEnvelope](respBody)
 		record(fmt.Sprintf("POST %s with %q in the body is rejected, not silently ignored", resourcePath, field),
-			status == http.StatusUnprocessableEntity && env.Error.Code == "validation_error",
+			status == http.StatusBadRequest && env.Error.Code == "actor_field_present",
 			fmt.Sprintf("%d %s", status, env.Error.Code), "I1")
 	}
 
