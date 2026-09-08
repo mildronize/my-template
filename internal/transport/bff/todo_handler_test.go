@@ -10,36 +10,35 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mildronize/my-template/internal/bffapi"
 	"github.com/mildronize/my-template/internal/domain/todo"
 	"github.com/mildronize/my-template/internal/identity"
 )
 
-// decodeBFFTodo decodes a bffapi.Todo-shaped response body — todo-specific
+// decodeBFFTodo decodes a Todo-shaped response body — todo-specific
 // (unlike decodeBFFError, bff_testutil_test.go), mirrors
 // internal/transport/publicapi/todo_handler_test.go's own decodeTodo.
-func decodeBFFTodo(t *testing.T, rec *httptest.ResponseRecorder) bffapi.Todo {
+func decodeBFFTodo(t *testing.T, rec *httptest.ResponseRecorder) Todo {
 	t.Helper()
-	var got bffapi.Todo
+	var got Todo
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	return got
 }
 
-// decodeBFFTodoEvent decodes a bffapi.TodoEvent-shaped response body — the
+// decodeBFFTodoEvent decodes a TodoEvent-shaped response body — the
 // POST .../events success shape. Mirrors internal/transport/publicapi's
 // own decodeTodoEvent.
-func decodeBFFTodoEvent(t *testing.T, rec *httptest.ResponseRecorder) bffapi.TodoEvent {
+func decodeBFFTodoEvent(t *testing.T, rec *httptest.ResponseRecorder) TodoEvent {
 	t.Helper()
-	var got bffapi.TodoEvent
+	var got TodoEvent
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	return got
 }
 
-// decodeBFFTodoEventList decodes a bffapi.TodoEventList-shaped response
+// decodeBFFTodoEventList decodes a TodoEventList-shaped response
 // body — the GET .../events success shape.
-func decodeBFFTodoEventList(t *testing.T, rec *httptest.ResponseRecorder) bffapi.TodoEventList {
+func decodeBFFTodoEventList(t *testing.T, rec *httptest.ResponseRecorder) TodoEventList {
 	t.Helper()
-	var got bffapi.TodoEventList
+	var got TodoEventList
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	return got
 }
@@ -127,7 +126,7 @@ func TestBFFHandler_FullCRUDRoundTrip_RealSessionCookie(t *testing.T) {
 	created := decodeBFFTodo(t, createRec)
 	assert.NotEmpty(t, created.Id)
 	assert.Equal(t, "write the report", created.Title)
-	assert.Equal(t, bffapi.Open, created.Status, "a new todo must start open")
+	assert.Equal(t, Open, created.Status, "a new todo must start open")
 	assert.Nil(t, created.AssigneeId)
 	assert.Nil(t, created.Priority)
 	assert.Nil(t, created.DueDate)
@@ -136,7 +135,7 @@ func TestBFFHandler_FullCRUDRoundTrip_RealSessionCookie(t *testing.T) {
 	// List — read back after write, not just trust the create response.
 	listRec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/todos", sessionValue, nil)
 	require.Equal(t, http.StatusOK, listRec.Code)
-	var list bffapi.TodoList
+	var list TodoList
 	require.NoError(t, json.Unmarshal(listRec.Body.Bytes(), &list))
 	require.Len(t, list.Todos, 1, "the created todo must actually be persisted, not just echoed back by the create response")
 	assert.Equal(t, created.Id, list.Todos[0].Id)
@@ -157,7 +156,7 @@ func TestBFFHandler_FullCRUDRoundTrip_RealSessionCookie(t *testing.T) {
 	require.Equal(t, http.StatusOK, patchRec.Code)
 	patched := decodeBFFTodo(t, patchRec)
 	assert.Equal(t, "write the final report", patched.Title)
-	assert.Equal(t, bffapi.Open, patched.Status, "a title-only patch must never touch status")
+	assert.Equal(t, Open, patched.Status, "a title-only patch must never touch status")
 
 	// Read back after the patch, independently of the patch response.
 	getAfterPatchRec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/todos/"+created.Id, sessionValue, nil)
@@ -227,9 +226,12 @@ func TestBFFHandler_ListTodos_Unauthenticated_Returns401NotRedirect(t *testing.T
 // todo-shape section: "done is gone... sending it in a write body is a
 // validation_error (hint: "done"), not a silently-dropped key." Mirrors
 // internal/transport/publicapi's own TestHandler_CreateTodo_DoneFieldRejected.
-// CreateTodoRequest's additionalProperties: false makes this a
-// bff-openapi.yaml-layer rejection, so this also proves the row was never
-// created.
+// CreateTodoRequest's additionalProperties: false (huma's own default,
+// contract.md's "Middleware mapping" table) makes this a schema-layer
+// rejection, so this also proves the row was never created. ticket-7: 422,
+// not 400 — same accepted delta ticket-6 established for /api/v1 (this
+// story's contract.md "Behavior note"); the code itself stays
+// "validation_error".
 func TestBFFHandler_CreateTodo_DoneFieldRejected(t *testing.T) {
 	router, sessionValue, _ := newBFFRouterForOwner(t)
 
@@ -238,18 +240,19 @@ func TestBFFHandler_CreateTodo_DoneFieldRejected(t *testing.T) {
 		"clientRequestId": "req-1",
 		"done":            true,
 	})
-	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code)
 	assert.Equal(t, "validation_error", decodeBFFError(t, rec).Error.Code)
 
 	listRec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/todos", sessionValue, nil)
 	require.Equal(t, http.StatusOK, listRec.Code)
-	var list bffapi.TodoList
+	var list TodoList
 	require.NoError(t, json.Unmarshal(listRec.Body.Bytes(), &list))
 	assert.Empty(t, list.Todos, "a body declaring done must never reach the handler")
 }
 
 // TestBFFHandler_UpdateTodo_DoneFieldRejected — same property as
-// TestBFFHandler_CreateTodo_DoneFieldRejected, for PATCH.
+// TestBFFHandler_CreateTodo_DoneFieldRejected, for PATCH. Same 422 delta
+// (not 400) — see that test's own doc comment.
 func TestBFFHandler_UpdateTodo_DoneFieldRejected(t *testing.T) {
 	router, sessionValue, _ := newBFFRouterForOwner(t)
 
@@ -265,7 +268,7 @@ func TestBFFHandler_UpdateTodo_DoneFieldRejected(t *testing.T) {
 		"clientRequestId": "patch-1",
 		"done":            true,
 	})
-	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code)
 	assert.Equal(t, "validation_error", decodeBFFError(t, rec).Error.Code)
 
 	getRec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/todos/"+created.Id, sessionValue, nil)
@@ -329,7 +332,7 @@ func TestDoneWhen14_CreateTodoEvent_TypeCreatedRejected(t *testing.T) {
 			getRec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/todos/"+created.Id, sessionValue, nil)
 			require.Equal(t, http.StatusOK, getRec.Code)
 			assert.Equal(t, "a todo", decodeBFFTodo(t, getRec).Title)
-			assert.Equal(t, bffapi.Open, decodeBFFTodo(t, getRec).Status)
+			assert.Equal(t, Open, decodeBFFTodo(t, getRec).Status)
 		})
 	}
 }
@@ -364,7 +367,7 @@ func TestI18_BFF_OwnerCanCloseTodo(t *testing.T) {
 
 	getRec := doBFFJSONRequest(t, router, http.MethodGet, "/api/bff/todos/"+created.Id, sessionValue, nil)
 	require.Equal(t, http.StatusOK, getRec.Code)
-	assert.Equal(t, bffapi.Closed, decodeBFFTodo(t, getRec).Status, "the todo must actually have moved to closed, not just answered 201")
+	assert.Equal(t, Closed, decodeBFFTodo(t, getRec).Status, "the todo must actually have moved to closed, not just answered 201")
 }
 
 // TestBFFHandler_EventsRoundTrip_CreateReadAppendFieldChangedReadTimeline
@@ -395,7 +398,7 @@ func TestBFFHandler_EventsRoundTrip_CreateReadAppendFieldChangedReadTimeline(t *
 	require.NotNil(t, created.AssigneeHandle)
 	assert.Equal(t, owner.Handle, *created.AssigneeHandle)
 	require.NotNil(t, created.Priority)
-	assert.Equal(t, bffapi.TodoPriority("low"), *created.Priority)
+	assert.Equal(t, TodoPriority("low"), *created.Priority)
 	require.NotNil(t, created.DueDate)
 
 	// Append a field_changed event, changing priority low -> urgent.
@@ -419,7 +422,7 @@ func TestBFFHandler_EventsRoundTrip_CreateReadAppendFieldChangedReadTimeline(t *
 	require.Equal(t, http.StatusOK, afterRec.Code)
 	after := decodeBFFTodo(t, afterRec)
 	require.NotNil(t, after.Priority)
-	assert.Equal(t, bffapi.TodoPriority("urgent"), *after.Priority)
+	assert.Equal(t, TodoPriority("urgent"), *after.Priority)
 
 	// Append an `assigned` event too — milestone-4 fix-round
 	// (handle-exposure): the payload's `from`/`to` must now be {id, handle}
@@ -469,7 +472,7 @@ func TestBFFHandler_EventsRoundTrip_CreateReadAppendFieldChangedReadTimeline(t *
 // nothing registered for that method+path pair), not a 405 (which would
 // mean something exists there that merely refuses the method) and not a
 // silent 204. Checked against a real built router (newTestRouter/
-// bffapi.RegisterHandlers, the exact composition cmd/server itself uses
+// RegisterHandlers, the exact composition cmd/server itself uses
 // for this surface), not "the handler doesn't exist so it must 404"
 // reasoning alone. Mirrors internal/transport/publicapi's own
 // TestDoneWhen6_DeleteTodo_RouteGenuinelyDoesNotExist.

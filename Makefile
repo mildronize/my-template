@@ -1,6 +1,9 @@
 # BIN_DIR is a repo-local install target for pinned dev tools (sqlc,
-# goose, oapi-codegen), kept out of $(go env GOPATH)/bin so a fork's
-# pinned versions never collide with another repo's on the same machine.
+# goose), kept out of $(go env GOPATH)/bin so a fork's pinned versions
+# never collide with another repo's on the same machine. oapi-codegen
+# used to be pinned here too — story-1/ticket-7 removed its last caller
+# (bff-openapi.yaml's own generation, mirroring ticket-6's earlier removal
+# of openapi.yaml's), so `tools` below no longer installs it.
 BIN_DIR := $(CURDIR)/bin
 
 # GO_PKGS is `./...` minus anything under node_modules. web/ sits inside
@@ -34,14 +37,12 @@ GO_BUILD_PKGS = $(shell go list -f '{{if .GoFiles}}{{.ImportPath}}{{end}}' ./...
 tools:
 	GOBIN=$(BIN_DIR) go install github.com/sqlc-dev/sqlc/cmd/sqlc
 	GOBIN=$(BIN_DIR) go install github.com/pressly/goose/v3/cmd/goose
-	GOBIN=$(BIN_DIR) go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen
 
-# generate re-runs both codegen tools against their sources (db/queries +
-# db/migrations for sqlc, openapi.yaml + bff-openapi.yaml for
-# oapi-codegen) so the committed generated output (internal/db,
-# internal/api/openapi.gen.go, internal/bffapi/bffapi.gen.go) can be
-# regenerated reproducibly from the pinned tool versions in tools/tools.go
-# rather than hand-edited.
+# generate re-runs every codegen source against sqlc (db/queries +
+# db/migrations) and huma (both surfaces' own code, dumping openapi.yaml/
+# bff-openapi.yaml) so the committed generated output (internal/db,
+# openapi.yaml, bff-openapi.yaml) can be regenerated reproducibly rather
+# than hand-edited.
 #
 # The internal/db cleanup step below runs first: sqlc emits one .sql.go
 # file per db/queries/*.sql file, so deleting a query file (e.g. on fork,
@@ -55,14 +56,16 @@ tools:
 # marker are removed, so this stays safe even if that ever stops being
 # true.
 #
-# Two independent oapi-codegen invocations, one per spec file
-# (milestone-3/task-2, `_contract/API.md` "Two specs, not one"): each run
-# generates its own ServerInterface/Error/RegisterHandlers into its own
-# package — internal/api for the Bearer-authenticated public surface,
-# internal/bffapi for the session-authenticated BFF surface. Distinct
-# package names (not just distinct output files) so the two independently
-# generated sets of symbols of the same names (Error, ServerInterface,
-# RegisterHandlers, ...) never collide at the Go package level.
+# story-1/ticket-7: `go run ./cmd/server openapi` (bare — both surfaces)
+# replaces ticket-6's temporary `openapi v1` plus the
+# `oapi-codegen -generate types,gin,spec -package bffapi -o
+# internal/bffapi/bffapi.gen.go bff-openapi.yaml` line this target used to
+# run alongside it. internal/bffapi is gone (mirrors internal/api's own
+# ticket-6 removal, contract.md's "File/package layout") and
+# bff-openapi.yaml itself flips from hand-authored input to huma-derived
+# output, same as openapi.yaml did in ticket 6 — oapi-codegen has no
+# remaining caller anywhere in this repo, so `tools` above no longer
+# installs it either.
 .PHONY: generate
 generate:
 	@for f in internal/db/*.go; do \
@@ -70,8 +73,7 @@ generate:
 		grep -q '^// Code generated' "$$f" && rm -f "$$f"; \
 	done
 	$(BIN_DIR)/sqlc generate
-	$(BIN_DIR)/oapi-codegen -generate types,gin,spec -package api -o internal/api/openapi.gen.go openapi.yaml
-	$(BIN_DIR)/oapi-codegen -generate types,gin,spec -package bffapi -o internal/bffapi/bffapi.gen.go bff-openapi.yaml
+	go run ./cmd/server openapi
 
 # web-build runs Vite's production build (web/dist) — split out of
 # `build` below so it's independently invokable (e.g. from the Dockerfile

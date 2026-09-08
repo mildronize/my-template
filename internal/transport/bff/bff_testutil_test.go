@@ -6,7 +6,6 @@ import (
 	"crypto/rsa"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -17,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humagin"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/lestrrat-go/jwx/v3/jwa"
@@ -26,14 +27,18 @@ import (
 	"github.com/pressly/goose/v3"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mildronize/my-template/internal/bffapi"
 	"github.com/mildronize/my-template/internal/domain/todo"
 	"github.com/mildronize/my-template/internal/identity"
 	"github.com/mildronize/my-template/internal/platform"
-	"github.com/mildronize/my-template/internal/transport/publicapi"
+	"github.com/mildronize/my-template/internal/transport/humamw"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" database/sql driver for these tests
 )
+
+func init() {
+	gin.SetMode(gin.TestMode)
+	humamw.InstallErrorEnvelope()
+}
 
 // repoRootForTests resolves the module root from this test file's own
 // location (mirrors internal/transport/publicapi's own testutil), so
@@ -219,6 +224,27 @@ func newIDVerifier(t *testing.T, f *fakeIDP) identity.JWTVerifier {
 	return v
 }
 
+// newHumaBFFAPI wraps a fresh gin.Engine in a huma.API instance, exactly
+// the shape cmd/server/main.go's newHumaAPIs/apiBFFH builds for the real
+// service (ticket-7): humagin.New over the whole engine (no route
+// group — contract.md's "Framework & wiring"), RejectUnknownQueryParameters
+// set, humamw.RejectActorFields then humamw.RequireSession(signer,
+// SessionCookieName, users) attached in that order (I1's shape checks
+// before any session-resolution DB lookup) — mirrors
+// internal/transport/publicapi's own newHumaV1API exactly, session
+// resolution instead of Bearer resolution.
+func newHumaBFFAPI(router *gin.Engine, signer *Signer, users identity.UserRepo) huma.API {
+	config := huma.DefaultConfig("my-template BFF API", "1.0.0")
+	config.OpenAPIPath = ""
+	config.DocsPath = ""
+	config.RejectUnknownQueryParameters = true
+
+	api := humagin.New(router, config)
+	api.UseMiddleware(humamw.RejectActorFields())
+	api.UseMiddleware(humamw.RequireSession(signer, SessionCookieName, users))
+	return api
+}
+
 // newTestRouter wires internal/transport/bff's routes directly (bypassing
 // cmd/server/main.go's wireBFF, which lives in package main and isn't
 // importable from here) onto a bare gin.Engine — these tests exist to
@@ -226,15 +252,21 @@ func newIDVerifier(t *testing.T, f *fakeIDP) identity.JWTVerifier {
 // Done-when 3's own test (cmd/server/main_test.go) covers separately.
 //
 // milestone-3/task-3 removed view_handler.go (the old Go-html/template
-// owner view, replaced by the embedded SPA) and its own GET / route
-// registration that used to live here — todoSvc is still accepted for the
-// /api/bff group's TodoServer, below.
+// owner view) and its own GET / route registration that used to live here
+// — todoSvc is still accepted for the /api/bff group's todo routes, below.
 //
-// identitySvc (milestone-3/task-2, new) backs the /api/bff group's
-// KeysServer (ListKeys/RevokeKey) the same way todoSvc backs its
-// TodoServer — nil is an acceptable value for any test that only
-// exercises the todo or me endpoints, since KeysServer.Service is never
-// dereferenced unless a keys route is actually hit.
+// identitySvc (milestone-3/task-2, new) backs the /api/bff group's keys/
+// users routes the same way todoSvc backs its todo routes — nil is an
+// acceptable value for any test that only exercises the todo or me
+// endpoints, since those routes never dereference identitySvc.
+//
+// story-1/ticket-7: /api/bff is now a real huma.API instance
+// (newHumaBFFAPI, above) instead of a gin.RouterGroup wrapping
+// internal/bffapi's generated ServerInterface — every RegisterXRoutes call
+// below mirrors cmd/server/main.go's own wireBFF composition (humamw.
+// RejectActorFields -> humamw.RequireSession -> the same four
+// RegisterXRoutes calls), so these tests exercise the real middleware
+// chain and route registration shape, not a simplified stand-in.
 func newTestRouter(cfg *platform.Config, signer *Signer, idVerifier identity.JWTVerifier, repo *identity.Repo, todoSvc *todo.Service, identitySvc *identity.Service) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
@@ -242,43 +274,18 @@ func newTestRouter(cfg *platform.Config, signer *Signer, idVerifier identity.JWT
 	r.GET("/login", NewLoginHandler(cfg, signer, logger))
 	r.GET("/callback", NewCallbackHandler(cfg, signer, idVerifier, repo, logger))
 
-	// /api/bff mirrors cmd/server/main.go's wireBFF composition exactly
-	// (RejectActorFields -> RequireJSONSession -> bff-openapi.yaml's
-	// request validator -> the composed ServerInterface) so these tests
-	// exercise the real middleware chain, not a simplified stand-in.
-	bffValidator, err := bffapi.RequestValidator()
-	if err != nil {
-		panic(fmt.Sprintf("bff_testutil_test.go: building bff-openapi request validator: %v", err))
-	}
-	apiBFF := r.Group("/api/bff")
-	apiBFF.Use(publicapi.RejectActorFields(), RequireJSONSession(signer, repo, logger), bffValidator)
-	bffapi.RegisterHandlers(apiBFF, testBFFServer{
-		MeServer:    MeServer{},
-		KeysServer:  NewKeysServer(identitySvc),
-		TodoServer:  NewTodoServer(todoSvc),
-		UsersServer: NewUsersServer(identitySvc),
-	})
+	api := newHumaBFFAPI(r, signer, repo)
+	RegisterMeRoutes(api)
+	RegisterKeysRoutes(api, identitySvc)
+	RegisterUsersRoutes(api, identitySvc)
+	RegisterTodoRoutes(api, todoSvc)
 
 	return r
 }
 
-// testBFFServer mirrors cmd/server/main.go's own unexported bffServer
-// composite (that type lives in package main and isn't importable from
-// here) — same embedding, same reasoning: no method names collide across
-// MeServer/KeysServer/TodoServer/UsersServer, so plain embedding
-// satisfies bffapi.ServerInterface with no hand-written delegation.
-type testBFFServer struct {
-	MeServer
-	*KeysServer
-	*TodoServer
-	*UsersServer
-}
-
-var _ bffapi.ServerInterface = testBFFServer{}
-
 // doBFFJSONRequest issues an HTTP request against the /api/bff JSON
 // surface, presenting sessionValue (if non-empty) as this package's own
-// signed session cookie (session.go's sessionCookieName) — the BFF
+// signed session cookie (session.go's SessionCookieName) — the BFF
 // surface's own auth mechanism, distinct from internal/transport/
 // publicapi's doJSONRequest (which presents an Authorization: Bearer
 // header instead), mirroring that helper's shape for everything else
@@ -292,19 +299,37 @@ func doBFFJSONRequest(t *testing.T, router *gin.Engine, method, path, sessionVal
 	req := httptest.NewRequest(method, path, &buf)
 	req.Header.Set("Content-Type", "application/json")
 	if sessionValue != "" {
-		req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: sessionValue})
+		req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: sessionValue})
 	}
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	return rec
 }
 
-// decodeBFFError decodes a bffapi.Error-shaped response body — generic
+// bffErrorBody decodes this service's {error:{code,message,hint}} envelope
+// shape — replacing internal/bffapi.Error (deleted this ticket, mirrors
+// contract.md's "File/package layout" for the /api/v1 migration). Every
+// real error response on this surface (huma's own request-validation
+// failures and huma.Error404NotFound/Error403Forbidden, via humamw.
+// InstallErrorEnvelope's override, and this package's own apiError for
+// its 400 validation_error responses, middleware.go) already writes this
+// exact JSON shape — this type only exists so tests can decode it back,
+// mirroring internal/transport/publicapi's own apiErrorBody (Hint
+// *string, omitempty) so existing assertions keep compiling unchanged.
+type bffErrorBody struct {
+	Error struct {
+		Code    string  `json:"code"`
+		Message string  `json:"message"`
+		Hint    *string `json:"hint,omitempty"`
+	} `json:"error"`
+}
+
+// decodeBFFError decodes a bffErrorBody-shaped response body — generic
 // across every domain on this surface, mirrors internal/transport/
 // publicapi's own decodeError.
-func decodeBFFError(t *testing.T, rec *httptest.ResponseRecorder) bffapi.Error {
+func decodeBFFError(t *testing.T, rec *httptest.ResponseRecorder) bffErrorBody {
 	t.Helper()
-	var got bffapi.Error
+	var got bffErrorBody
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	return got
 }

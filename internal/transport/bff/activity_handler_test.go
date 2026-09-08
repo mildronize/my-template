@@ -10,22 +10,35 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humagin"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mildronize/my-template/internal/api"
-	"github.com/mildronize/my-template/internal/bffapi"
 	"github.com/mildronize/my-template/internal/domain/todo"
 	"github.com/mildronize/my-template/internal/identity"
+	"github.com/mildronize/my-template/internal/transport/humamw"
 	"github.com/mildronize/my-template/internal/transport/publicapi"
 )
 
-// decodeBFFActivityFeed decodes a bffapi.ActivityFeed-shaped response body
+// init installs humamw's process-wide error-envelope override
+// (InstallErrorEnvelope is idempotent per its own doc comment) so this
+// file's own newAgentPublicAPIRouter (a real huma.API instance, below)
+// writes errors in this service's {error:{code,message,hint}} shape —
+// matching cmd/server/main.go's own startup call — rather than huma's
+// default RFC 9457 body. Each Go package's tests compile into their own
+// binary, so this package needs its own call; internal/transport/
+// publicapi's own tests install it separately for the same reason.
+func init() {
+	humamw.InstallErrorEnvelope()
+}
+
+// decodeBFFActivityFeed decodes an ActivityFeed-shaped response body
 // — GET /api/bff/activity's own success shape.
-func decodeBFFActivityFeed(t *testing.T, rec *httptest.ResponseRecorder) bffapi.ActivityFeed {
+func decodeBFFActivityFeed(t *testing.T, rec *httptest.ResponseRecorder) ActivityFeed {
 	t.Helper()
-	var got bffapi.ActivityFeed
+	var got ActivityFeed
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	return got
 }
@@ -93,27 +106,30 @@ func newBFFRouterForOwnerSharedDB(t *testing.T) (router *gin.Engine, sessionValu
 	return router, sessionValue, owner, conn, identitySvc, todoSvc
 }
 
-// newAgentPublicAPIRouter builds a bare /api/v1 stack — RejectActorFields,
-// RequireActor, then internal/api's own request validator — mounting only
-// TodoServer's CreateTodo/CreateTodoEvent routes directly (the same
-// "mount routes directly, skip the full generated ServerInterface"
-// pattern internal/transport/publicapi/keys_handler_test.go's own
-// newKeysIntegrationRouter already established, for the same reason: this
-// helper only needs two of TodoServer's six routes, not every route the
-// full compositeServer/api.RegisterHandlers wiring would otherwise
-// require satisfying). This is the real Bearer-authenticated surface an
+// newAgentPublicAPIRouter builds a real /api/v1 huma stack —
+// humamw.RejectActorFields, humamw.RequireActor, then every
+// publicapi.RegisterTodoRoutes operation — the same wiring shape
+// cmd/server/main.go's apiV1H uses in production (story-1/ticket-6's huma
+// migration retired internal/api and publicapi's own gin-based
+// RequireActor/TodoServer this test helper used to mount directly).
+// Registers every todo route rather than only the two this file's own
+// tests call (CreateTodo/CreateTodoEvent) — publicapi.RegisterTodoRoutes
+// is one call for the whole domain now, unlike the old per-method gin
+// mounting this replaced, so there is no "mount just two routes" shortcut
+// left to take. This is still the real Bearer-authenticated surface an
 // agent actually calls in production — not a shortcut standing in for it.
 func newAgentPublicAPIRouter(t *testing.T, identitySvc *identity.Service, todoSvc *todo.Service) *gin.Engine {
 	t.Helper()
-	validator, err := api.RequestValidator()
-	require.NoError(t, err)
 
 	router := gin.New()
-	group := router.Group("/api/v1")
-	group.Use(publicapi.RejectActorFields(), publicapi.RequireActor(identitySvc), validator)
-	todoServer := publicapi.NewTodoServer(todoSvc)
-	group.POST("/todos", todoServer.CreateTodo)
-	group.POST("/todos/:id/events", func(c *gin.Context) { todoServer.CreateTodoEvent(c, c.Param("id")) })
+	config := huma.DefaultConfig("my-template API", "1.0.0")
+	config.OpenAPIPath = ""
+	config.DocsPath = ""
+	config.RejectUnknownQueryParameters = true
+	api := humagin.New(router, config)
+	api.UseMiddleware(humamw.RejectActorFields())
+	api.UseMiddleware(humamw.RequireActor(identitySvc))
+	publicapi.RegisterTodoRoutes(api, todoSvc)
 	return router
 }
 
@@ -137,22 +153,26 @@ func doAgentAPIRequest(t *testing.T, router *gin.Engine, method, path, rawKey st
 	return rec
 }
 
-// decodeAgentAPITodo/-Event decode internal/api's own Todo/TodoEvent
-// response shapes — a distinct Go type from bffapi.Todo/TodoEvent (two
-// independently oapi-codegen-generated packages, `_contract/API.md`'s
-// "Two specs, not one" — same field names, different types), needed here
-// because this file's agent-side requests go through internal/api's
-// ServerInterface, not internal/bffapi's.
-func decodeAgentAPITodo(t *testing.T, rec *httptest.ResponseRecorder) api.Todo {
+// decodeAgentAPITodo/-Event decode internal/transport/publicapi's own
+// Todo/TodoEvent response shapes — a distinct Go type from this package's
+// own Todo/TodoEvent (two independently-authored surfaces,
+// `_contract/API.md`'s "Two specs, not one" — same field names, different
+// types), needed here because this file's agent-side requests go through
+// publicapi's own huma operations, not this package's. Pre-ticket-6
+// these decoded internal/api.Todo/TodoEvent (oapi-codegen's own
+// generated types); story-1/ticket-6 moved that surface's
+// framework-agnostic response types into internal/transport/publicapi
+// itself (contract.md's "File/package layout"), same JSON shape.
+func decodeAgentAPITodo(t *testing.T, rec *httptest.ResponseRecorder) publicapi.Todo {
 	t.Helper()
-	var got api.Todo
+	var got publicapi.Todo
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	return got
 }
 
-func decodeAgentAPIEvent(t *testing.T, rec *httptest.ResponseRecorder) api.TodoEvent {
+func decodeAgentAPIEvent(t *testing.T, rec *httptest.ResponseRecorder) publicapi.TodoEvent {
 	t.Helper()
-	var got api.TodoEvent
+	var got publicapi.TodoEvent
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	return got
 }
@@ -217,9 +237,9 @@ func TestDoneWhen12_ActivityFeed_CrossActorAttribution(t *testing.T) {
 	})
 	require.Equal(t, http.StatusCreated, createRec.Code, "agent must be able to create a todo over the real public API")
 	agentTodo := decodeAgentAPITodo(t, createRec)
-	require.NotEmpty(t, agentTodo.Id)
+	require.NotEmpty(t, agentTodo.ID)
 
-	commentRec := doAgentAPIRequest(t, agentRouter, http.MethodPost, "/api/v1/todos/"+agentTodo.Id+"/events", agentKey, map[string]any{
+	commentRec := doAgentAPIRequest(t, agentRouter, http.MethodPost, "/api/v1/todos/"+agentTodo.ID+"/events", agentKey, map[string]any{
 		"type":            "commented",
 		"clientRequestId": "agent-comment-1",
 		"body":            "an agent said this",
@@ -243,9 +263,9 @@ func TestDoneWhen12_ActivityFeed_CrossActorAttribution(t *testing.T) {
 	// own zero events as a nonzero-looking response in some broken
 	// implementations, so the identity of what's found matters, not just
 	// that something was).
-	var found *bffapi.ActivityItem
+	var found *ActivityItem
 	for i := range feed.Items {
-		if feed.Items[i].Id == agentEvent.Id {
+		if feed.Items[i].Id == agentEvent.ID {
 			found = &feed.Items[i]
 			break
 		}
@@ -255,7 +275,7 @@ func TestDoneWhen12_ActivityFeed_CrossActorAttribution(t *testing.T) {
 	assert.Equal(t, "commented", found.Type)
 	require.NotNil(t, found.Body)
 	assert.Equal(t, "an agent said this", *found.Body)
-	assert.Equal(t, agentTodo.Id, found.Todo.Id)
+	assert.Equal(t, agentTodo.ID, found.Todo.Id)
 	assert.Equal(t, "agent's own todo", found.Todo.Title)
 
 	// The actual point of Done-when 12: correctly attributed to the

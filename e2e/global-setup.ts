@@ -19,7 +19,7 @@
 //
 // Every path/port below is fixed and deliberately far from anything real
 // this host runs: sso-hydra (this fleet's real Hydra) is on 4444/4445;
-// this uses 24444/24445/24446/24080. A real developer's own `make dev`
+// this uses 25444/25445/25446/25080. A real developer's own `make dev`
 // / `docker compose up` writes to ./data/app.db by default (Makefile,
 // docker-compose.yml); this writes to e2e/.tmp/e2e-only-throwaway.db — a
 // path nothing else in this repo ever reads or writes, named so a
@@ -42,9 +42,9 @@ const SERVER_BIN_PATH = path.join(E2E_TMP_DIR, "server");
 const COMPOSE_PROJECT = "my-template-e2e";
 const COMPOSE_FILE = path.join(REPO_ROOT, "e2e", "docker-compose.yml");
 
-const HYDRA_PUBLIC_URL = "http://127.0.0.1:24444";
-const HYDRA_ADMIN_URL = "http://127.0.0.1:24445";
-const APP_PORT = "24080";
+const HYDRA_PUBLIC_URL = "http://127.0.0.1:25444";
+const HYDRA_ADMIN_URL = "http://127.0.0.1:25445";
+const APP_PORT = "25080";
 const APP_BASE_URL = `http://127.0.0.1:${APP_PORT}`;
 
 // Must match e2e/fixtures/oidc-login-stub.mjs's own E2E_TEST_SUBJECT

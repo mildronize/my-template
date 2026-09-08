@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,24 +16,62 @@ import (
 	"github.com/mildronize/my-template/internal/identity"
 )
 
+// echoBody is a minimal, mostly-empty request body for this file's own
+// synthetic /api/v1/echo operation (below) — declares exactly one
+// legitimate field (title) so a request carrying only that field is
+// "clean" under huma's additionalProperties:false default, while a
+// request also carrying an actor-shaped field (actor/actorId/ownerId,
+// none of which this struct declares) is rejected as an unknown field —
+// the same mechanism contract.md's "Middleware mapping" table describes
+// as I1's body-field guard's ticket-6 replacement.
+type echoBody struct {
+	Title string `json:"title,omitempty"`
+}
+
+type echoInput struct {
+	Body echoBody
+}
+
+type echoOutput struct{}
+
+// registerEchoOperation registers POST /api/v1/echo — a stand-in for "any
+// real operation on this surface," standing in for the old bare
+// `group.POST("/echo", func(c *gin.Context) { c.Status(http.StatusOK) })`
+// this file used pre-ticket-6. DefaultStatus is pinned to 200 (not huma's
+// own no-Body-field default of 204) to match that old handler's own
+// c.Status(http.StatusOK) exactly, since TestI1_RejectActorFields_
+// AllowsCleanRequest (below) asserts on it.
+func registerEchoOperation(api huma.API) {
+	huma.Register(api, huma.Operation{
+		OperationID:   "echo",
+		Method:        http.MethodPost,
+		Path:          "/api/v1/echo",
+		DefaultStatus: http.StatusOK,
+	}, func(_ context.Context, _ *echoInput) (*echoOutput, error) {
+		return &echoOutput{}, nil
+	})
+}
+
 // newMiddlewareTestRouter mirrors newIntegrationRouter/
-// newKeysIntegrationRouter's shape but only mounts RejectActorFields,
-// RequireActor, and a bare /me + /echo route — just enough surface for
-// this file's middleware-focused tests. Unlike milestone-1's version of
-// these tests (identity/middleware_handler_test.go), this one drives a
-// real identity.Service against a real temp-file SQLite database instead
-// of identity/service_test.go's fakes: those fakes are unexported and
-// package-private to internal/identity, and RequireActor/RejectActorFields
-// moved out of that package to here (ARCHITECTURE.md — a domain module or
-// internal/identity holds no transport code), so this package can no
-// longer reach them. This matches the pattern every other handler test in
-// this package already uses (todo_handler_test.go, keys_handler_test.go).
+// newKeysIntegrationRouter's shape (publicapi_testutil_test.go's
+// newHumaV1API: humamw.RejectActorFields then humamw.RequireActor(svc),
+// the same order and mechanism cmd/server/main.go attaches to apiV1H) —
+// plus GET /api/v1/me (the real operation, RegisterMeRoutes) and this
+// file's own synthetic POST /api/v1/echo (registerEchoOperation), just
+// enough surface for this file's middleware-focused tests. ticket-6: this
+// used to mount publicapi.RejectActorFields/RequireActor directly as gin
+// middleware on a bare "/api/v1" group with a hand-wired "/me"/"echo" —
+// /api/v1 itself no longer works that way in production (it runs on huma,
+// cmd/server/main.go's apiV1H), so this harness now mounts the same
+// huma-based wiring instead, per the story-1/ticket-6 contract
+// clarification: test *harness* is expected to change when the transport
+// framework changes; only assertions must not drift without being
+// flagged.
 func newMiddlewareTestRouter(svc *identity.Service) *gin.Engine {
 	router := gin.New()
-	group := router.Group("/api/v1")
-	group.Use(RejectActorFields(), RequireActor(svc))
-	group.GET("/me", handleMe)
-	group.POST("/echo", func(c *gin.Context) { c.Status(http.StatusOK) })
+	api := newHumaV1API(router, svc)
+	RegisterMeRoutes(api)
+	registerEchoOperation(api)
 	return router
 }
 
@@ -47,17 +86,30 @@ func doMiddlewareRequest(router *gin.Engine, method, path, body string, headers 
 	return rec
 }
 
-// --- I1: RejectActorFields --------------------------------------------
+// --- I1: actor-field rejection ------------------------------------------
 
 // TestI1_RejectActorFields_BodyField — I1: a request body naming an
-// actor is a 400 (actor_field_present), not a value silently read and
-// ignored. RejectActorFields runs before RequireActor and aborts the
-// chain outright, so the service behind it never actually gets called —
-// an empty, freshly-migrated database is enough here.
+// actor is rejected, not a value silently read and ignored.
+//
+// Fix (story-1/ticket-6 finding, contract.md's "Middleware mapping"
+// table): ticket-6 originally retired this body-field check for /api/v1,
+// relying on huma's own additionalProperties:false default instead (422
+// validation_error) — but that default runs *inside* huma's own
+// parse->validate->resolve->handle chain, which every api.UseMiddleware,
+// including humamw.RequireActor, wraps entirely (huma.go:881). That moved
+// actor-field rejection from *before* auth to *after* it, reversing I1's
+// own documented ordering intent (middleware.go's old doc comment: "so a
+// shape violation never spends a DB lookup on credential resolution").
+// humamw.RejectActorFields (renamed from RejectActorHeader) now performs
+// this check itself again, pre-auth, exactly like the original
+// pre-ticket-6 behavior — so this test no longer needs an Authorization
+// header to reach it, and the original assertion (400
+// actor_field_present) holds again.
 func TestI1_RejectActorFields_BodyField(t *testing.T) {
 	for _, field := range []string{"actor", "actorId", "ActorID", "ownerId", "OwnerId"} {
 		t.Run(field, func(t *testing.T) {
-			repo := identity.NewRepo(newTestDB(t))
+			conn := newTestDB(t)
+			repo := identity.NewRepo(conn)
 			svc := identity.NewService(repo, repo, nil, nil)
 			router := newMiddlewareTestRouter(svc)
 
@@ -70,10 +122,14 @@ func TestI1_RejectActorFields_BodyField(t *testing.T) {
 	}
 }
 
+// TestI1_RejectActorFields_QueryParam — see TestI1_RejectActorFields_
+// BodyField's own doc comment: same fix, same reason no Authorization
+// header is needed here either.
 func TestI1_RejectActorFields_QueryParam(t *testing.T) {
 	for _, field := range []string{"actor", "actorId", "ownerId"} {
 		t.Run(field, func(t *testing.T) {
-			repo := identity.NewRepo(newTestDB(t))
+			conn := newTestDB(t)
+			repo := identity.NewRepo(conn)
 			svc := identity.NewService(repo, repo, nil, nil)
 			router := newMiddlewareTestRouter(svc)
 
@@ -86,8 +142,11 @@ func TestI1_RejectActorFields_QueryParam(t *testing.T) {
 }
 
 // TestI1_RejectActorFields_XActorHeader — the X-Actor header can't be
-// delegated to OpenAPI's additionalProperties: false the way body fields
-// can (task-2.md), so it gets its own explicit check.
+// delegated to huma's own additionalProperties:false default the way
+// body fields can (contract.md's "Middleware mapping" table), so it
+// keeps its own explicit check — humamw.RejectActorFields (ticket-5,
+// widened by this fix), attached to apiV1H the same way cmd/server/main.go
+// does.
 func TestI1_RejectActorFields_XActorHeader(t *testing.T) {
 	repo := identity.NewRepo(newTestDB(t))
 	svc := identity.NewService(repo, repo, nil, nil)
@@ -117,7 +176,9 @@ func TestI1_RejectActorFields_AllowsCleanRequest(t *testing.T) {
 // TestI5_UnauthorizedResponseBodyIdenticalAcrossFailureReasons — I5: 401
 // never leaks why. Missing credential, malformed credential, and the I2
 // owner-rejection all produce byte-identical response bodies; the actual
-// reason is only ever visible in server-side logs.
+// reason is only ever visible in server-side logs. Runs against
+// humamw.RequireActor (ticket-5/6) instead of the old publicapi.RequireActor
+// — same property, same identity.Service.ResolveActor call underneath.
 func TestI5_UnauthorizedResponseBodyIdenticalAcrossFailureReasons(t *testing.T) {
 	conn := newTestDB(t)
 	repo := identity.NewRepo(conn)
@@ -175,7 +236,7 @@ func TestI5_UnauthorizedResponseBodyIdenticalAcrossFailureReasons(t *testing.T) 
 	}
 }
 
-// --- RequireActor / handleMe smoke test ---------------------------------
+// --- RequireActor / GetMe smoke test ---------------------------------
 
 func TestRequireActor_SetsActorOnContextForHandler(t *testing.T) {
 	conn := newTestDB(t)

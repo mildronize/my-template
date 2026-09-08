@@ -125,7 +125,7 @@ func NewCallbackHandler(cfg *platform.Config, signer *Signer, idVerifier identit
 			renderLoginError(c, logger, "signing session cookie failed")
 			return
 		}
-		setCookie(c, sessionCookieName, sessionValue, int(sessionTTL.Seconds()), secure)
+		setCookie(c, SessionCookieName, sessionValue, int(sessionTTL.Seconds()), secure)
 
 		c.Redirect(http.StatusFound, "/")
 	}

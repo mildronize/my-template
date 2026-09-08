@@ -92,7 +92,7 @@ func TestI11_CallbackNeverExchangesWithoutStateCookie(t *testing.T) {
 func assertNoSessionCookieSet(t *testing.T, rec *httptest.ResponseRecorder) {
 	t.Helper()
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == sessionCookieName && c.Value != "" {
+		if c.Name == SessionCookieName && c.Value != "" {
 			t.Fatalf("a session cookie must never be set on a failed callback, got %q", c.Value)
 		}
 	}
@@ -185,7 +185,7 @@ func TestCallback_SuccessfulOwnerLoginSetsSessionAndRedirects(t *testing.T) {
 	var sessionValue string
 	var stateCleared bool
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == sessionCookieName {
+		if c.Name == SessionCookieName {
 			sessionValue = c.Value
 		}
 		if c.Name == stateCookieName && c.MaxAge < 0 {

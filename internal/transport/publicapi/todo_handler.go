@@ -1,109 +1,177 @@
 package publicapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
 
-	"github.com/gin-gonic/gin"
+	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/mildronize/my-template/internal/api"
 	"github.com/mildronize/my-template/internal/domain/todo"
 )
 
-// TodoServer adapts todo.Service to internal/api's generated
-// ServerInterface's todo-shaped subset (ListTodos, CreateTodo, GetTodo,
-// UpdateTodo, ListTodoEvents, CreateTodoEvent). MeServer/KeysServer
-// (me_handler.go/keys_handler.go, this package) contribute the
-// identity-shaped subset — cmd/server composes all three into one
-// api.ServerInterface implementation by embedding, so GET /api/v1/me and
-// /api/v1/keys run through the exact same generated-interface,
-// openapi-validated path as every other endpoint (task-3, unchanged by
-// this package's move).
+// --- wire types (openapi.yaml's schemas, ticket-6) -------------------
 //
-// milestone-4: todos are a shared collection (GOAL.md's Ownership model
-// decision) — every method below reads/writes across every todo, not
-// scoped to the caller (I3 no longer applies to this domain). There is
-// no DeleteTodo method on this type at all (GOAL.md's "DELETE removed"
-// decision, mirroring my-task's I12) — nothing for
-// api.ServerInterface's route registration to wire up, so
-// DELETE /api/v1/todos/{id} is a genuine 404 (no route), not a 405.
-type TodoServer struct {
-	Service *todo.Service
+// Replaces internal/api's oapi-codegen-generated types (deleted this
+// ticket) — contract.md's "File/package layout": these framework-agnostic
+// response/request types move into this package itself, alongside the
+// huma Input/Output structs that now produce/consume identical JSON. Same
+// field names, JSON tags, and validation constraints (enum/minLength/
+// maxLength) as openapi.yaml declared before this ticket dumps a new one
+// from these struct tags instead.
+
+// TodoPriority is Todo.priority's fixed four-value enum
+// (openapi.yaml:300-303).
+type TodoPriority string
+
+// TodoStatus is Todo.status's fixed four-value enum — milestone-4:
+// replaces `done`, not an owner-editable table (GOAL.md).
+type TodoStatus string
+
+// Defines values for TodoStatus — bare names (not TodoStatus-prefixed),
+// matching internal/api's own oapi-codegen-generated constant names so
+// every existing reference in this package's own tests only needs its
+// "api." qualifier dropped, not a rename (Testing Decisions: harness/
+// import-path churn, not an assertion change).
+const (
+	Open       TodoStatus = "open"
+	InProgress TodoStatus = "in_progress"
+	Done       TodoStatus = "done"
+	Closed     TodoStatus = "closed"
+)
+
+// Todo defines model for Todo (openapi.yaml:255-318).
+type Todo struct {
+	ID             string        `json:"id"`
+	Title          string        `json:"title"`
+	Status         TodoStatus    `json:"status" enum:"open,in_progress,done,closed"`
+	AssigneeID     *string       `json:"assigneeId"`
+	AssigneeHandle *string       `json:"assigneeHandle"`
+	Priority       *TodoPriority `json:"priority" enum:"low,medium,high,urgent"`
+	DueDate        *time.Time    `json:"dueDate"`
+	CreatedBy      string        `json:"createdBy"`
+	CreatedAt      time.Time     `json:"createdAt"`
+	UpdatedAt      time.Time     `json:"updatedAt"`
 }
 
-// NewTodoServer builds a TodoServer on top of svc.
-func NewTodoServer(svc *todo.Service) *TodoServer {
-	return &TodoServer{Service: svc}
+// TodoList defines model for TodoList.
+type TodoList struct {
+	Todos []Todo `json:"todos"`
 }
 
-// todoNotFoundError is the one error body GetTodo/UpdateTodo/
-// ListTodoEvents/CreateTodoEvent ever write for an unknown todo id
-// (validation_error responses come from internal/api's openapi request
-// validator instead, before a request even reaches here — API.md). Named
-// with a todo- prefix, not the bare notFoundError this file used before
-// task-9, so that a fork copying this file to <new>_handler.go and
-// renaming Todo -> <New> throughout ends up with its own distinctly-named
-// value instead of redeclaring this one — mirrors keys_handler.go's own
-// notFoundBody, one per handler file, never shared. The unauthorized case
-// has no equivalent per-file value: its message never varies by domain,
-// so actorID (middleware.go) writes the package's one shared
-// unauthorizedBody instead of a second, todo-specific copy of the same
-// text. I18's permission rejection (a Bearer-authenticated agent
-// attempting status:closed) does NOT reuse that body — see
-// invalidTransitionErrorBody below for why.
-var todoNotFoundError = newAPIError("not_found", "no such todo")
-
-// validationErrorBody builds a validation_error-coded api.Error with a
-// hint naming the offending field — _contract/API.md's "hint names the
-// field" convention, for the request-shape problems this handler itself
-// must catch (event-type dispatch, status/field enum values) rather than
-// openapi.yaml's own request validator (which already handles missing
-// required fields, wrong JSON types, and additionalProperties: false
-// violations like a stray `done` before a request ever reaches here).
-func validationErrorBody(message, hint string) api.Error {
-	e := newAPIError("validation_error", message)
-	h := hint
-	e.Error.Hint = &h
-	return e
+// TodoEvent defines model for TodoEvent (openapi.yaml:327-387). Payload
+// is map[string]any (contract.md's "Free-form fields" section) — it has
+// no additionalProperties concept to configure, so it already accepts
+// arbitrary JSON with no huma struct tag needed to preserve that
+// permissiveness.
+type TodoEvent struct {
+	ID              string          `json:"id"`
+	TodoID          string          `json:"todoId"`
+	Seq             int64           `json:"seq"`
+	ActorID         string          `json:"actorId"`
+	ActorHandle     string          `json:"actorHandle"`
+	Type            string          `json:"type"`
+	Payload         *map[string]any `json:"payload,omitempty"`
+	Body            *string         `json:"body,omitempty"`
+	ClientRequestID string          `json:"clientRequestId"`
+	CreatedAt       time.Time       `json:"createdAt"`
 }
 
-// invalidTransitionErrorBody is I18's own rejection: an agent-authenticated
-// caller attempting to move a todo to status: closed. This project's
-// first pass at I18 mapped this to the generic 401 unauthorized body
-// every credential failure produces (I5) — reasoned, at the time, as "no
-// distinct forbidden/403 code, this project has never had one." That
-// reasoning was found to be a narrowing of my-task rather than a genuine
-// design decision: my-task's own equivalent check returns a distinct
-// `403 invalid_transition` with a hint
-// (`~/gits/my-task/src/server/api/v1/errors.ts:130`), and a bare 401 here
-// tells a rejected agent the one thing that is false — that its
-// credential is the problem — inviting it to rotate a key that was never
-// wrong, instead of asking the owner to close the todo. I3's "absence,
-// not permission" reasoning does not justify hiding this either: todos
-// are shared now (GOAL.md's Ownership model decision), so the agent can
-// already see this todo — there is nothing left for a 403 to leak that a
-// 404 would otherwise have hidden. Code and hint match my-task's own
-// text exactly, not a paraphrase.
-func invalidTransitionErrorBody() api.Error {
-	e := newAPIError("invalid_transition", "Agents cannot move a task into the closed group")
-	h := "Ask the owner to close this task."
-	e.Error.Hint = &h
-	return e
+// TodoEventList defines model for TodoEventList.
+type TodoEventList struct {
+	Events []TodoEvent `json:"events"`
 }
 
-func toAPITodo(t todo.Todo) api.Todo {
-	var priority *api.TodoPriority
+// CreateTodoRequestPriority defines model for CreateTodoRequest.Priority.
+type CreateTodoRequestPriority string
+
+// CreateTodoRequest — huma defaults every struct to
+// additionalProperties: false (contract.md's "Middleware mapping" table),
+// so a stray `done` (milestone-1/2/3's removed field) is now a huma-native
+// 422 validation failure, not a value silently dropped — the accepted
+// status delta contract.md's "Behavior note" documents (400 -> 422, this
+// case is huma's own generic shape validation, not this package's own
+// handler-level validation_error). No `status` field, deliberately: every
+// created todo starts `open` regardless of what a caller might ask for.
+type CreateTodoRequest struct {
+	Title           string                     `json:"title" minLength:"1" maxLength:"200"`
+	AssigneeID      *string                    `json:"assigneeId,omitempty"`
+	Priority        *CreateTodoRequestPriority `json:"priority,omitempty" enum:"low,medium,high,urgent"`
+	DueDate         *time.Time                 `json:"dueDate,omitempty"`
+	ClientRequestID string                     `json:"clientRequestId" minLength:"1"`
+}
+
+// UpdateTodoRequest — milestone-4: `title` only, same
+// additionalProperties: false default as CreateTodoRequest above.
+type UpdateTodoRequest struct {
+	Title           string `json:"title" minLength:"1" maxLength:"200"`
+	ClientRequestID string `json:"clientRequestId" minLength:"1"`
+}
+
+// CreateTodoEventRequest — one shape covers all four client-postable
+// `type` values; cross-field validation (e.g. `body` required for
+// `commented`) is this file's own dispatch logic (below), not this
+// schema's, so `type` stays a bare string, not a huma `enum` tag — an
+// unrecognised value still needs to reach the dispatch switch below to be
+// rejected there (I16), not bounced earlier by schema validation with a
+// different code/status. Carries contract.md's `additionalProperties:
+// "true"` escape hatch — the one request schema today that is NOT
+// additionalProperties:false (openapi.yaml:477-501 declares no such
+// restriction), so this is the one place huma's own strict-by-default
+// behavior would be a real behavior change if left unset.
+type CreateTodoEventRequest struct {
+	_               struct{} `json:"-" additionalProperties:"true"`
+	Type            string   `json:"type"`
+	ClientRequestID string   `json:"clientRequestId" minLength:"1"`
+	Body            *string  `json:"body,omitempty"`
+	To              *string  `json:"to,omitempty"`
+	Field           *string  `json:"field,omitempty"`
+}
+
+// --- huma Input/Output structs ----------------------------------------
+
+type ListTodosOutput struct{ Body TodoList }
+
+type CreateTodoInput struct{ Body CreateTodoRequest }
+type CreateTodoOutput struct{ Body Todo }
+
+type GetTodoInput struct {
+	ID string `path:"id" doc:"The todo's own id."`
+}
+type GetTodoOutput struct{ Body Todo }
+
+type UpdateTodoInput struct {
+	ID   string `path:"id" doc:"The todo's own id."`
+	Body UpdateTodoRequest
+}
+type UpdateTodoOutput struct{ Body Todo }
+
+type ListTodoEventsInput struct {
+	ID string `path:"id" doc:"The todo's own id."`
+}
+type ListTodoEventsOutput struct{ Body TodoEventList }
+
+type CreateTodoEventInput struct {
+	ID   string `path:"id" doc:"The todo's own id."`
+	Body CreateTodoEventRequest
+}
+type CreateTodoEventOutput struct{ Body TodoEvent }
+
+// --- conversions --------------------------------------------------------
+
+func toTodo(t todo.Todo) Todo {
+	var priority *TodoPriority
 	if t.Priority != nil {
-		p := api.TodoPriority(*t.Priority)
+		p := TodoPriority(*t.Priority)
 		priority = &p
 	}
-	return api.Todo{
-		Id:             t.ID,
+	return Todo{
+		ID:             t.ID,
 		Title:          t.Title,
-		Status:         api.TodoStatus(t.Status),
-		AssigneeId:     t.AssigneeID,
+		Status:         TodoStatus(t.Status),
+		AssigneeID:     t.AssigneeID,
 		AssigneeHandle: t.AssigneeHandle,
 		Priority:       priority,
 		DueDate:        t.DueDate,
@@ -113,265 +181,90 @@ func toAPITodo(t todo.Todo) api.Todo {
 	}
 }
 
-// toAPIEvent decodes a todo.TodoEvent's raw-JSON Payload string into the
-// generic object api.TodoEvent's own Payload field expects
-// (_contract/API.md's activity-feed example shows payload as a JSON
-// object, e.g. `{"from": "open", "to": "in_progress"}`, never a raw
-// string) — the one place in this file that touches encoding/json
-// directly, since todo.Service/Repo already store it pre-marshalled.
+// toTodoEvent decodes a todo.TodoEvent's raw-JSON Payload string into the
+// generic object TodoEvent's own Payload field expects (_contract/API.md's
+// activity-feed example shows payload as a JSON object) — the one place in
+// this file that touches encoding/json directly, since todo.Service/Repo
+// already store it pre-marshalled.
 //
 // actorHandle is a plain string, not the bff surface's {handle, role}
-// object (keys_handler.go's sibling package aside, see
-// internal/transport/bff/todo_handler.go's toBFFEvent) — deliberately
-// asymmetric, matching my-task's own asymmetry found while researching
-// this fix-round: my-task's agent-facing REST contract
-// (TaskTimelineEvent, `~/gits/my-task/src/server/modules/task/
-// task.queries.ts:88-95`) gives an agent an event's actor as a bare
-// handle string ("that shape is REST's documented JSON contract", per
-// `~/gits/my-task/src/server/api/routers/task.ts:82-90`'s own comment),
-// while `actorRole` is resolved as a separate, owner-UI-only follow-up
-// (`withActorRoles`, same file, lines 91-101) never exposed over REST at
-// all. This surface (internal/transport/publicapi, agent-facing) mirrors
-// that: agents see WHO acted (a name), not a role-based human/agent
-// marker — that marker is reserved for the owner-only bff surface's
-// ActivityActor-shaped `actor` field (todo_handler.go, bff package).
-func toAPIEvent(e todo.TodoEvent, actorHandle string) (api.TodoEvent, error) {
-	apiEvent := api.TodoEvent{
-		Id:              e.ID,
-		TodoId:          e.TodoID,
+// object — deliberately asymmetric (see this function's pre-ticket-6
+// doc comment history for the full my-task-comparison reasoning, carried
+// forward unchanged): agents see WHO acted (a name), not a role-based
+// human/agent marker.
+func toTodoEvent(e todo.TodoEvent, actorHandle string) (TodoEvent, error) {
+	apiEvent := TodoEvent{
+		ID:              e.ID,
+		TodoID:          e.TodoID,
 		Seq:             e.Seq,
-		ActorId:         e.ActorID,
+		ActorID:         e.ActorID,
 		ActorHandle:     actorHandle,
 		Type:            string(e.Type),
 		Body:            e.Body,
-		ClientRequestId: e.ClientRequestID,
+		ClientRequestID: e.ClientRequestID,
 		CreatedAt:       e.CreatedAt,
 	}
 	if e.Payload != nil {
-		var payload map[string]interface{}
+		var payload map[string]any
 		if err := json.Unmarshal([]byte(*e.Payload), &payload); err != nil {
-			return api.TodoEvent{}, err
+			return TodoEvent{}, err
 		}
 		apiEvent.Payload = &payload
 	}
 	return apiEvent, nil
 }
 
-// policyActorFor converts the ActorFromContext-resolved identity.User down
-// to todo.PolicyActor (I18) at this transport boundary — the same
-// role-only shape permission.go's can() expects, deliberately not
-// identity.User itself (see permission.go's own doc comment on why).
-func policyActorFor(c *gin.Context) (todo.PolicyActor, string, bool) {
-	user, ok := ActorFromContext(c)
-	if !ok {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, unauthorizedBody)
-		return todo.PolicyActor{}, "", false
-	}
-	return todo.PolicyActor{Role: user.Role}, user.ID, true
-}
+// --- errors --------------------------------------------------------------
 
-// writeAppendError maps Append/CreateTodo's error results the way every
-// handler below needs: todo.ErrNotFound -> 404, todo.ErrForbidden (I18's
-// permission refusal, an agent attempting status:closed) -> 403
-// invalid_transition with a hint (see invalidTransitionErrorBody's own
-// doc comment for why this is not 401), todo.ErrUnknownAssignee
-// (milestone-4 fix-round, handle-exposure: an `assigned` event whose "to"
-// id does not resolve to any real user) -> 400 validation_error,
-// mirroring my-task's own unknownAssigneeError for the same case,
-// anything else -> 500.
-func writeAppendError(c *gin.Context, err error) {
+var todoNotFoundMessage = "no such todo"
+
+// invalidTransitionMessage/-Hint are I18's own rejection text: an
+// agent-authenticated caller attempting to move a todo to status: closed.
+// Matches my-task's own equivalent check's text exactly, not a paraphrase
+// (see this file's pre-ticket-6 history for the full reasoning this
+// carries forward unchanged).
+const (
+	invalidTransitionMessage = "Agents cannot move a task into the closed group"
+	invalidTransitionHint    = "Ask the owner to close this task."
+)
+
+// mapAppendError maps Append/CreateTodo's error results the way every
+// operation below needs: todo.ErrNotFound -> 404, todo.ErrForbidden
+// (I18's permission refusal) -> 403 invalid_transition with a hint
+// (via huma.Error403Forbidden + a huma.ErrorDetail carrying the hint as
+// its Location — humamw's InstallErrorEnvelope reads that back out as
+// Hint, contract.md's "Error envelope" section), todo.ErrUnknownAssignee
+// (an `assigned` event whose "to" id does not resolve to any real user)
+// -> 400 validation_error via this package's own apiError (not huma's
+// native 422 — this is a handler-level check CreateTodoEventRequest's own
+// schema deliberately doesn't perform, not a generic shape-validation
+// failure), anything else -> 500.
+func mapAppendError(err error) error {
 	if errors.Is(err, todo.ErrNotFound) {
-		c.AbortWithStatusJSON(http.StatusNotFound, todoNotFoundError)
-		return
+		return huma.Error404NotFound(todoNotFoundMessage)
 	}
 	if errors.Is(err, todo.ErrForbidden) {
-		c.AbortWithStatusJSON(http.StatusForbidden, invalidTransitionErrorBody())
-		return
+		return huma.Error403Forbidden(invalidTransitionMessage, &huma.ErrorDetail{Location: invalidTransitionHint})
 	}
 	if errors.Is(err, todo.ErrUnknownAssignee) {
-		c.AbortWithStatusJSON(http.StatusBadRequest, validationErrorBody("unknown assignee id", "to"))
-		return
+		return newValidationError("unknown assignee id", "to")
 	}
-	c.AbortWithStatus(http.StatusInternalServerError)
+	return internalServerError()
 }
 
-// ListTodos implements api.ServerInterface — GET /api/v1/todos. No
-// owner-scoping filter (I3 no longer applies to this domain, GOAL.md) —
-// every authenticated actor sees every todo.
-func (s *TodoServer) ListTodos(c *gin.Context) {
-	if _, ok := ActorFromContext(c); !ok {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, unauthorizedBody)
-		return
-	}
-
-	todos, err := s.Service.ListTodos(c.Request.Context())
+// policyActorFor converts the actorFromContext-resolved identity.User down
+// to todo.PolicyActor (I18) at this transport boundary — the same
+// role-only shape permission.go's can() expects, deliberately not
+// identity.User itself.
+func policyActorFor(ctx context.Context) (todo.PolicyActor, string, error) {
+	user, err := actorFromContext(ctx)
 	if err != nil {
-		c.AbortWithStatus(http.StatusInternalServerError)
-		return
+		return todo.PolicyActor{}, "", err
 	}
-
-	resp := api.TodoList{Todos: make([]api.Todo, 0, len(todos))}
-	for _, t := range todos {
-		resp.Todos = append(resp.Todos, toAPITodo(t))
-	}
-	c.JSON(http.StatusOK, resp)
+	return todo.PolicyActor{Role: user.Role}, user.ID, nil
 }
 
-// CreateTodo implements api.ServerInterface — POST /api/v1/todos.
-// createdBy is always the resolved actor — never accepted from the body
-// (I1; the body's own shape can't even carry an owner/actor field, since
-// RejectActorFields already rejected that upstream) — but is attribution
-// only, never access-scoping (GOAL.md). status always starts open: the
-// current todo.CreateInput has no field for a caller-chosen initial
-// status (see this package's task-3 report for why that's a real gap
-// against _contract/API.md's "optionally status" text, not silently
-// worked around here).
-func (s *TodoServer) CreateTodo(c *gin.Context) {
-	actorID, ok := actorID(c)
-	if !ok {
-		return
-	}
-
-	var req api.CreateTodoRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		// openapi.yaml's request validator (internal/api.RequestValidator)
-		// already rejects a malformed/missing-title/missing-clientRequestId
-		// body, or one declaring `done` (additionalProperties: false),
-		// before this middleware chain reaches the handler at all
-		// (API.md, Done-when 7) — this is a defensive fallback for a
-		// route ever wired without that validator, not the primary
-		// validation path.
-		c.AbortWithStatus(http.StatusBadRequest)
-		return
-	}
-
-	input := todo.CreateInput{
-		Title:           req.Title,
-		AssigneeID:      req.AssigneeId,
-		DueDate:         req.DueDate,
-		ClientRequestID: req.ClientRequestId,
-	}
-	if req.Priority != nil {
-		p := string(*req.Priority)
-		input.Priority = &p
-	}
-
-	created, err := s.Service.CreateTodo(c.Request.Context(), actorID, input)
-	if err != nil {
-		c.AbortWithStatus(http.StatusInternalServerError)
-		return
-	}
-	c.JSON(http.StatusCreated, toAPITodo(created))
-}
-
-// GetTodo implements api.ServerInterface — GET /api/v1/todos/{id}. No
-// owner-scoping (I3 no longer applies to this domain): an unknown id is
-// not_found, there is no "wrong owner" case left to produce it.
-func (s *TodoServer) GetTodo(c *gin.Context, id string) {
-	if _, ok := ActorFromContext(c); !ok {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, unauthorizedBody)
-		return
-	}
-
-	found, err := s.Service.GetTodo(c.Request.Context(), id)
-	if err != nil {
-		if errors.Is(err, todo.ErrNotFound) {
-			c.AbortWithStatusJSON(http.StatusNotFound, todoNotFoundError)
-			return
-		}
-		c.AbortWithStatus(http.StatusInternalServerError)
-		return
-	}
-	c.JSON(http.StatusOK, toAPITodo(found))
-}
-
-// UpdateTodo implements api.ServerInterface — PATCH /api/v1/todos/{id}.
-// milestone-4: the only field this endpoint still writes is title —
-// status/assigneeId/priority/dueDate route through
-// POST .../events instead (see openapi.yaml's updateTodo description for
-// the reasoning: todo.Service exposes no generic multi-field update
-// method any more, only Append, I15's single write path, and my-task's
-// own named source has no task-update REST endpoint at all — every write
-// goes through its events endpoint). Internally this still funnels
-// through Append as a field_changed(title) event, so it carries the same
-// clientRequestId (I19) and I18 permission check as every other write —
-// though I18 never actually restricts a title rename for either role.
-func (s *TodoServer) UpdateTodo(c *gin.Context, id string) {
-	actor, actorID, ok := policyActorFor(c)
-	if !ok {
-		return
-	}
-
-	var req api.UpdateTodoRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.AbortWithStatus(http.StatusBadRequest)
-		return
-	}
-
-	title := req.Title
-	_, err := s.Service.Append(c.Request.Context(), todo.AppendInput{
-		TodoID:          id,
-		Actor:           actor,
-		ActorID:         actorID,
-		ClientRequestID: req.ClientRequestId,
-		Type:            todo.EventTypeFieldChanged,
-		FieldChange:     &todo.FieldChangeInput{Field: todo.FieldTitle, Title: &title},
-	})
-	if err != nil {
-		writeAppendError(c, err)
-		return
-	}
-
-	updated, err := s.Service.GetTodo(c.Request.Context(), id)
-	if err != nil {
-		c.AbortWithStatus(http.StatusInternalServerError)
-		return
-	}
-	c.JSON(http.StatusOK, toAPITodo(updated))
-}
-
-// ListTodoEvents implements api.ServerInterface —
-// GET /api/v1/todos/{id}/events. This todo's own timeline, oldest first
-// (todo.Service.ListEvents' own doc comment — mirrors my-task's per-task
-// read, unlike the newest-first cross-todo feed, per _contract/API.md).
-// No cross-todo feed on this surface — that's bff-only
-// (GET /api/bff/activity, task-5's scope).
-func (s *TodoServer) ListTodoEvents(c *gin.Context, id string) {
-	if _, ok := ActorFromContext(c); !ok {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, unauthorizedBody)
-		return
-	}
-
-	// GetTodo first so an unknown todo id is a genuine 404 rather than a
-	// silently-empty event list (ListEvents alone can't distinguish "no
-	// events yet" from "no such todo" — it would return an empty slice
-	// either way).
-	if _, err := s.Service.GetTodo(c.Request.Context(), id); err != nil {
-		if errors.Is(err, todo.ErrNotFound) {
-			c.AbortWithStatusJSON(http.StatusNotFound, todoNotFoundError)
-			return
-		}
-		c.AbortWithStatus(http.StatusInternalServerError)
-		return
-	}
-
-	events, err := s.Service.ListEvents(c.Request.Context(), id)
-	if err != nil {
-		c.AbortWithStatus(http.StatusInternalServerError)
-		return
-	}
-
-	resp := api.TodoEventList{Events: make([]api.TodoEvent, 0, len(events))}
-	for _, e := range events {
-		apiEvent, err := toAPIEvent(e.Event, e.ActorHandle)
-		if err != nil {
-			c.AbortWithStatus(http.StatusInternalServerError)
-			return
-		}
-		resp.Events = append(resp.Events, apiEvent)
-	}
-	c.JSON(http.StatusOK, resp)
-}
+// --- registration --------------------------------------------------------
 
 // validStatuses is the fixed four-value set a status_changed event's `to`
 // may name (DATA_MODEL.md) — checked here, at the transport boundary,
@@ -384,138 +277,268 @@ var validStatuses = map[string]todo.Status{
 	string(todo.StatusClosed):     todo.StatusClosed,
 }
 
-// todoFieldByWireName maps CreateTodoEventRequest's `field` value (camelCase,
-// matching the Todo response's own JSON key names — "dueDate", not the
-// internal snake_case todo.FieldDueDate constant) to the TodoField the
-// domain service expects.
+// todoFieldByWireName maps CreateTodoEventRequest's `field` value
+// (camelCase, matching the Todo response's own JSON key names —
+// "dueDate", not the internal snake_case todo.FieldDueDate constant) to
+// the TodoField the domain service expects.
 var todoFieldByWireName = map[string]todo.TodoField{
 	"title":    todo.FieldTitle,
 	"priority": todo.FieldPriority,
 	"dueDate":  todo.FieldDueDate,
 }
 
-// CreateTodoEvent implements api.ServerInterface —
-// POST /api/v1/todos/{id}/events, I15's single write path exposed over
-// HTTP. Dispatches by req.Type into the matching todo.AppendInput shape
-// entirely before ever calling s.Service.Append — so an invalid or
-// unsupported type (type: "created" included, GOAL.md/INVARIANTS.md I16)
-// is rejected here, with nothing written, rather than reaching the
-// service layer at all. Not a special case for "created" specifically:
-// the switch below simply has no case that produces a
-// WriteEventType-shaped AppendInput for it, the same way it has none for
-// any other string it doesn't recognise (Done-when 13's own "genuinely
-// rejected... not misrouted" requirement, verified by
-// TestDoneWhen13_CreateTodoEvent_TypeCreatedRejected in
-// todo_handler_test.go).
-func (s *TodoServer) CreateTodoEvent(c *gin.Context, id string) {
-	actor, actorID, ok := policyActorFor(c)
-	if !ok {
-		return
-	}
-
-	var req api.CreateTodoEventRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.AbortWithStatus(http.StatusBadRequest)
-		return
-	}
-
-	input := todo.AppendInput{
-		TodoID:          id,
-		Actor:           actor,
-		ActorID:         actorID,
-		ClientRequestID: req.ClientRequestId,
-	}
-
-	switch req.Type {
-	case string(todo.EventTypeCommented):
-		if req.Body == nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, validationErrorBody(`"body" is required for type: commented`, "body"))
-			return
+// RegisterTodoRoutes registers every todo CRUD/events operation on api
+// (ticket-6), replacing internal/api.RegisterHandlers' single-call
+// generated registration for this domain's subset. milestone-4: todos are
+// a shared collection (GOAL.md's Ownership model decision) — every
+// operation below reads/writes across every todo, not scoped to the
+// caller (I3 no longer applies to this domain). There is no
+// DeleteTodo operation at all (GOAL.md's "DELETE removed" decision) — so
+// DELETE /api/v1/todos/{id} is a genuine 404 (no route), not a 405. api
+// must already have humamw.RequireActor attached (cmd/server/main.go).
+func RegisterTodoRoutes(api huma.API, svc *todo.Service) {
+	huma.Register(api, huma.Operation{
+		OperationID: "listTodos",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/todos",
+		Summary:     "List every todo.",
+		Errors:      []int{http.StatusUnauthorized},
+	}, func(ctx context.Context, _ *struct{}) (*ListTodosOutput, error) {
+		if _, err := actorFromContext(ctx); err != nil {
+			return nil, err
 		}
-		input.Type = todo.EventTypeCommented
-		input.Comment = &todo.CommentInput{Body: *req.Body}
-
-	case string(todo.EventTypeStatusChanged):
-		if req.To == nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, validationErrorBody(`"to" is required for type: status_changed`, "to"))
-			return
+		todos, err := svc.ListTodos(ctx)
+		if err != nil {
+			return nil, internalServerError()
 		}
-		status, ok := validStatuses[*req.To]
-		if !ok {
-			c.AbortWithStatusJSON(http.StatusBadRequest, validationErrorBody("unrecognised status value", "to"))
-			return
+		resp := TodoList{Todos: make([]Todo, 0, len(todos))}
+		for _, t := range todos {
+			resp.Todos = append(resp.Todos, toTodo(t))
 		}
-		input.Type = todo.EventTypeStatusChanged
-		input.StatusChange = &todo.StatusChangeInput{ToStatus: status}
+		return &ListTodosOutput{Body: resp}, nil
+	})
 
-	case string(todo.EventTypeAssigned):
-		// req.To == nil covers both an omitted key and an explicit
-		// `"to": null` — both mean "unassign", per _contract/API.md.
-		input.Type = todo.EventTypeAssigned
-		input.Assignment = &todo.AssignmentInput{ToAssigneeID: req.To}
-
-	case string(todo.EventTypeFieldChanged):
-		if req.Field == nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, validationErrorBody(`"field" is required for type: field_changed`, "field"))
-			return
-		}
-		field, ok := todoFieldByWireName[*req.Field]
-		if !ok {
-			c.AbortWithStatusJSON(http.StatusBadRequest, validationErrorBody("unrecognised field name", "field"))
-			return
+	huma.Register(api, huma.Operation{
+		OperationID:   "createTodo",
+		Method:        http.MethodPost,
+		Path:          "/api/v1/todos",
+		Summary:       "Create a todo, attributed to the caller.",
+		DefaultStatus: http.StatusCreated,
+		Errors:        []int{http.StatusBadRequest, http.StatusUnauthorized},
+	}, func(ctx context.Context, input *CreateTodoInput) (*CreateTodoOutput, error) {
+		user, err := actorFromContext(ctx)
+		if err != nil {
+			return nil, err
 		}
 
-		change := &todo.FieldChangeInput{Field: field}
-		switch field {
-		case todo.FieldTitle:
-			if req.To == nil {
-				c.AbortWithStatusJSON(http.StatusBadRequest, validationErrorBody(`"to" is required for field: title`, "to"))
-				return
+		req := input.Body
+		createInput := todo.CreateInput{
+			Title:           req.Title,
+			AssigneeID:      req.AssigneeID,
+			DueDate:         req.DueDate,
+			ClientRequestID: req.ClientRequestID,
+		}
+		if req.Priority != nil {
+			p := string(*req.Priority)
+			createInput.Priority = &p
+		}
+
+		created, err := svc.CreateTodo(ctx, user.ID, createInput)
+		if err != nil {
+			return nil, internalServerError()
+		}
+		return &CreateTodoOutput{Body: toTodo(created)}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "getTodo",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/todos/{id}",
+		Summary:     "Get a todo by id.",
+		Errors:      []int{http.StatusUnauthorized, http.StatusNotFound},
+	}, func(ctx context.Context, input *GetTodoInput) (*GetTodoOutput, error) {
+		if _, err := actorFromContext(ctx); err != nil {
+			return nil, err
+		}
+		found, err := svc.GetTodo(ctx, input.ID)
+		if err != nil {
+			if errors.Is(err, todo.ErrNotFound) {
+				return nil, huma.Error404NotFound(todoNotFoundMessage)
 			}
-			change.Title = req.To
-		case todo.FieldPriority:
-			// req.To == nil (omitted or explicit null) clears priority —
-			// the same nullable-field convention Repo.UpdatePriority uses.
-			change.Priority = req.To
-		case todo.FieldDueDate:
+			return nil, internalServerError()
+		}
+		return &GetTodoOutput{Body: toTodo(found)}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "updateTodo",
+		Method:      http.MethodPatch,
+		Path:        "/api/v1/todos/{id}",
+		Summary:     "Rename a todo.",
+		Errors:      []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusNotFound},
+	}, func(ctx context.Context, input *UpdateTodoInput) (*UpdateTodoOutput, error) {
+		actor, actorID, err := policyActorFor(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		title := input.Body.Title
+		_, err = svc.Append(ctx, todo.AppendInput{
+			TodoID:          input.ID,
+			Actor:           actor,
+			ActorID:         actorID,
+			ClientRequestID: input.Body.ClientRequestID,
+			Type:            todo.EventTypeFieldChanged,
+			FieldChange:     &todo.FieldChangeInput{Field: todo.FieldTitle, Title: &title},
+		})
+		if err != nil {
+			return nil, mapAppendError(err)
+		}
+
+		updated, err := svc.GetTodo(ctx, input.ID)
+		if err != nil {
+			return nil, internalServerError()
+		}
+		return &UpdateTodoOutput{Body: toTodo(updated)}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "listTodoEvents",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/todos/{id}/events",
+		Summary:     "This todo's own timeline.",
+		Errors:      []int{http.StatusUnauthorized, http.StatusNotFound},
+	}, func(ctx context.Context, input *ListTodoEventsInput) (*ListTodoEventsOutput, error) {
+		if _, err := actorFromContext(ctx); err != nil {
+			return nil, err
+		}
+
+		// GetTodo first so an unknown todo id is a genuine 404 rather than a
+		// silently-empty event list.
+		if _, err := svc.GetTodo(ctx, input.ID); err != nil {
+			if errors.Is(err, todo.ErrNotFound) {
+				return nil, huma.Error404NotFound(todoNotFoundMessage)
+			}
+			return nil, internalServerError()
+		}
+
+		events, err := svc.ListEvents(ctx, input.ID)
+		if err != nil {
+			return nil, internalServerError()
+		}
+
+		resp := TodoEventList{Events: make([]TodoEvent, 0, len(events))}
+		for _, e := range events {
+			apiEvent, err := toTodoEvent(e.Event, e.ActorHandle)
+			if err != nil {
+				return nil, internalServerError()
+			}
+			resp.Events = append(resp.Events, apiEvent)
+		}
+		return &ListTodoEventsOutput{Body: resp}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID:   "createTodoEvent",
+		Method:        http.MethodPost,
+		Path:          "/api/v1/todos/{id}/events",
+		Summary:       "Append an event to this todo's timeline (I15's single write path).",
+		DefaultStatus: http.StatusCreated,
+		Errors:        []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound},
+	}, func(ctx context.Context, input *CreateTodoEventInput) (*CreateTodoEventOutput, error) {
+		actor, actorID, err := policyActorFor(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		req := input.Body
+		appendInput := todo.AppendInput{
+			TodoID:          input.ID,
+			Actor:           actor,
+			ActorID:         actorID,
+			ClientRequestID: req.ClientRequestID,
+		}
+
+		switch req.Type {
+		case string(todo.EventTypeCommented):
+			if req.Body == nil {
+				return nil, newValidationError(`"body" is required for type: commented`, "body")
+			}
+			appendInput.Type = todo.EventTypeCommented
+			appendInput.Comment = &todo.CommentInput{Body: *req.Body}
+
+		case string(todo.EventTypeStatusChanged):
 			if req.To == nil {
-				change.DueDate = nil
-			} else {
-				parsed, err := time.Parse(time.RFC3339, *req.To)
-				if err != nil {
-					c.AbortWithStatusJSON(http.StatusBadRequest, validationErrorBody(`"to" must be an RFC3339 timestamp for field: dueDate`, "to"))
-					return
+				return nil, newValidationError(`"to" is required for type: status_changed`, "to")
+			}
+			status, ok := validStatuses[*req.To]
+			if !ok {
+				return nil, newValidationError("unrecognised status value", "to")
+			}
+			appendInput.Type = todo.EventTypeStatusChanged
+			appendInput.StatusChange = &todo.StatusChangeInput{ToStatus: status}
+
+		case string(todo.EventTypeAssigned):
+			// req.To == nil covers both an omitted key and an explicit
+			// `"to": null` — both mean "unassign", per _contract/API.md.
+			appendInput.Type = todo.EventTypeAssigned
+			appendInput.Assignment = &todo.AssignmentInput{ToAssigneeID: req.To}
+
+		case string(todo.EventTypeFieldChanged):
+			if req.Field == nil {
+				return nil, newValidationError(`"field" is required for type: field_changed`, "field")
+			}
+			field, ok := todoFieldByWireName[*req.Field]
+			if !ok {
+				return nil, newValidationError("unrecognised field name", "field")
+			}
+
+			change := &todo.FieldChangeInput{Field: field}
+			switch field {
+			case todo.FieldTitle:
+				if req.To == nil {
+					return nil, newValidationError(`"to" is required for field: title`, "to")
 				}
-				change.DueDate = &parsed
+				change.Title = req.To
+			case todo.FieldPriority:
+				// req.To == nil (omitted or explicit null) clears priority —
+				// the same nullable-field convention Repo.UpdatePriority uses.
+				change.Priority = req.To
+			case todo.FieldDueDate:
+				if req.To == nil {
+					change.DueDate = nil
+				} else {
+					parsed, parseErr := time.Parse(time.RFC3339, *req.To)
+					if parseErr != nil {
+						return nil, newValidationError(`"to" must be an RFC3339 timestamp for field: dueDate`, "to")
+					}
+					change.DueDate = &parsed
+				}
 			}
+			appendInput.Type = todo.EventTypeFieldChanged
+			appendInput.FieldChange = change
+
+		default:
+			// Covers type: "created" (I16 — never client-specifiable, see
+			// todo.WriteEventType's own doc comment) and any other
+			// unrecognised string alike — deliberately the same path, not a
+			// special case for "created".
+			return nil, newValidationError(`unrecognised or unsupported "type"`, "type")
 		}
-		input.Type = todo.EventTypeFieldChanged
-		input.FieldChange = change
 
-	default:
-		// Covers type: "created" (I16 — never client-specifiable, see
-		// todo.WriteEventType's own doc comment: there is no value it
-		// could map to here) and any other unrecognised string alike —
-		// deliberately the same path, not a special case for "created".
-		c.AbortWithStatusJSON(http.StatusBadRequest, validationErrorBody(`unrecognised or unsupported "type"`, "type"))
-		return
-	}
+		event, err := svc.Append(ctx, appendInput)
+		if err != nil {
+			return nil, mapAppendError(err)
+		}
 
-	event, err := s.Service.Append(c.Request.Context(), input)
-	if err != nil {
-		writeAppendError(c, err)
-		return
-	}
-
-	// The actor who just wrote this event is the caller itself — its
-	// handle is already resolved onto the gin context (ActorFromContext),
-	// no extra lookup needed the way ListTodoEvents' read path needs one
-	// per row.
-	actorUser, _ := ActorFromContext(c)
-	apiEvent, err := toAPIEvent(event, actorUser.Handle)
-	if err != nil {
-		c.AbortWithStatus(http.StatusInternalServerError)
-		return
-	}
-	c.JSON(http.StatusCreated, apiEvent)
+		// The actor who just wrote this event is the caller itself — its
+		// handle is already resolved onto ctx (actorFromContext), no extra
+		// lookup needed the way ListTodoEvents' read path needs one per row.
+		actorUser, _ := actorFromContext(ctx)
+		apiEvent, err := toTodoEvent(event, actorUser.Handle)
+		if err != nil {
+			return nil, internalServerError()
+		}
+		return &CreateTodoEventOutput{Body: apiEvent}, nil
+	})
 }

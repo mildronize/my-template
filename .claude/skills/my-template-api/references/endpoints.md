@@ -73,12 +73,13 @@ every todo regardless of who created it.
 upstream of the handler). **`status` is not accepted here** — every new
 todo starts `open`, deliberately (change it afterward through an event,
 below); sending `done` (the pre-milestone-4 field) is a
-`400 validation_error`, not silently dropped. Returns the created todo,
-same shape as `GET /todos/:id`.
+`422 validation_error`, not silently dropped — this request schema
+rejects any field it doesn't declare. Returns the created todo, same
+shape as `GET /todos/:id`.
 
 A missing or out-of-range `title`, or a stray unrecognised field, is
-rejected by the OpenAPI request validator before this handler ever runs —
-see "Request validation" below.
+rejected by huma's own generated request-shape validation before this
+handler ever runs — see "Request validation" below.
 
 ---
 
@@ -109,7 +110,7 @@ their permission/audit requirements actually need (I15/I18):
 { "title": "…", "clientRequestId": "…" }   // both required
 ```
 
-Sending `done` is a `400 validation_error`, same reasoning as `POST`
+Sending `done` is a `422 validation_error`, same reasoning as `POST`
 above. No longer owner-scoped, same 404 rule as `GET`. Returns the
 updated todo, same shape as `GET /todos/:id`.
 
@@ -215,15 +216,19 @@ be a safe HTTP call.
 
 ## Request validation
 
-Every request is checked against `openapi.yaml`'s declared shape
-(`gin-middleware`'s OpenAPI request validator) **before** it reaches any
-handler above — a missing required field or a wrong type never reaches
-application code at all, and comes back as `400 validation_error` (see
-`errors.md`) with `hint` naming the field, on a best-effort basis. Auth is
-deliberately **not** declared as an OpenAPI `security` scheme — credential
-resolution is entirely `internal/identity`'s job (I1, I2, I5), enforced as
-separate middleware that runs before the OpenAPI validator, not encoded in
-the spec.
+Every request is checked against the shape huma's own generated schema
+declares (this service runs on [huma](https://github.com/danielgtaylor/huma),
+not oapi-codegen/gin-middleware) **before** it reaches any handler above —
+a missing required field or a wrong type never reaches application code at
+all, and comes back as `422 validation_error` (see `errors.md`) with `hint`
+naming the field, on a best-effort basis. This runs *after* credential
+resolution, not before: huma's own request-validation step lives inside
+the same request chain every auth middleware wraps, so an invalid
+credential on a malformed request still answers `401`, not `422` — the
+one exception is the `X-Actor` header/`actor`/`actorId`/`ownerId` fields,
+which this surface rejects with its own bespoke, pre-auth check
+(`actor_field_present`, `400`, see `errors.md`) specifically so declaring
+an actor never reaches credential resolution at all.
 
 ## Not on this surface
 

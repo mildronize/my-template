@@ -11,7 +11,7 @@
 # reshaping to match — real Hydra is the smaller, more honest surface
 # here, not the heavier one.
 #
-# Ports are 24444/24445/24446 throughout this file, deliberately far from
+# Ports are 25444/25445/25446 throughout this file, deliberately far from
 # 4444/4445 — this host already runs a real Hydra (prod-thw-home's
 # sso-hydra) on those, and a port collision would be either a hard
 # failure or, worse, this suite silently talking to the wrong Hydra.
@@ -54,8 +54,8 @@ services:
       hydra-migrate:
         condition: service_completed_successfully
     ports:
-      - "127.0.0.1:24444:4444"
-      - "127.0.0.1:24445:4445"
+      - "127.0.0.1:25444:4444"
+      - "127.0.0.1:25445:4445"
     volumes:
       - ./hydra/hydra.yml:/etc/hydra/hydra.yml:ro
       - hydra_data:/var/lib/sqlite
@@ -88,7 +88,7 @@ services:
       HYDRA_ADMIN_URL: http://hydra:4445
       PORT: "4446"
     ports:
-      - "127.0.0.1:24446:4446"
+      - "127.0.0.1:25446:4446"
     depends_on:
       hydra:
         condition: service_healthy

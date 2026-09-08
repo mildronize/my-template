@@ -1,60 +1,68 @@
 package bff
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"time"
 
-	"github.com/gin-gonic/gin"
+	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/mildronize/my-template/internal/bffapi"
 	"github.com/mildronize/my-template/internal/identity"
-	"github.com/mildronize/my-template/internal/transport/publicapi"
 )
 
-// bffKeyNotFoundBody is the one 404 response body RevokeKey ever writes
-// for an unknown or not-this-caller's key id (I3). Reuses
-// internal/transport/publicapi's ErrorEnvelope/NewErrorEnvelope directly,
-// same reasoning as todo_handler.go's bffTodoNotFoundError.
-var bffKeyNotFoundBody = publicapi.NewErrorEnvelope("not_found", "no such key", "")
-
-// KeysServer adapts identity.Service to internal/bffapi's generated
-// ServerInterface's keys-shaped subset (ListKeys, RevokeKey) — GET
-// /api/bff/keys and DELETE /api/bff/keys/{id}. I21 (_contract/
-// INVARIANTS.md, milestone-4): unlike internal/transport/publicapi's own
-// KeysServer (still self-scoped, I3, unchanged), this surface deliberately
-// spans every role='agent' user's keys, not the session owner's own —
-// milestone-2/3's session-owner-scoped semantics are REPLACED here, not
-// kept alongside a new endpoint (GOAL.md's "GET/DELETE /api/bff/keys —
-// replace, not add beside" decision), since the old semantics could
-// structurally never return anything (no key is ever issued to
-// role='owner' — I2). Calls the exact same *identity.Service instance
-// internal/transport/publicapi.KeysServer calls (ARCHITECTURE.md's
-// shared-service-layer rule), just different methods on it. There is
-// deliberately no CreateKey/IssueKey/RotateKey method here — issuance and
-// rotation stay CLI-only regardless of which surface is asking
-// (_contract/API.md, milestone-3/_goal/GOAL.md Done-when 5) — see
-// negative_check_test.go for the check that this surface never grows one.
-type KeysServer struct {
-	Service *identity.Service
+// ApiKey defines the wire shape of one API key (bff-openapi.yaml's ApiKey
+// schema) — replaces internal/bffapi.ApiKey (deleted this ticket,
+// mirroring contract.md's "File/package layout" for /api/v1: the deleted
+// package's framework-agnostic response types move into this package
+// alongside the huma structs that now produce identical JSON). Same field
+// names/JSON tags as before (this ticket deliberately keeps oapi-codegen's
+// own `Id`-style Go field names rather than renaming to `ID` the way
+// internal/transport/publicapi's ticket-6 migration did — same JSON wire
+// shape either way, a lower-risk choice for this ticket's own test-file
+// diff since every existing bffapi.ApiKey/.../User/.../ActivityCursor
+// field reference in this package's tests only needs the `bffapi.`
+// qualifier dropped, not a field-name rename too).
+type ApiKey struct {
+	Id        string    `json:"id"`
+	Prefix    string    `json:"prefix"`
+	Handle    string    `json:"handle"`
+	CreatedAt time.Time `json:"createdAt"`
+	ExpiresAt time.Time `json:"expiresAt"`
 }
 
-// NewKeysServer builds a KeysServer on top of svc.
-func NewKeysServer(svc *identity.Service) *KeysServer {
-	return &KeysServer{Service: svc}
+// ApiKeyList is GET /api/bff/keys' response envelope.
+type ApiKeyList struct {
+	Keys []ApiKey `json:"keys"`
 }
+
+// ListKeysOutput is ListKeys' huma.Register output.
+type ListKeysOutput struct {
+	Body ApiKeyList
+}
+
+// RevokeKeyInput is RevokeKey's huma.Register input — the key id, from the
+// URL path.
+type RevokeKeyInput struct {
+	ID string `path:"id" doc:"The API key's own id."`
+}
+
+// RevokeKeyOutput is RevokeKey's huma.Register output — no Body field, so
+// huma's own DefaultStatus inference (this operation sets DefaultStatus:
+// 204 explicitly below) matches today's c.Status(http.StatusNoContent).
+type RevokeKeyOutput struct{}
 
 // toBFFKey's only caller is ListKeys, which only ever calls
 // identity.Service.ListAllAgentAPIKeys — the one identity.APIKey-producing
-// method that populates Handle (milestone-4 fix-round, handle-exposure:
-// db/queries/api_keys.sql's ListAllAgentAPIKeys now JOINs users for it).
+// method that populates Handle (milestone-4 fix-round, handle-exposure).
 // k.Handle is asserted non-nil here rather than defended against, on
-// purpose: a nil Handle reaching this function would mean
-// ListAllAgentAPIKeys's own JOIN (not LEFT JOIN) somehow returned a row
-// with no matching user, which is a bug in that query, not a normal
-// runtime condition this handler should paper over with a fabricated
-// empty string.
-func toBFFKey(k identity.APIKey) bffapi.ApiKey {
-	return bffapi.ApiKey{
+// purpose — mirrors the pre-ticket-7 gin handler's own identical
+// reasoning: a nil Handle reaching this function would mean
+// ListAllAgentAPIKeys' own JOIN (not LEFT JOIN) somehow returned a row
+// with no matching user, a bug in that query, not a normal runtime
+// condition this handler should paper over.
+func toBFFKey(k identity.APIKey) ApiKey {
+	return ApiKey{
 		Id:        k.ID,
 		Prefix:    k.KeyPrefix,
 		Handle:    *k.Handle,
@@ -63,49 +71,60 @@ func toBFFKey(k identity.APIKey) bffapi.ApiKey {
 	}
 }
 
-// ListKeys implements bffapi.ServerInterface — GET /api/bff/keys. Returns
-// every role='agent' user's non-revoked keys (I21) — a valid owner session
-// is required to reach this at all (bffOwnerID), but the query itself is
-// deliberately not scoped to that session's own user_id: an owner never
-// holds a key (I2), so scoping to ownerID would always be empty, which is
-// exactly milestone-2/3's bug this replaces.
-func (s *KeysServer) ListKeys(c *gin.Context) {
-	if _, ok := bffOwnerID(c); !ok {
-		return
-	}
+var bffKeyNotFoundMessage = "no such key"
 
-	keys, err := s.Service.ListAllAgentAPIKeys(c.Request.Context())
-	if err != nil {
-		c.AbortWithStatus(http.StatusInternalServerError)
-		return
-	}
-
-	resp := bffapi.ApiKeyList{Keys: make([]bffapi.ApiKey, 0, len(keys))}
-	for _, k := range keys {
-		resp.Keys = append(resp.Keys, toBFFKey(k))
-	}
-	c.JSON(http.StatusOK, resp)
-}
-
-// RevokeKey implements bffapi.ServerInterface — DELETE /api/bff/keys/{id}.
-// I21: session-gated (a valid owner session is required to reach this at
-// all), but no longer scoped to that session's own user_id — the owner may
-// revoke any agent's key. An id that never existed (or was already
-// revoked) returns not_found, the same "absence, not permission" shape I3
-// gives todos, applied here to the single dimension left to protect once
-// user_id-scoping is gone.
-func (s *KeysServer) RevokeKey(c *gin.Context, id string) {
-	if _, ok := bffOwnerID(c); !ok {
-		return
-	}
-
-	if _, err := s.Service.RevokeAnyAgentAPIKey(c.Request.Context(), id); err != nil {
-		if errors.Is(err, identity.ErrNotFound) {
-			c.AbortWithStatusJSON(http.StatusNotFound, bffKeyNotFoundBody)
-			return
+// RegisterKeysRoutes registers GET /api/bff/keys and DELETE
+// /api/bff/keys/{id} on api (ticket-7) — I21: every role='agent' user's
+// non-revoked keys (not the session owner's own — an owner never holds a
+// key, I2), session-gated only, no further scoping. There is deliberately
+// no CreateKey/IssueKey/RotateKey operation here — issuance and rotation
+// stay CLI-only regardless of which surface is asking (negative_check_test.go
+// checks this surface never grows one). api must already have
+// humamw.RequireSession attached (cmd/server/main.go).
+func RegisterKeysRoutes(api huma.API, svc *identity.Service) {
+	huma.Register(api, huma.Operation{
+		OperationID: "listKeys",
+		Method:      http.MethodGet,
+		Path:        "/api/bff/keys",
+		Summary:     "List every agent's non-revoked API keys (I21).",
+		Description: "Every role='agent' user's non-revoked keys (revoked_at IS NULL), not just the session owner's own — the session owner never holds a key at all (role='owner' can't be issued one, I2). Regardless of expiry: an expired-but-unrevoked key still shows up so the owner can see it needs rotating.",
+		Errors:      []int{http.StatusUnauthorized},
+	}, func(ctx context.Context, _ *struct{}) (*ListKeysOutput, error) {
+		if _, err := actorFromContext(ctx); err != nil {
+			return nil, err
 		}
-		c.AbortWithStatus(http.StatusInternalServerError)
-		return
-	}
-	c.Status(http.StatusNoContent)
+
+		keys, err := svc.ListAllAgentAPIKeys(ctx)
+		if err != nil {
+			return nil, internalServerError()
+		}
+
+		resp := ApiKeyList{Keys: make([]ApiKey, 0, len(keys))}
+		for _, k := range keys {
+			resp.Keys = append(resp.Keys, toBFFKey(k))
+		}
+		return &ListKeysOutput{Body: resp}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID:   "revokeKey",
+		Method:        http.MethodDelete,
+		Path:          "/api/bff/keys/{id}",
+		Summary:       "Revoke any agent's API key by id (I21).",
+		Description:   "Sets revoked_at. Not scoped to a \"caller's own\" key — there is no such thing on this owner-only surface (I2) — any agent's key id may be revoked, session-gated only.",
+		DefaultStatus: http.StatusNoContent,
+		Errors:        []int{http.StatusUnauthorized, http.StatusNotFound},
+	}, func(ctx context.Context, input *RevokeKeyInput) (*RevokeKeyOutput, error) {
+		if _, err := actorFromContext(ctx); err != nil {
+			return nil, err
+		}
+
+		if _, err := svc.RevokeAnyAgentAPIKey(ctx, input.ID); err != nil {
+			if errors.Is(err, identity.ErrNotFound) {
+				return nil, huma.Error404NotFound(bffKeyNotFoundMessage)
+			}
+			return nil, internalServerError()
+		}
+		return &RevokeKeyOutput{}, nil
+	})
 }

@@ -8,14 +8,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/mildronize/my-template/internal/bffapi"
 )
 
 // decodeUserList decodes GET /api/bff/users' response body.
-func decodeUserList(t *testing.T, body []byte) bffapi.UserList {
+func decodeUserList(t *testing.T, body []byte) UserList {
 	t.Helper()
-	var got bffapi.UserList
+	var got UserList
 	require.NoError(t, json.Unmarshal(body, &got))
 	return got
 }
@@ -42,7 +40,7 @@ func TestBFFHandler_ListUsers_BothRoles_ExcludesInactive(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	list := decodeUserList(t, rec.Body.Bytes())
 
-	byID := map[string]bffapi.User{}
+	byID := map[string]User{}
 	for _, u := range list.Users {
 		byID[u.Id] = u
 	}
@@ -50,13 +48,13 @@ func TestBFFHandler_ListUsers_BothRoles_ExcludesInactive(t *testing.T) {
 	ownerRow, ok := byID[owner.ID]
 	require.True(t, ok, "the session owner itself must be a listed, assignable user")
 	assert.Equal(t, owner.Handle, ownerRow.Handle)
-	assert.Equal(t, bffapi.UserRole("owner"), ownerRow.Role)
+	assert.Equal(t, UserRole("owner"), ownerRow.Role)
 	assert.True(t, ownerRow.Active)
 
 	agentRow, ok := byID[issued.User.ID]
 	require.True(t, ok, "the real, issued agent must be a listed, assignable user")
 	assert.Equal(t, "an-agent", agentRow.Handle)
-	assert.Equal(t, bffapi.UserRole("agent"), agentRow.Role)
+	assert.Equal(t, UserRole("agent"), agentRow.Role)
 
 	_, stillListed := byID[inactive.ID]
 	assert.False(t, stillListed, "an inactive user must not be offered as an assignee")

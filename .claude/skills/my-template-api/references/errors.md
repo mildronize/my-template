@@ -29,7 +29,7 @@ own error text, not a guaranteed structured field.
 | `unauthorized` | 401 | any credential failure at all (I2, I5, I9) | — |
 | `not_found` | 404 | an unknown todo id (any todo is readable/actionable by any caller, I3 no longer scopes todos — this is purely "never existed"); a key id that exists but isn't the caller's own, or never existed (I3 still scopes keys — absence, not `403`) | — |
 | `actor_field_present` | 400 | request tried to declare an actor (I1) | — |
-| `validation_error` | 400 | a malformed or missing field, caught either by the OpenAPI request validator or a handler's own fallback check; also an `assigned` event's `to` naming a user id that doesn't resolve (`hint: "to"`) | `hint` names the field, when the underlying error names exactly one |
+| `validation_error` | 400/422 | **422**: a malformed or missing field, caught by huma's own generic request-shape validation. **400**: a cross-field check a schema alone can't express (e.g. an `assigned` event's `to` naming a user id that doesn't resolve, `hint: "to"`) | `hint` names the field, when the underlying error names exactly one |
 | `invalid_transition` | 403 | an agent key attempting `status_changed` to `closed` (owner-only, I18) — a real permission refusal, not a credential failure | `hint` says what to do instead: ask the owner |
 
 There is no `internal_error` code documented in the contract — an
@@ -70,14 +70,16 @@ only; there is no free-text identity sub-label on this surface the way
 `my-task-api`'s `X-Actor-Detail` is (that surface's own escape hatch does
 not exist here).
 
-**400 `validation_error` can come from two different places, and they
-don't always carry `hint`.** Most of the time it's `openapi.yaml`'s
-request validator, running before any handler code — that's the case
+**`validation_error` comes from two different places, at two different
+statuses, and they don't always carry `hint`.** Most of the time it's
+huma's own generic request-shape validation (**422**) — that's the case
 `hint` is most likely to be populated for, when the underlying validation
-error names exactly one field or parameter. A handler's own defensive
-`ShouldBindJSON` fallback (present in case a route is ever wired without
-the validator ahead of it) returns the same code with no `hint` at all —
-treat `hint`'s absence as "re-check your request body against
+error names exactly one field or parameter, and it runs *after*
+credential resolution (an invalid credential on a malformed request still
+answers `401`, not `422`). The other source is a handler's own cross-field
+check for something a schema alone can't express (**400** — e.g. an
+`assigned` event's `to` naming a user id that doesn't resolve) — treat
+`hint`'s absence as "re-check your request body against
 `references/endpoints.md`," not as a signal about which path produced the
 error.
 

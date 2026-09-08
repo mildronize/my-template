@@ -560,6 +560,18 @@ func main() {
 
 	// ---- 2. actor-field rejection (I1) ----------------------------------
 
+	// Fix (story-1/ticket-6 finding, contract.md's "Middleware mapping"
+	// table): ticket-6 originally relied on huma's own
+	// additionalProperties:false default to catch a body-level
+	// actor-shaped field (422 validation_error) instead of porting the
+	// old bespoke pre-auth check — but that default runs inside huma's
+	// own parse->validate->resolve->handle chain, which every
+	// api.UseMiddleware (RequireActor included) wraps entirely, so the
+	// rejection moved from before auth to after it. humamw.RejectActorFields
+	// (renamed from RejectActorHeader) now checks the body itself again,
+	// pre-auth, exactly like the X-Actor header check below — so this
+	// asserts the original 400 actor_field_present again, not the
+	// ticket-6-era 422 validation_error.
 	for _, field := range []string{"actor", "actorId", "ownerId"} {
 		body := newCreateBodyWithForbiddenField("smoke — should be rejected", nextCR("forbidden-"+field), field)
 		status, respBody, err := doRequest(client, http.MethodPost, apiBase+resourcePath, auth1, body)
@@ -631,8 +643,12 @@ func main() {
 		fatalErr(err)
 	}
 	doneBodyEnv := decode[errorEnvelope](doneBodyResp)
+	// story-1/ticket-6: huma's own additionalProperties:false schema
+	// validation now catches this (422), not the old gin-middleware/
+	// oapi-codegen validator's 400 — contract.md's "Behavior note", the
+	// one accepted, flagged status delta this migration makes.
 	record("PATCH with a stray \"done\" field is rejected, not silently accepted (done was removed, replaced by status)",
-		doneBodyStatus == http.StatusBadRequest,
+		doneBodyStatus == http.StatusUnprocessableEntity,
 		fmt.Sprintf("%d %s", doneBodyStatus, doneBodyEnv.Error.Code), "")
 
 	deleteStatus, _, err := doRequest(client, http.MethodDelete, apiBase+resourcePath+"/"+id, auth1, nil)
@@ -940,24 +956,24 @@ func main() {
 
 	// ---- 6. spec validation — rejected before handler logic ---------------
 	// A request missing CreateTodoRequest's required fields (title,
-	// clientRequestId) must be refused by openapi.yaml's gin-middleware
-	// validator (internal/api.RequestValidator), not reach
-	// TodoServer.CreateTodo's own fallback (todo_handler.go's
-	// ShouldBindJSON branch, which writes a bare 400 with NO body via
-	// c.AbortWithStatus — not the structured error envelope). A
-	// non-empty body carrying code "validation_error" is what
-	// distinguishes "the validator caught this" from "it reached the
-	// handler and the handler's own defensive fallback caught it
-	// instead" — the exact distinction this check exists to prove, not
-	// just get a 400.
+	// clientRequestId) must be refused by huma's own request-shape
+	// validation (story-1/ticket-6: replaces openapi.yaml's old
+	// gin-middleware/oapi-codegen validator), not reach the handler's own
+	// business logic. A non-empty body carrying code "validation_error" is
+	// what distinguishes "the schema validator caught this" from "it
+	// reached the handler and something else caught it instead" — the
+	// exact distinction this check exists to prove, not just get a
+	// rejection. Status is 422, not 400 — huma's own default for a
+	// request-validation failure (contract.md's "Behavior note", the one
+	// accepted, flagged status delta this migration makes).
 
 	specStatus, specBody, err := doRequest(client, http.MethodPost, apiBase+resourcePath, auth1, missingRequiredFieldBody)
 	if err != nil {
 		fatalErr(err)
 	}
 	specEnv := decode[errorEnvelope](specBody)
-	record(fmt.Sprintf("POST %s missing required fields is rejected by the openapi validator before handler logic", resourcePath),
-		specStatus == http.StatusBadRequest && len(specBody) > 0 && specEnv.Error.Code == "validation_error",
+	record(fmt.Sprintf("POST %s missing required fields is rejected by the schema validator before handler logic", resourcePath),
+		specStatus == http.StatusUnprocessableEntity && len(specBody) > 0 && specEnv.Error.Code == "validation_error",
 		fmt.Sprintf("%d %s %q", specStatus, specEnv.Error.Code, specEnv.Error.Message), "")
 
 	// ---- report -------------------------------------------------------
