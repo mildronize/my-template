@@ -16,7 +16,7 @@ import { loginAsOwner } from "../fixtures/login-as-owner";
 // production Hydra also implements, against a local instance seeded for
 // this run alone.
 test("owner logs in through the real local OIDC issuer and lands on an authenticated page", async ({ page, baseURL }, testInfo: TestInfo) => {
-  console.log(`[login.spec] issuer under test: http://127.0.0.1:24444 (local, e2e-only — not production Hydra)`);
+  console.log(`[login.spec] issuer under test: http://127.0.0.1:25444 (local, e2e-only — not production Hydra)`);
 
   // The full redirect chain — /login -> Hydra's /oauth2/auth -> the
   // login-consent stub's /login -> Hydra -> the stub's /consent -> Hydra

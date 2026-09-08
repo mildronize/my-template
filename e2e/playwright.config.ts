@@ -23,7 +23,7 @@ export default defineConfig({
   globalSetup: "./global-setup.ts",
   globalTeardown: "./global-teardown.ts",
   use: {
-    baseURL: "http://127.0.0.1:24080",
+    baseURL: "http://127.0.0.1:25080",
     trace: "retain-on-failure",
     video: "off",
     screenshot: "only-on-failure",
